@@ -2,6 +2,10 @@
 EIS 电化学阻抗谱绘图脚本
 用途：绘制 EIS 数据的 Nyquist 图、Bode 图及双轴图
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, LogLocator

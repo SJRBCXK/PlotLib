@@ -2,6 +2,12 @@
 Piezo 压电数据绘图脚本
 用途：绘制压电测试数据的多种图表（D-V, F-V, T-V 关系图及其组合）
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+
 
 import matplotlib.pyplot as plt
 

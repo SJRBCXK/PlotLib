@@ -17,7 +17,6 @@ class DataSet():
         self.units: list = []
         self.groups_idx: list = []
         self.group_local_idx: list = []
-        self.group_column: list = []
         self.local_idx: list = []
         self.father_idx: list = []
         self.initial_idx: list = []

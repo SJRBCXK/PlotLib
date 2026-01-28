@@ -4,7 +4,8 @@ from __future__ import annotations
 import re
 import copy
 import numpy as np
-from .dataset import DataSet
+from .dataset import DataSet, Column, ColumnList
+
 
 
 
@@ -326,7 +327,7 @@ class DataTransformer:
         状态标识，'ready' 或 'transformed'。
     """
 
-    def __init__(self, dataset: DataSet):
+    def __init__(self, dataset: DataSet = None):# type: ignore
         """
         初始化变换器。
 
@@ -335,6 +336,9 @@ class DataTransformer:
         dataset : DataSet
             输入数据集。
         """
+        if dataset is None:
+            dataset = DataSet()
+
         self.dataset = dataset
         self.data = dataset.data
         self.names = dataset.names
@@ -345,14 +349,18 @@ class DataTransformer:
         self.initial_idx = dataset.initial_idx
         self.father_idx = dataset.father_idx
         self.generation = dataset.generation
+        self.column = dataset.column
         self.status = 'ready'
         
 
     def Norm(
         self,
         order: int = 2,
-        indicies: list[int] = None,  # type: ignore
-        unit: str = None,  # type: ignore
+        indicies: (list[int],int) = None,  # type: ignore
+        column: list[Column] = None,  # type: ignore
+        norm_unit: str = None,  # type: ignore
+        New_group: bool = False,  # type: ignore
+        norm_groups_idx: int = None  # type: ignore
         ):
         """
         计算数据列的范数。
@@ -361,33 +369,127 @@ class DataTransformer:
         ----------
         order : int
             范数阶数，默认 2（欧几里得范数）。
-        indicies : list[int], optional
+        indicies : list[int] | int, optional
             参与计算的列索引，None 表示全部列。
-        unit : str, optional
+        norm_unit : str, optional
             结果单位，None 则自动推断。
 
         Returns
         Dataset.column
         """
-        col_data = self.data[:, indicies] if indicies is not None else self.data
-        norm = np.sqrt(np.sum(col_data**order, axis=1))
+        col_data, names, units, groups_idx = self._resolve_input_data(column, indicies)
+        
+        norm_value = np.sum(np.abs(col_data)**order, axis=1)**(1/order)
 
-        names = self.names[indicies] if indicies is not None else self.names  # type: ignore
-        if len(names) == 1:
-            norm_name = f"{names[0]}_Norm"
-        elif len(set(names)) == 1:
-            norm_name = f"Norm_of_{names[0]}"
+
+        data_name, data_unit, data_groups_idx = self.__update_dataset_attributes(
+            names_extracted = names,
+            units_extracted = units,
+            groups_idx_extracted = groups_idx,
+            units_input = norm_unit,   
+            groups_idx_input = norm_groups_idx,
+            New_group = New_group) # type: ignore
+        
+        local_dataset = self._create_local_dataset(
+            data = norm_value,
+            name = data_name,
+            unit = data_unit,
+            group_idx = data_groups_idx
+        )
+      
+        self.dataset.expandata(local_dataset)
+
+        return self.dataset.column[-1], self.dataset
+    
+
+
+
+    def _resolve_input_data(self, column, indicies):
+        if column is not None:
+            col_data = np.array([col.data for col in column]).T
+            names = [col.name for col in column]
+            units = [col.unit for col in column]
+            groups_idx = [col.group_idx for col in column]
+            return col_data, names, units, groups_idx
+
+        if indicies is None:
+            return self.data, list(self.names), list(self.units), list(self.groups_idx)
+
+        # 允许 int / list[int] / tuple[int] / np.ndarray
+        if isinstance(indicies, int):
+            col_data = self.data[:, indicies:indicies + 1]
+            names = [self.names[indicies]]
+            units = [self.units[indicies]]
+            groups_idx = [self.groups_idx[indicies]]
         else:
-            norm_name = "Norm_of_" + "_".join(names)
+            idx = list(indicies)
+            col_data = self.data[:, idx]
+            names = [self.names[i] for i in idx]
+            units = [self.units[i] for i in idx]
+            groups_idx = [self.groups_idx[i] for i in idx]
 
-        units = self.units[indicies] if indicies is not None else self.units  # type: ignore
-        if unit is not None:
-            norm_unit = unit
-        elif len(set(units)) == 1:
-            norm_unit = units[0]
+        return col_data, names, units, groups_idx
+
+
+    
+    def __update_dataset_attributes(self,
+        names_extracted,
+        units_extracted,
+        groups_idx_extracted,
+        names_input = None,  # type: ignore
+        units_input = None,  # type: ignore
+        groups_idx_input = None,  # type: ignore
+        New_group = False,  # type: ignore
+        ):
+
+        if names_input is not None:
+            data_name = names_input
+        
+        elif len(names_extracted) == 1:
+            data_name = f"{names_extracted[0]}"
+        elif len(set(names_extracted)) == 1:
+            data_name = f"Norm_of_{names_extracted[0]}"
         else:
-            norm_unit = "unitless"
+            data_name = "Norm_of_" + "_".join(names_extracted)
 
+        
+        
+        if units_input is not None:
+            data_unit = units_input
+        elif len(set(units_extracted)) == 1:
+            data_unit = units_extracted[0]
+        else:
+            data_unit = "unitless"
+
+
+        if groups_idx_input is not None:
+            data_groups_idx = groups_idx_input
+        elif New_group:
+            data_groups_idx = self.num_datagroups + 1
+            self.num_datagroups += 1
+        elif len(set(groups_idx_extracted)) == 1:
+            data_groups_idx = groups_idx_extracted[0]
+        else:
+            raise ValueError("无法确定结果列的组索引，请手动指定 norm_group_idx。")
+
+        return data_name, data_unit, data_groups_idx
+    
+    
+    def _create_local_dataset(self, data, name, unit, group_idx):
+        local_dataset = DataSet()
+        local_dataset.data = data.reshape(-1, 1)
+        local_dataset.names = [name]
+        local_dataset.units = [unit]
+        local_dataset.groups_idx = [group_idx]
+        local_dataset.father_idx = [None] #type: ignore
+        local_dataset.initial_idx = [None] #type: ignore
+        local_dataset.update_attributes()
+
+        return local_dataset
+
+
+
+       
 
 
 

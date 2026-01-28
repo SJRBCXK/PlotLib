@@ -1,11 +1,151 @@
 """数据集容器模块。"""
 from __future__ import annotations
+from typing import Union, overload
 from collections import Counter
 import re
 import copy
 import numpy as np
 
 
+class Column:
+    """
+    列视图容器 - 作为公共容器连接 DataSet 属性和 column 访问。
+
+    修改 Column 的属性会直接影响 DataSet 中的对应数据，反之亦然。
+
+    使用示例：
+        col = dataset.column[0]
+        col.name = 'New Name'       # 同时修改 dataset.names[0]
+        col.data[:] = new_values    # 同时修改 dataset.data[:, 0]
+    """
+    _dataset: 'DataSet'
+    _idx: int
+
+    def __init__(self, dataset: 'DataSet', idx: int):
+        """
+        Parameters
+        ----------
+        dataset : DataSet
+            父数据集引用
+        idx : int
+            该列在 dataset 中的索引
+        """
+        object.__setattr__(self, '_dataset', dataset)
+        object.__setattr__(self, '_idx', idx)
+
+    @property
+    def local_idx(self) -> int:
+        return self._idx
+
+    @property
+    def name(self) -> str:
+        return self._dataset.names[self._idx]
+
+    @name.setter
+    def name(self, value: str):
+        self._dataset.names[self._idx] = value
+
+    @property
+    def unit(self) -> str:
+        return self._dataset.units[self._idx]
+
+    @unit.setter
+    def unit(self, value: str):
+        self._dataset.units[self._idx] = value
+
+    @property
+    def group_idx(self) -> int:
+        return self._dataset.groups_idx[self._idx]
+
+    @group_idx.setter
+    def group_idx(self, value: int):
+        self._dataset.groups_idx[self._idx] = value
+
+    @property
+    def group_local_idx(self) -> int:
+        return self._dataset.group_local_idx[self._idx]
+
+    @property
+    def data(self) -> np.ndarray:
+        """返回该列数据的视图（非副本），修改会影响原数据"""
+        return self._dataset.data[:, self._idx]
+
+    @data.setter
+    def data(self, value: np.ndarray):
+        self._dataset.data[:, self._idx] = value
+
+    @property
+    def father_idx(self) -> int:
+        return self._dataset.father_idx[self._idx]
+
+    @property
+    def initial_idx(self) -> int:
+        return self._dataset.initial_idx[self._idx]
+
+    def to_dict(self) -> dict:
+        """转换为字典（副本，用于兼容旧代码）"""
+        return {
+            'local_idx': self.local_idx,
+            'name': self.name,
+            'unit': self.unit,
+            'group_idx': self.group_idx,
+            'group_local_idx': self.group_local_idx,
+            'data': self.data.copy(),
+            'father_idx': self.father_idx,
+            'initial_idx': self.initial_idx
+        }
+
+    def __repr__(self):
+        return f"Column({self.local_idx}, name='{self.name}', unit='{self.unit}', group={self.group_idx})"
+
+    # 支持字典式访问（向后兼容）
+    _ALLOWED_KEYS = frozenset(['name', 'unit', 'group_idx', 'data'])
+
+    def __getitem__(self, key):
+        if key not in self._ALLOWED_KEYS and key not in ('local_idx', 'group_local_idx', 'father_idx', 'initial_idx'):
+            raise KeyError(f"Unknown column key: '{key}'")
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        if key not in self._ALLOWED_KEYS:
+            raise KeyError(f"Cannot set '{key}': only {list(self._ALLOWED_KEYS)} are writable")
+        setattr(self, key, value)
+
+
+class ColumnList:
+    """
+    列列表容器 - 管理所有 Column 对象。
+
+    支持索引访问和迭代，所有操作都直接影响 DataSet。
+    """
+
+    def __init__(self, dataset: 'DataSet'):
+        self._dataset = dataset
+
+    @overload
+    def __getitem__(self, idx: int) -> Column: ...
+    @overload
+    def __getitem__(self, idx: slice) -> list[Column]: ...
+
+    def __getitem__(self, idx: Union[int, slice]) -> Union[Column, list[Column]]:
+        if isinstance(idx, slice):
+            indices = range(*idx.indices(len(self)))
+            return [Column(self._dataset, i) for i in indices]
+        if idx < 0:
+            idx = len(self) + idx
+        if idx < 0 or idx >= len(self):
+            raise IndexError(f"Column index {idx} out of range")
+        return Column(self._dataset, idx)
+
+    def __len__(self) -> int:
+        return self._dataset.data.shape[1] if self._dataset.data.size > 0 else 0
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield Column(self._dataset, i)
+
+    def __repr__(self):
+        return f"ColumnList({len(self)} columns)"
 
 
 
@@ -24,22 +164,10 @@ class DataSet():
         self.generation: int = 0
         self.status: str = 'empty'  # empty, selected, processed
 
-    @property #type: ignore
-    def column(self) -> list[dict]:
-            column:list[dict] = []
-
-            for i in self.local_idx:
-                column.append({
-                'local_idx': i,
-                'name': self.names[i],
-                'unit': self.units[i],
-                'group_idx': self.groups_idx[i],
-                'group_local_idx': self.group_local_idx[i],
-                'data': self.data[:, i].copy(),
-                'father_idx': self.father_idx[i],
-                'initial_idx': self.initial_idx[i]
-                })         
-            return column
+    @property
+    def column(self) -> ColumnList:
+        """返回列视图容器，修改会直接影响 DataSet"""
+        return ColumnList(self)
 
     
 
@@ -80,6 +208,13 @@ class DataSet():
             # Ensure same group-local position uses a consistent unit across groups.
             self._group_local_indices_unify_check()
             self.status = 'written'
+
+        for i, loc in enumerate(self.local_idx):
+            if self.father_idx[i] == None:
+                self.father_idx[i] = loc
+            if self.initial_idx[i] == None:
+                self.initial_idx[i] = loc
+                
         return self
     
     
@@ -114,8 +249,38 @@ class DataSet():
                 )
             unit_by_local[local_idx] = unit
     
-    def insert_column(self, data, name, unit):
-        pass
+    def _rearrange_columns(self):
+
         
-    def insert_dataset(self, dataset: DataSet):
-        pass
+        indices = np.column_stack([self.local_idx,self.groups_idx,self.group_local_idx])
+
+        order = np.lexsort((indices[:,2], indices[:,1])) 
+
+        self.data = self.data[:, order]
+        self.names = [self.names[i] for i in order]
+        self.units = [self.units[i] for i in order]
+        self.groups_idx = [self.groups_idx[i] for i in order]
+        self.group_local_idx = [self.group_local_idx[i] for i in order]
+        self.local_idx = list(range(len(order)))
+        self.father_idx = [self.father_idx[i] for i in order]
+        self.initial_idx = [self.initial_idx[i] for i in order]
+        self.num_datagroups = self.num_datagroups
+        self.generation = self.generation
+        self.status = self.status
+        self.update_attributes()
+
+        return self
+
+
+        
+
+
+
+        
+
+    
+
+
+        return self
+        
+

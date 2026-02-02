@@ -270,9 +270,69 @@ class DataSet():
         self.update_attributes()
 
         return self
+    
+    def columns_to_dataset(self, columns: list[Column], extended: bool = True) -> DataSet:
+        """将 Column 列表转换为新的 DataSet。
+
+        Parameters
+        ----------
+        columns : list[Column]
+            要转换的列列表
+        extended : bool, optional
+            是否扩展当前数据集，默认是 True
+
+        Returns
+        -------
+        DataSet
+            包含所选列的新数据集
+        """
+        local_dataset = DataSet()
+        local_dataset.data = np.column_stack([col.data for col in columns]) if columns else np.empty((self.data.shape[0], 0))
+        local_dataset.names = [col.name for col in columns]
+        local_dataset.units = [col.unit for col in columns]
+        local_dataset.groups_idx = [col.group_idx for col in columns]
+        local_dataset.father_idx = [col.father_idx for col in columns]
+        local_dataset.initial_idx = [col.initial_idx for col in columns]
+        local_dataset.update_attributes()
+
+        # 根据需要扩展或替换当前数据集
+        if extended:
+            self.expandata(local_dataset)
+        else:
+            self = local_dataset
+
+        return self
+    
 
 
-        
+    def iter(self, method: str):
+        """按指定方式遍历数据集，逐组产出子 DataSet。
+
+        Parameters
+        ----------
+        method : str
+            遍历方式: 'groups' | 'names' | 'units'。
+
+        Yields
+        ------
+        DataSet
+            每次迭代产出一个子数据集。
+        """
+        attr_map = {
+            'groups': self.groups_idx,
+            'names': self.names,
+            'units': self.units,
+            'group_local_idx': self.group_local_idx,
+        }
+        if method not in attr_map:
+            raise ValueError(f"不支持的遍历方式: '{method}'，可选: {list(attr_map.keys())}")
+
+        attr = attr_map[method]
+        for key in dict.fromkeys(attr):  # type: ignore
+            cols = [self.column[j] for j in self.local_idx if attr[j] == key]  # type: ignore
+            yield DataSet().columns_to_dataset(cols, extended=False)  # type: ignore
+    
+
 
 
 

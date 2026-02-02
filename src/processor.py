@@ -88,6 +88,7 @@ class DataProcessLayer:
         *args,
         dataset_for_select: DataSet | None = None,
         extended: bool = True,
+        inherit: bool = False
     ) -> DataProcessLayer:
         """
         按条件选择数据列。
@@ -108,6 +109,8 @@ class DataProcessLayer:
             指定选择的源数据集，默认使用 self.dataset。
         extended : bool
             True: 累加到已选数据；False: 替换已选数据。
+        inherit: bool
+            True: 继承已选数据；False: 不继承。
 
         Returns
         -------
@@ -120,7 +123,12 @@ class DataProcessLayer:
             使用 'group' 关键字但未提供整数列表。
         RuntimeError
             选择操作未正确执行。
+
         """
+
+        if not inherit:
+            self.Selected_data = DataSet()
+        
 
         Selected_data = DataSet()
 
@@ -149,7 +157,9 @@ class DataProcessLayer:
                     isinstance(select_rc[i+1], list) and\
                     all(isinstance(x, int) for x in select_rc[i+1]):
                         group_idx_list = list(select_rc[i+1])
-                        varlist_idx = [idx for idx, grp in enumerate(dataset_for_select.groups_idx) if grp in group_idx_list] #type: ignore
+                        varlist_idx = [idx
+                                       for g in group_idx_list
+                                       for idx, grp in enumerate(dataset_for_select.groups_idx) if grp == g] #type: ignore
                         Selected_data = self.getdata(
                             varlist_idx=varlist_idx,
                             father_dataset = dataset_for_select
@@ -194,7 +204,8 @@ class DataProcessLayer:
                 self.Selected_data.expandata(Selected_data)
             else:
                 self.Selected_data = copy.deepcopy(Selected_data)
-        
+
+
 
         self.called_select = True
         self.Selected_data.generation += 1
@@ -351,6 +362,10 @@ class DataTransformer:
         self.generation = dataset.generation
         self.column = dataset.column
         self.status = 'ready'
+
+
+
+        
         
 
     def Norm(
@@ -360,7 +375,8 @@ class DataTransformer:
         column: list[Column] = None,  # type: ignore
         norm_unit: str = None,  # type: ignore
         New_group: bool = False,  # type: ignore
-        norm_groups_idx: int = None  # type: ignore
+        norm_groups_idx: int = None,  # type: ignore
+        extended: bool = True
         ):
         """
         计算数据列的范数。
@@ -397,9 +413,12 @@ class DataTransformer:
             group_idx = data_groups_idx
         )
       
-        self.dataset.expandata(local_dataset)
+        if extended:      
+            self.dataset.expandata(local_dataset)
+        else:
+            self.dataset = copy.deepcopy(local_dataset)
 
-        return self.dataset.column[-1], self.dataset
+        return self.dataset
     
 
 

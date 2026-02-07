@@ -158,8 +158,8 @@ class DataProcessLayer:
                     all(isinstance(x, int) for x in select_rc[i+1]):
                         group_idx_list = list(select_rc[i+1])
                         varlist_idx = [idx
-                                       for g in group_idx_list
-                                       for idx, grp in enumerate(dataset_for_select.groups_idx) if grp == g] #type: ignore
+                            for g in group_idx_list
+                            for idx, grp in enumerate(dataset_for_select.groups_idx) if grp == g] #type: ignore
                         Selected_data = self.getdata(
                             varlist_idx=varlist_idx,
                             father_dataset = dataset_for_select
@@ -187,6 +187,7 @@ class DataProcessLayer:
                 Selected_data = self.getdata(varlist_idx=[var],
                 father_dataset = dataset_for_select,
                 ) #type: ignore
+            
 
             elif isinstance(var, (tuple, list)) and all(isinstance(x, int) for x in var):
                 Selected_data = self.getdata(varlist_idx=list(var),
@@ -489,7 +490,7 @@ class DataTransformer:
         elif len(set(groups_idx_extracted)) == 1:
             data_groups_idx = groups_idx_extracted[0]
         else:
-            raise ValueError("无法确定结果列的组索引，请手动指定 norm_group_idx。")
+            data_groups_idx = None
 
         return data_name, data_unit, data_groups_idx
     

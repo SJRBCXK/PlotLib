@@ -2,14 +2,20 @@
 EIS 电化学阻抗谱绘图脚本
 用途：绘制 EIS 数据的 Nyquist 图、Bode 图及双轴图
 """
+
+import os
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, LogLocator
 
 from src.dataloader import Dataloader
+from src.dataset import DataSet
+from src.processor import DataProcessLayer as DPL
+from src.processor import DataTransformer as DT
 from src.plotter import DataPlotter
 from src.formatters import make_axes_formatter, make_lines_formatter, make_legend_formatter
 
@@ -28,18 +34,18 @@ dataRowNum_unit3 = 2  # Imaginary Z (虚部阻抗)
 dataRowNum_unit4 = 3  # |Z| (阻抗模)
 dataRowNum_unit5 = 4  # Phase angle (相角)
 dataRowNum_unit6 = 5  # Real Z' (for Nyquist)
-dataRowNum_unit7 = 6  # -Imaginary Z'' (for Nyquist)
+dataRowNum_unit7 = 6  # Imaginary Z'' (for Nyquist)
 
 # 数据分组配置（用于 group_plotter）
 data_groups = {
-    '1th': {'num': [1, 2], 'linestyle': "-"},
-    '2st': {'num': [3], 'linestyle': "--"},
-    '3nd': {'num': [5], 'linestyle': "-."},
-    '4rd': {'num': [7], 'linestyle': ":"},
-    '5th': {'num': [9], 'linestyle': (0, (3, 5))},
-    '6th': {'num': [11], 'linestyle': (0, (5, 7))},
-    '7th': {'num': [13], 'linestyle': (0, (7, 9))},
-    '8th': {'num': [15], 'linestyle': (0, (3, 11))},
+    '1th': {'num': [0, 1], 'linestyle': "-"},
+    '2st': {'num': [2, 3], 'linestyle': "--"},
+    '3nd': {'num': [4, 5], 'linestyle': "-."},
+    '4rd': {'num': [6, 7], 'linestyle': ":"},
+    '5th': {'num': [8, 9], 'linestyle': (0, (3, 5))},
+    '6th': {'num': [10, 11], 'linestyle': (0, (5, 7))},
+    '7th': {'num': [12, 13], 'linestyle': (0, (7, 9))},
+    '8th': {'num': [14, 15], 'linestyle': (0, (3, 11))},
     '9th': {'num': [16, 17], 'linestyle': (0, (5, 5))}
 }
 
@@ -47,8 +53,8 @@ data_groups = {
 # 格式化器配置
 # ============================================================
 Nyquist_formatter = make_axes_formatter(
-    xscale_type='linear',
-    yscale_type='linear',
+    xscale_type='log',
+    yscale_type='log',
     x_format='{x:.1e}',
     y_format='{y:.1e}'
 )
@@ -180,5 +186,67 @@ Test_pltsubsxyy = DataPlotter(
 #     plotdataRowNum_Y2=dataRowNum_unit7,
 #     custom_formatter=eis_dual_axis_formatter,
 # )
+Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data #type: ignore
+Impendence = DataSet()
+for dataslice in Selected_data.iter('groups'): #type: ignore
+    impendence_slice = DT(dataslice).Norm(extended=False,norm_unit='|Z|(ohm)') #type: ignore
+    Impendence.expandata(impendence_slice)
+data = data.expandata(Impendence)._rearrange_columns() #type: ignore
+Impendence_pltliner1 = DataPlotter(
+    input_dataset=data,#type: ignore
+    plotdataRowNum_x = 0,
+    plotdataRowNum_y = 7
+).plot_lines(
+    axes_formatter=Nyquist_formatter,
+)
+
+RevCampdata = DataSet()
+RevCampdata_group_idx = -1
+for group_name, group_config in data_groups.items():
+    RevCampdata_group_idx += 1
+    RevCampdata_slice = DataSet()
+    if 'num' not in group_config:
+        raise ValueError(f"数据分组配置错误：'{group_name}' 缺少 'num' 键。")
+    Group_indices = group_config['num']
+    Selected_data_Zs = DPL(dataset=data).select("Group_indices",Group_indices).by("Zs'(ohm)","Zs''(ohm)").Selected_data._rearrange_columns() #type: ignore
+    col_indices = {gc:[] for gc in group_config['num']}
+    for gc in group_config['num']:
+        for i in Selected_data_Zs.local_idx:
+            if Selected_data_Zs.groups_idx[i] == gc:
+                col_indices[gc].append(i)
+                
+    idx0 = col_indices[group_config['num'][0]]
+    idx1 = col_indices[group_config['num'][1]]
+    
+    if len(idx0) != len(idx1):
+        raise ValueError(f"数据分组配置错误：'{group_name}' 的 'num' 列表中的索引数量不匹配。")
+    else:
+        repeat_times = range(len(idx0))
+    
+    RevCampdata_slice.data = Selected_data_Zs.data[:,idx1] - Selected_data_Zs.data[:,idx0]#type: ignore
+    RevCampdata_slice.names = ["RevCamp_"+Selected_data_Zs.names[i] + "_" + Selected_data_Zs.names[j] for i, j in zip(idx0, idx1)] #type: ignore
+    RevCampdata_slice.units = [Selected_data_Zs.units[i] for i in idx0] #type: ignore
+    RevCampdata_slice.groups_idx = [RevCampdata_group_idx for i in repeat_times] #type: ignore
+    RevCampdata_slice.father_idx = [None for i in repeat_times]  #type: ignore 
+    RevCampdata_slice.initial_idx = [None for i in repeat_times] #type: ignore
+    RevCampdata.expandata(RevCampdata_slice)    
+    # #type: ignore
+RevCampdata_pltsubsyy = DataPlotter(
+    input_dataset=RevCampdata,#type: ignore
+).subplotter_yy(
+    plotdataRowNum_Y1=dataRowNum_unit1,
+    plotdataRowNum_Y2=dataRowNum_unit2,
+    NegLogScale_Y2=True,
+    axes_formatter=NegLog_formatter
+)
+
+
+
+
+         #type: ignore
+    # RevCampdata_slice =  #type: ignore
+    
+
+
 
 plt.show()

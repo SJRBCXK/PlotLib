@@ -198,6 +198,12 @@ class DataSet():
             == len(self.father_idx) \
             == len(self.initial_idx) \
                                         ):
+            print("数据维度:", self.data.shape)
+            print("names 长度:", len(self.names))
+            print("units 长度:", len(self.units))
+            print("groups_idx 长度:", len(self.groups_idx))
+            print("father_idx 长度:", len(self.father_idx))
+            print("initial_idx 长度:", len(self.initial_idx)) 
             raise RuntimeError("数据解析错误：数据维度与元数据不匹配。")
         else:
             # numpy 无需重置列索引，直接更新 local_idx
@@ -214,6 +220,11 @@ class DataSet():
                 self.father_idx[i] = loc
             if self.initial_idx[i] == None:
                 self.initial_idx[i] = loc
+            if self.groups_idx[i] == None:
+                if all(g is None for g in self.groups_idx):
+                    self.groups_idx[i] = 0
+                else:
+                    self.groups_idx[i] = max(g for g in self.groups_idx if g is not None) + 1 if self.groups_idx else 0
                 
         return self
     

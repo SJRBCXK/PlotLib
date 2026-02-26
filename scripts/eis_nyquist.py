@@ -60,8 +60,8 @@ Nyquist_formatter = make_axes_formatter(
 )
 
 NegLog_formatter = make_axes_formatter(
-    xscale_type='linear',
-    yscale_type='linear',
+    xscale_type='log',
+    yscale_type='log',
     x_format='{x:.1e}',
     y_format='{y:.1e}'
 )
@@ -200,53 +200,78 @@ Impendence_pltliner1 = DataPlotter(
     axes_formatter=Nyquist_formatter,
 )
 
-RevCampdata = DataSet()
-RevCampdata_group_idx = -1
-for group_name, group_config in data_groups.items():
-    RevCampdata_group_idx += 1
-    RevCampdata_slice = DataSet()
-    if 'num' not in group_config:
-        raise ValueError(f"数据分组配置错误：'{group_name}' 缺少 'num' 键。")
-    Group_indices = group_config['num']
-    Selected_data_Zs = DPL(dataset=data).select("Group_indices",Group_indices).by("Zs'(ohm)","Zs''(ohm)").Selected_data._rearrange_columns() #type: ignore
-    col_indices = {gc:[] for gc in group_config['num']}
-    for gc in group_config['num']:
-        for i in Selected_data_Zs.local_idx:
-            if Selected_data_Zs.groups_idx[i] == gc:
-                col_indices[gc].append(i)
+# RevCampdata = DataSet()
+# RevCampdata_group_idx = -1
+# for group_name, group_config in data_groups.items():
+#     RevCampdata_group_idx += 1
+#     RevCampdata_slice = DataSet()
+#     if 'num' not in group_config:
+#         raise ValueError(f"数据分组配置错误：'{group_name}' 缺少 'num' 键。")
+#     Group_indices = group_config['num']
+#     Selected_data_Zs = DPL(dataset=data).select("Group_indices",Group_indices).by("Zs'(ohm)","Zs''(ohm)").Selected_data._rearrange_columns() #type: ignore
+#     col_indices = {gc:[] for gc in group_config['num']}
+#     for gc in group_config['num']:
+#         for i in Selected_data_Zs.local_idx:
+#             if Selected_data_Zs.groups_idx[i] == gc:
+#                 col_indices[gc].append(i)
                 
-    idx0 = col_indices[group_config['num'][0]]
-    idx1 = col_indices[group_config['num'][1]]
+#     idx0 = col_indices[Group_indices[0]]
+#     idx1 = col_indices[Group_indices[1]]
     
-    if len(idx0) != len(idx1):
-        raise ValueError(f"数据分组配置错误：'{group_name}' 的 'num' 列表中的索引数量不匹配。")
-    else:
-        repeat_times = range(len(idx0))
+#     if len(idx0) != len(idx1):
+#         raise ValueError(f"数据分组配置错误：'{group_name}' 的 'num' 列表中的索引数量不匹配。")
+#     else:
+#         repeat_times = range(len(idx0))
     
-    RevCampdata_slice.data = Selected_data_Zs.data[:,idx1] - Selected_data_Zs.data[:,idx0]#type: ignore
-    RevCampdata_slice.names = ["RevCamp_"+Selected_data_Zs.names[i] + "_" + Selected_data_Zs.names[j] for i, j in zip(idx0, idx1)] #type: ignore
-    RevCampdata_slice.units = [Selected_data_Zs.units[i] for i in idx0] #type: ignore
-    RevCampdata_slice.groups_idx = [RevCampdata_group_idx for i in repeat_times] #type: ignore
-    RevCampdata_slice.father_idx = [None for i in repeat_times]  #type: ignore 
-    RevCampdata_slice.initial_idx = [None for i in repeat_times] #type: ignore
-    RevCampdata.expandata(RevCampdata_slice)    
-    # #type: ignore
-RevCampdata_pltsubsyy = DataPlotter(
-    input_dataset=RevCampdata,#type: ignore
-).subplotter_yy(
-    plotdataRowNum_Y1=dataRowNum_unit1,
-    plotdataRowNum_Y2=dataRowNum_unit2,
-    NegLogScale_Y2=True,
-    axes_formatter=NegLog_formatter
-)
+#     RevCampdata_slice.data = Selected_data_Zs.data[:,idx1] - Selected_data_Zs.data[:,idx0]#type: ignore
+#     RevCampdata_slice.names = ["RevCamp_"+Selected_data_Zs.names[i] + "_" + Selected_data_Zs.names[j] for i, j in zip(idx0, idx1)] #type: ignore
+#     RevCampdata_slice.units = [Selected_data_Zs.units[i] for i in idx0] #type: ignore
+#     RevCampdata_slice.groups_idx = [RevCampdata_group_idx for i in repeat_times] #type: ignore
+#     RevCampdata_slice.father_idx = [None for i in repeat_times]  #type: ignore 
+#     RevCampdata_slice.initial_idx = [None for i in repeat_times] #type: ignore
+#     RevCampdata.expandata(RevCampdata_slice)    
+#     # #type: ignore
+
+# RevCampdata_pltsubsyy = DataPlotter(
+#     input_dataset=RevCampdata,#type: ignore
+# ).subplotter_yy(
+#     plotdataRowNum_Y1=dataRowNum_unit1,
+#     plotdataRowNum_Y2=dataRowNum_unit2,
+#     NegLogScale_Y2=True,
+#     axes_formatter=NegLog_formatter
+# )
 
 
 
 
          #type: ignore
     # RevCampdata_slice =  #type: ignore
-    
+
+# ============================================================
+# 使用 Group.apply() 重构的组间计算
+# ============================================================
+from src.group import Group
+
+def rev_camp(*slices):
+    camp = slices[1].data[:,:2] - slices[0].data[:,:2]
+    freq = slices[0].data[:,2].reshape(-1, 1)  # 假设频率在第三列
+    camp_with_freq = np.hstack((camp, freq))
+    return camp_with_freq
 
 
+RevCampdata_v2 = Group(data, data_groups).apply(
+    rev_camp,
+    select=("Zs'(ohm)", "Zs''(ohm)", "Frequency(Hz)")
+)
+print(RevCampdata_v2.units)  #type: ignore
+
+RevCampdata_v2_pltsubsyy = DataPlotter(
+    input_dataset=RevCampdata_v2,#type: ignore
+).subplotter_yy(
+    plotdataRowNum_Y1=2,
+    plotdataRowNum_Y2=1,
+    NegLogScale_Y2=True,
+    axes_formatter=NegLog_formatter
+)
 
 plt.show()

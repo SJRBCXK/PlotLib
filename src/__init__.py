@@ -5,6 +5,7 @@ from .dataloader import Dataloader
 from .processor import DataProcessLayer, DataTransformer
 from .plotter import DataPlotter
 from .formatters import make_axes_formatter
+from .group import Group
 
 __all__ = [
     'DataSet',
@@ -13,4 +14,5 @@ __all__ = [
     'DataTransformer',
     'DataPlotter',
     'make_axes_formatter',
+    'Group',
 ]

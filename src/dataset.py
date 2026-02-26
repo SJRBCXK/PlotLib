@@ -343,7 +343,19 @@ class DataSet():
             cols = [self.column[j] for j in self.local_idx if attr[j] == key]  # type: ignore
             yield DataSet().columns_to_dataset(cols, extended=False)  # type: ignore
     
-
+    def form_array(self, data, name, unit, group_idx, repeat_times=1):
+        """根据输入数据和元信息创建一个新的 DataSet 切片。"""
+        local_dataset = DataSet()
+        if data.ndim == 1:
+            data = data.reshape(-1, 1)
+        local_dataset.data = data
+        local_dataset.names = name
+        local_dataset.units = unit
+        local_dataset.groups_idx = [group_idx]*repeat_times
+        local_dataset.father_idx = [None]*repeat_times  # type: ignore
+        local_dataset.initial_idx = [None]*repeat_times  # type: ignore
+        local_dataset.update_attributes()
+        return local_dataset    
 
 
 

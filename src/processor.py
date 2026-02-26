@@ -407,7 +407,7 @@ class DataTransformer:
             groups_idx_input = norm_groups_idx,
             New_group = New_group) # type: ignore
         
-        local_dataset = self._create_local_dataset(
+        local_dataset = DataSet().form_array(
             data = norm_value,
             name = data_name,
             unit = data_unit,
@@ -492,27 +492,9 @@ class DataTransformer:
         else:
             data_groups_idx = None
 
-        return data_name, data_unit, data_groups_idx
+        return [data_name], [data_unit], data_groups_idx  
     
     
-    def _create_local_dataset(self, data, name, unit, group_idx):
-        local_dataset = DataSet()
-        local_dataset.data = data.reshape(-1, 1)
-        local_dataset.names = [name]
-        local_dataset.units = [unit]
-        local_dataset.groups_idx = [group_idx]
-        local_dataset.father_idx = [None] #type: ignore
-        local_dataset.initial_idx = [None] #type: ignore
-        local_dataset.update_attributes()
-
-        return local_dataset
-
-
-
-       
-
-
-
 
 
 

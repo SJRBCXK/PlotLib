@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, LogLocator
+import numpy as np
+
 
 from src.dataloader import Dataloader
 from src.plotter import DataPlotter
@@ -57,10 +59,10 @@ Bode_Delta_formatter = make_axes_formatter(
 )
 
 NegLog_formatter = make_axes_formatter(
-    xscale_type='linear',
+    xscale_type='log',
     yscale_type='linear',
     x_format='{x:.1e}',
-    y_format='{y:.1e}'
+    y_format='{y:.2f}'
 )
 
 def Group_lines_formatter(lines):
@@ -114,7 +116,38 @@ Bode_Plotter_TanDelta_group = DataPlotter(
     axes_formatter=Bode_Delta_formatter,
     lines_formatter=Group_lines_formatter)
 
-# Bode_Plotter_Impedance = DataPlotter(
-#     input_dataset=
+
+
+
+# ============================================================
+# 使用 Group.apply() 重构的组间计算
+# ============================================================
+
+
+from src.group import Group
+
+def rev_camp(*slices):
+    camp = slices[1].data[:,:2] / slices[0].data[:,:2]
+    freq = slices[0].data[:,2].reshape(-1, 1)  # 假设频率在第三列
+    camp_with_freq = np.hstack((camp, freq))
+    return camp_with_freq
+
+
+
+RevCampdata_v2 = Group(data, data_groups).apply(
+    rev_camp,
+    select=("Tan(phi)", "Tan(delta)", "Frequency(Hz)"),
+)
+
+RevCampdata_v2_pltsubsyy = DataPlotter(
+    input_dataset=RevCampdata_v2,#type: ignore
+).subplotter_yy(
+    plotdataRowNum_Y1=2,
+    plotdataRowNum_Y2=1,
+    NegLogScale_Y2=True,
+    axes_formatter=NegLog_formatter
+)
+
+
 
 plt.show()

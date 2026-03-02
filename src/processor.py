@@ -394,32 +394,47 @@ class DataTransformer:
         Returns
         Dataset.column
         """
-        col_data, names, units, groups_idx = self._resolve_input_data(column, indicies)
-        
+        col_data, _, _, _ = self._resolve_input_data(column, indicies)
+    
         norm_value = np.sum(np.abs(col_data)**order, axis=1)**(1/order)
 
-
-        data_name, data_unit, data_groups_idx = self.__update_dataset_attributes(
-            names_extracted = names,
-            units_extracted = units,
-            groups_idx_extracted = groups_idx,
-            units_input = norm_unit,   
-            groups_idx_input = norm_groups_idx,
-            New_group = New_group) # type: ignore
-        
-        local_dataset = DataSet().form_array(
-            data = norm_value,
-            name = data_name,
-            unit = data_unit,
-            group_idx = data_groups_idx
+        local_dataset = self._cal_pipe(
+            column = column,
+            indicies = indicies,
+            input_data = norm_value,
+            input_unit = norm_unit,
+            input_group_idx = norm_groups_idx,
+            New_group = New_group
         )
-      
+
         if extended:      
             self.dataset.expandata(local_dataset)
         else:
             self.dataset = copy.deepcopy(local_dataset)
 
+
         return self.dataset
+
+
+    def _cal_pipe(self,column, indicies, input_data, input_unit, input_group_idx, New_group):
+        _, names, units, groups_idx = self._resolve_input_data(column, indicies)
+        data_name, data_unit, data_groups_idx = self.__update_dataset_attributes(
+            names_extracted = names,
+            units_extracted = units,
+            groups_idx_extracted = groups_idx,
+            units_input = input_unit,   
+            groups_idx_input = input_group_idx,
+            New_group = New_group) # type: ignore
+        
+        local_dataset = DataSet().form_array(
+            data = input_data,
+            name = data_name,
+            unit = data_unit,
+            group_idx = data_groups_idx
+        )
+
+        return local_dataset
+
     
 
 

@@ -149,12 +149,14 @@ class Group():
             n_cols = result_data.shape[1]
 
             # 生成命名
-            if naming is not None:
-                result_names, result_units = naming(slices, result_data)
-            else:
-                result_names, result_units = self._auto_naming(
+            result_names, result_units = self._auto_naming(
                     slices, n_cols, callback
                 )
+            
+            if naming is not None:
+                result_names, result_units = naming(slices, result_data)
+            
+
 
             # 组装结果切片
             result_slice = DataSet().form_array(

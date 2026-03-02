@@ -155,7 +155,7 @@ class Dataloader:
         elif self.file_path.endswith(('.xlsx', '.xls')):
             self.dataset = pd.read_excel(self.file_path, header=None)
         elif self.file_path.endswith(('.txt', '.dat')):
-            self.dataset = pd.read_csv(self.file_path, delim_whitespace=True, low_memory=False, header=None)
+            self.dataset = pd.read_csv(self.file_path, delim_whitespace=True, low_memory=False, header=None)#type: ignore
 
         if self.dataset is None:
             raise RuntimeError("数据集加载失败")

@@ -539,7 +539,7 @@ class DataReorderGUI:
             messagebox.showwarning("警告", "请先加载数据文件")
             return
 
-        # 获取勾选的顺序
+        # 获��勾选的顺序
         selected_order = self.get_current_order()
 
         if not selected_order:
@@ -1028,9 +1028,13 @@ class DataReorderGUI:
         edit_window.title("编辑组内列结构")
         edit_window.geometry("500x650")
 
+        # 使用 grid 布局，让内容区可伸缩，按钮区固定在底部
+        edit_window.grid_rowconfigure(3, weight=1)  # list_frame 行可伸缩
+        edit_window.grid_columnconfigure(0, weight=1)
+
         # 顶部框架：列数设置
         top_frame = ttk.Frame(edit_window)
-        top_frame.pack(fill=tk.X, padx=10, pady=10)
+        top_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
 
         ttk.Label(top_frame, text="每组列数:", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
 
@@ -1056,18 +1060,18 @@ class DataReorderGUI:
             font=("Arial", 10),
             wraplength=480
         )
-        info_label.pack(padx=10, pady=(0, 10))
+        info_label.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
 
         # 表头编辑框架
         header_frame = ttk.LabelFrame(edit_window, text="修改表头（应用到所有组）", padding=10)
-        header_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        header_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 10))
 
         # 存储每列的表头输入框和标签
         header_widgets = {'entries': [], 'frames': []}
 
         # 创建可拖拽列表容器
         list_frame = ttk.Frame(edit_window)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        list_frame.grid(row=3, column=0, sticky="nsew", padx=10, pady=5)
 
         struct_list = DraggableList(list_frame)
         struct_list.pack(fill=tk.BOTH, expand=True)
@@ -1208,9 +1212,9 @@ class DataReorderGUI:
 
         refresh_btn.config(command=refresh_all)
 
-        # 按钮框架
+        # 按钮框架（固定在底部）
         button_frame = ttk.Frame(edit_window)
-        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        button_frame.grid(row=4, column=0, sticky="ew", padx=10, pady=10)
 
         def save_structure():
             """保存结构和表头"""

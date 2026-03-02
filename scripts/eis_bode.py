@@ -14,6 +14,9 @@ import numpy as np
 
 from src.dataloader import Dataloader
 from src.plotter import DataPlotter
+from src.dataset import DataSet
+from src.processor import DataProcessLayer as DPL
+from src.processor import DataTransformer as DT
 from src.formatters import make_axes_formatter, make_lines_formatter, make_legend_formatter
 
 plt.close('all')
@@ -60,9 +63,9 @@ Bode_Delta_formatter = make_axes_formatter(
 
 NegLog_formatter = make_axes_formatter(
     xscale_type='log',
-    yscale_type='linear',
+    yscale_type='log',
     x_format='{x:.1e}',
-    y_format='{y:.2f}'
+    y_format='{y:.2e}'
 )
 
 def Group_lines_formatter(lines):
@@ -136,18 +139,30 @@ def rev_camp(*slices):
 
 RevCampdata_v2 = Group(data, data_groups).apply(
     rev_camp,
-    select=("Tan(phi)", "Tan(delta)", "Frequency(Hz)"),
+    select=("Conductivity'(S/cm)", "Conductivity''(S/cm)", "Frequency(Hz)"),
 )
 
 RevCampdata_v2_pltsubsyy = DataPlotter(
     input_dataset=RevCampdata_v2,#type: ignore
-).subplotter_yy(
-    plotdataRowNum_Y1=2,
-    plotdataRowNum_Y2=1,
-    NegLogScale_Y2=True,
+    plotdataRowNum_x=2,
+    plotdataRowNum_y=1,
+).plot_lines(
     axes_formatter=NegLog_formatter
 )
 
+Selected_data = DPL(dataset=data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data #type: ignore
+Conductivity = DataSet()
+for dataslice in Selected_data.iter('groups'): #type: ignore
+    conductivity_slice = DT(dataslice).Norm(extended=False,norm_unit='|C|(S/cm)') #type: ignore
+    Conductivity.expandata(conductivity_slice)
+data = data.expandata(Conductivity)._rearrange_columns() #type: ignore
+Conductivity_pltliner1 = DataPlotter(
+    input_dataset=data,#type: ignore
+    plotdataRowNum_x = 0,
+    plotdataRowNum_y = 9
+).plot_lines(
+    axes_formatter=NegLog_formatter,
+)
 
 
 plt.show()

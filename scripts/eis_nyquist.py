@@ -259,8 +259,6 @@ def rev_camp(*slices):
     return camp_with_freq
 
 
-
-
 RevCampdata_v2 = Group(data, data_groups).apply(
     rev_camp,
     select=("Zs'(ohm)", "Zs''(ohm)", "Frequency(Hz)")

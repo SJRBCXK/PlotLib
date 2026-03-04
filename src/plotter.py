@@ -1,6 +1,4 @@
 """科学数据绘图模块。"""
-from __future__ import annotations
-
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 import numpy as np
@@ -163,7 +161,7 @@ class DataPlotter:
                    lines_formatter=None,
                    legend_formatter=None,
                    NegLogScale_x: bool = False,
-                   NegLogScale_y: bool = False) -> 'DataPlotter':
+                   NegLogScale_y: bool = False) -> DataPlotter:
         """
         绘制多线图。
 
@@ -317,7 +315,7 @@ class DataPlotter:
                       axes_formatter=None,
                       lines_formatter=None,
                       legend_formatter=None,
-                      merge_groups: bool = False) -> 'DataPlotter':
+                      merge_groups: bool = False) -> DataPlotter:
         """
         分组绘图。
 
@@ -476,7 +474,7 @@ class DataPlotter:
                       NegLogScale_Y1: bool = False,
                       NegLogScale_Y2: bool = False,
                       plotdataRowNum_Y1: int = dataRowNum_unit2,
-                      plotdataRowNum_Y2: int = dataRowNum_unit4) -> 'DataPlotter':
+                      plotdataRowNum_Y2: int = dataRowNum_unit4) -> DataPlotter:
         """
         绘制 Y-Y 关系图。
 
@@ -588,7 +586,7 @@ class DataPlotter:
                        plotdataRowNum_X1: int = dataRowNum_unit1,
                        plotdataRowNum_Y1: int = dataRowNum_unit2,
                        plotdataRowNum_X2: int = dataRowNum_unit3,
-                       plotdataRowNum_Y2: int = dataRowNum_unit4) -> 'DataPlotter':
+                       plotdataRowNum_Y2: int = dataRowNum_unit4) -> DataPlotter:
         """
         绘制 X-YY 双轴图。
 

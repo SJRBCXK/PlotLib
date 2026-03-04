@@ -1,11 +1,9 @@
-from __future__ import annotations
 from collections import Counter
 
 import tkinter as tk
 from tkinter import filedialog
 import pandas as pd
 import numpy as np
-from typing import Optional
 from .dataset import DataSet
 
 
@@ -66,8 +64,8 @@ class Dataloader:
         COLUMNS_PER_DATASET : int, optional
             每组的列数，默认 6。
         """
-        self.file_path: Optional[str] = None
-        self.dataset: Optional[pd.DataFrame] = None
+        self.file_path: str | None = None
+        self.dataset: pd.DataFrame | None = None
         self.DATASET_FRACTION = DATASET_FRACTION
         self.COLUMNS_PER_DATASET = COLUMNS_PER_DATASET
 
@@ -106,7 +104,7 @@ class Dataloader:
 
 
 
-    def load_data(self) -> 'DataSet':
+    def load_data(self) -> DataSet:
         """
         加载并解析数据文件。
 
@@ -207,7 +205,7 @@ class Dataloader:
 
         return self._formatter()
 
-    def _get_group_local_idx(self) -> 'Dataloader':
+    def _get_group_local_idx(self) -> Dataloader:
         """计算每列在其所属组内的局部索引。"""
         counter: dict[int, int] = {}
         self.group_local_idx = []
@@ -217,7 +215,7 @@ class Dataloader:
             counter[g] += 1
         return self
 
-    def _formatter(self) -> 'DataSet':
+    def _formatter(self) -> DataSet:
         """将解析结果封装为 DataSet 对象。"""
         dataset = DataSet()
         dataset.names = self.names

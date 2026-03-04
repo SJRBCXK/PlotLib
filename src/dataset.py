@@ -1,7 +1,5 @@
 """数据集容器模块。"""
-from __future__ import annotations
-from typing import Union, overload
-from collections import Counter
+from typing import overload
 import re
 import copy
 import numpy as np
@@ -18,10 +16,10 @@ class Column:
         col.name = 'New Name'       # 同时修改 dataset.names[0]
         col.data[:] = new_values    # 同时修改 dataset.data[:, 0]
     """
-    _dataset: 'DataSet'
+    _dataset: DataSet
     _idx: int
 
-    def __init__(self, dataset: 'DataSet', idx: int):
+    def __init__(self, dataset: DataSet, idx: int):
         """
         Parameters
         ----------
@@ -71,7 +69,7 @@ class Column:
         return self._dataset.data[:, self._idx]
 
     @data.setter
-    def data(self, value: np.ndarray):
+    def data(self,value: np.ndarray):
         self._dataset.data[:, self._idx] = value
 
     @property
@@ -119,7 +117,7 @@ class ColumnList:
     支持索引访问和迭代，所有操作都直接影响 DataSet。
     """
 
-    def __init__(self, dataset: 'DataSet'):
+    def __init__(self, dataset: DataSet):
         self._dataset = dataset
 
     @overload
@@ -127,7 +125,7 @@ class ColumnList:
     @overload
     def __getitem__(self, idx: slice) -> list[Column]: ...
 
-    def __getitem__(self, idx: Union[int, slice]) -> Union[Column, list[Column]]:
+    def __getitem__(self, idx: int | slice) -> Column | list[Column]:
         if isinstance(idx, slice):
             indices = range(*idx.indices(len(self)))
             return [Column(self._dataset, i) for i in indices]
@@ -178,7 +176,13 @@ class DataSet():
         if self.data.size == 0:
             self.data = other.data.copy()
         else:
-            self.data = np.hstack([self.data, other.data])
+            a, b = self.data, other.data
+            max_rows = max(a.shape[0], b.shape[0])
+            if a.shape[0] < max_rows:
+                a = np.vstack([a, np.full((max_rows - a.shape[0], a.shape[1]), np.nan)])
+            if b.shape[0] < max_rows:
+                b = np.vstack([b, np.full((max_rows - b.shape[0], b.shape[1]), np.nan)])
+            self.data = np.hstack([a, b])
         self.names.extend(other.names)
         self.units.extend(other.units)
         self.groups_idx.extend(other.groups_idx)
@@ -216,11 +220,11 @@ class DataSet():
             self.status = 'written'
 
         for i, loc in enumerate(self.local_idx):
-            if self.father_idx[i] == None:
+            if self.father_idx[i] is None:
                 self.father_idx[i] = loc
-            if self.initial_idx[i] == None:
+            if self.initial_idx[i] is None:
                 self.initial_idx[i] = loc
-            if self.groups_idx[i] == None:
+            if self.groups_idx[i] is None:
                 if all(g is None for g in self.groups_idx):
                     self.groups_idx[i] = 0
                 else:
@@ -346,7 +350,9 @@ class DataSet():
     def form_array(self, data, name, unit, group_idx, repeat_times=1):
         """根据输入数据和元信息创建一个新的 DataSet 切片。"""
         local_dataset = DataSet()
-        if data.ndim == 1:
+        if data.ndim == 0:
+            data = data.reshape(1, 1)
+        elif data.ndim == 1:
             data = data.reshape(-1, 1)
         local_dataset.data = data
         local_dataset.names = name

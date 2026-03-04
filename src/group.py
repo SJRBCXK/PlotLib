@@ -1,5 +1,4 @@
-from __future__ import annotations
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 from .dataset import DataSet
@@ -113,7 +112,7 @@ class Group():
 
             # 选择对应组的列
             dpl = DataProcessLayer(dataset=self.dataset)
-            dpl.select("Group_indices", group_indices)
+            dpl.select("group", group_indices)
             if select is not None:
                 dpl.by(*select)
             selected = dpl.Selected_data
@@ -144,6 +143,8 @@ class Group():
 
             # 调用用户回调
             result_data = callback(*slices)
+            if result_data.ndim == 0:
+                result_data = result_data.reshape(1, 1)
             if result_data.ndim == 1:
                 result_data = result_data.reshape(-1, 1)
             n_cols = result_data.shape[1]

@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, LogLocator
 import numpy as np
+import scipy as sp
 
 
 from src.dataloader import Dataloader
@@ -163,6 +164,34 @@ Conductivity_pltliner1 = DataPlotter(
 ).plot_lines(
     axes_formatter=NegLog_formatter,
 )
+
+
+
+
+def f_peak(data):
+    result_data_indice,_= sp.signal.find_peaks(data[:,0].ravel()) #type: ignore
+    result_tan_values = data[result_data_indice,0].ravel()
+    result_freq_values = data[result_data_indice,1].ravel()
+     #type: ignore
+    result_data = np.vstack((result_tan_values, result_freq_values)).T
+    
+    return  result_data
+
+
+Selected_data = DPL(dataset=data).select("Tan(Delta)","Frequency(Hz)").Selected_data #type: ignore
+f_delta_peak = DataSet()
+for dataslice in Selected_data.iter('groups'): #type: ignore
+    f_delta_peak_slice = DT(dataslice).apply(func=f_peak,extended=False)#type: ignore
+    f_delta_peak.expandata(f_delta_peak_slice)
+print(f_delta_peak.names)#type: ignore
+
+fig, ax = plt.subplots()
+ax2 = ax.twinx()
+ax.plot(range(1,len(f_delta_peak.data[0]),2), f_delta_peak.data[0,range(0,len(f_delta_peak.data[0]),2)],  'o', markersize=10) #type: ignore
+ax2.plot(range(1,len(f_delta_peak.data[0]),2), f_delta_peak.data[0,range(1,len(f_delta_peak.data[0]),2)],  'x', markersize=10) #type: ignore
+# ax.set_xscale('log')
+# ax.set_yscale('log')
+ax2.set_yscale('log')
 
 
 plt.show()

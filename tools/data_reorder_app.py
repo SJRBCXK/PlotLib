@@ -118,6 +118,11 @@ class DraggableList(ttk.Frame):
         self.drag_item = None
         self.drag_placeholder = None
 
+        # 自动滚动相关
+        self._auto_scroll_id = None
+        self._auto_scroll_speed = 0
+        self._auto_scroll_margin = 40  # 距离边界多少像素开始滚动
+
         # 外部点击回调
         self.external_click_callback = None
 
@@ -147,47 +152,77 @@ class DraggableList(ttk.Frame):
         self.drag_item = item
         item.highlight(True)
 
+    def _start_auto_scroll(self, speed):
+        """启动自动滚动"""
+        self._auto_scroll_speed = speed
+        if self._auto_scroll_id is None:
+            self._do_auto_scroll()
+
+    def _stop_auto_scroll(self):
+        """停止自动滚动"""
+        if self._auto_scroll_id is not None:
+            self.after_cancel(self._auto_scroll_id)
+            self._auto_scroll_id = None
+        self._auto_scroll_speed = 0
+
+    def _do_auto_scroll(self):
+        """执行一步自动滚动"""
+        if self._auto_scroll_speed == 0:
+            self._auto_scroll_id = None
+            return
+        self.canvas.yview_scroll(self._auto_scroll_speed, "units")
+        self._auto_scroll_id = self.after(50, self._do_auto_scroll)
+
     def on_drag_motion(self, item, y):
         """拖拽移动中"""
         if self.drag_item is None:
             return
 
-        # 找到鼠标下的item
+        # 自动滚动：检测鼠标是否接近canvas上下边界
+        canvas_top = self.canvas.winfo_rooty()
+        canvas_bottom = canvas_top + self.canvas.winfo_height()
+        margin = self._auto_scroll_margin
+
+        if y < canvas_top + margin:
+            self._start_auto_scroll(-2)
+        elif y > canvas_bottom - margin:
+            self._start_auto_scroll(2)
+        else:
+            self._stop_auto_scroll()
+
+        # 找到鼠标下的item，用插入而非交换
+        drag_index = self.items.index(self.drag_item)
         for i, target_item in enumerate(self.items):
             if target_item == self.drag_item:
                 continue
 
             bbox = target_item.winfo_rooty()
             height = target_item.winfo_height()
+            mid = bbox + height // 2
 
-            if bbox <= y <= bbox + height:
-                # 交换位置
-                drag_index = self.items.index(self.drag_item)
+            # 从上往下拖：鼠标过了目标中点才插入到目标之后
+            # 从下往上拖：鼠标在目标中点之上才插入到目标之前
+            if drag_index < i and y > mid:
                 target_index = i
+            elif drag_index > i and y < mid:
+                target_index = i
+            else:
+                continue
 
-                if drag_index != target_index:
-                    # 更新列表
-                    self.items[drag_index], self.items[target_index] = \
-                        self.items[target_index], self.items[drag_index]
+            # 从列表中移除再插入到目标位置
+            self.items.pop(drag_index)
+            self.items.insert(target_index, self.drag_item)
 
-                    # 重新排列UI
-                    if drag_index < target_index:
-                        self.drag_item.pack_forget()
-                        self.drag_item.pack(
-                            before=self.items[target_index + 1] if target_index + 1 < len(
-                                self.items) else None,
-                            fill=tk.X, padx=5, pady=2
-                        )
-                    else:
-                        self.drag_item.pack_forget()
-                        self.drag_item.pack(
-                            before=target_item,
-                            fill=tk.X, padx=5, pady=2
-                        )
-                break
+            # 重新排列UI
+            for it in self.items:
+                it.pack_forget()
+            for it in self.items:
+                it.pack(fill=tk.X, padx=5, pady=2)
+            break
 
     def on_drag_end(self, item, y):
         """结束拖拽"""
+        self._stop_auto_scroll()
         if self.drag_item:
             self.drag_item.highlight(False)
         self.drag_item = None
@@ -410,7 +445,15 @@ class DataReorderGUI:
             self.file_path = file_path
 
             # 计算有多少组数据
-            num_groups = len(df.columns) // self.columns_per_group
+            total_cols = len(df.columns)
+            num_groups = total_cols // self.columns_per_group
+            remainder = total_cols % self.columns_per_group
+            if remainder > 0:
+                messagebox.showwarning(
+                    "警告",
+                    f"总列数 {total_cols} 不能被每组列数 {self.columns_per_group} 整除，"
+                    f"尾部 {remainder} 列将被忽略。"
+                )
 
             # 存储原始顺序
             self.original_order = list(range(num_groups))
@@ -568,12 +611,12 @@ class DataReorderGUI:
             else:
                 # CSV文件（尝试不同编码）
                 try:
-                    df_original = pd.read_csv(self.file_path, low_memory=False, header=None, encoding='utf-8')
+                    df_original = pd.read_csv(self.file_path, low_memory=False, header=None, encoding='utf-8')# type: ignore
                 except UnicodeDecodeError:
                     try:
-                        df_original = pd.read_csv(self.file_path, low_memory=False, header=None, encoding='gbk')
+                        df_original = pd.read_csv(self.file_path, low_memory=False, header=None, encoding='gbk')# type: ignore
                     except UnicodeDecodeError:
-                        df_original = pd.read_csv(self.file_path, low_memory=False, header=None, encoding='gb2312')
+                        df_original = pd.read_csv(self.file_path, low_memory=False, header=None, encoding='gb2312')# type: ignore
 
             new_columns = []
 
@@ -1184,31 +1227,20 @@ class DataReorderGUI:
             update_header_inputs()
 
         # 覆盖 DraggableItem 的 on_check_changed 方法
-        for item in struct_list.get_items():
-            original_on_check_changed = item.on_check_changed
-            def create_callback(orig_callback):
-                def callback():
-                    orig_callback()
-                    on_checkbox_changed()
-                return callback
-            item.on_check_changed = create_callback(original_on_check_changed)
-            # 重新绑定command
-            item.checkbutton.config(command=item.on_check_changed)
+        def _bind_checkbox_events():
+            for item in struct_list.get_items():
+                def make_callback():
+                    def callback():
+                        on_checkbox_changed()
+                    return callback
+                item.checkbutton.config(command=make_callback())
+        _bind_checkbox_events()
 
         # 绑定刷新按钮（同时刷新列表和表头输入框）
         def refresh_all():
             update_structure_list()
             update_header_inputs()
-            # 重新绑定勾选框事件
-            for item in struct_list.get_items():
-                original_on_check_changed = item.on_check_changed
-                def create_callback(orig_callback):
-                    def callback():
-                        orig_callback()
-                        on_checkbox_changed()
-                    return callback
-                item.on_check_changed = create_callback(original_on_check_changed)
-                item.checkbutton.config(command=item.on_check_changed)
+            _bind_checkbox_events()
 
         refresh_btn.config(command=refresh_all)
 

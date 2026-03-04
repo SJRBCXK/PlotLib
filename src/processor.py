@@ -1,8 +1,8 @@
 """数据处理模块。"""
-from __future__ import annotations
-
 import re
 import copy
+from collections.abc import Callable
+
 import numpy as np
 from .dataset import DataSet, Column, ColumnList
 
@@ -50,10 +50,10 @@ class DataProcessLayer:
     def __init__(
         self,
         dataset: DataSet,
-        input_data: object = None,  # type: ignore
-        input_dataname: list[str] = None,  # type: ignore
-        input_dataunits: list[str] = None,  # type: ignore
-        data_Process_Index: list[int] = None,  # type: ignore
+        input_data: object | None = None,
+        input_dataname: list[str] | None = None,
+        input_dataunits: list[str] | None = None,
+        data_Process_Index: list[int] | None = None,
     ):
         """
         初始化处理层。
@@ -223,10 +223,10 @@ class DataProcessLayer:
     
     def getdata(
         self,
-        varname: str = None,  # type: ignore
-        varlist_idx: list[int] = None,  # type: ignore
-        varset: object = None,  # type: ignore
-        father_dataset: DataSet = None,  # type: ignore
+        varname: str | None = None,
+        varlist_idx: list[int] | None = None,
+        varset: object | None = None,
+        father_dataset: DataSet | None = None,
     ) -> DataSet:
         """
         从数据集中提取指定列。
@@ -339,7 +339,7 @@ class DataTransformer:
         状态标识，'ready' 或 'transformed'。
     """
 
-    def __init__(self, dataset: DataSet = None):# type: ignore
+    def __init__(self, dataset: DataSet | None = None):
         """
         初始化变换器。
 
@@ -363,7 +363,47 @@ class DataTransformer:
         self.generation = dataset.generation
         self.column = dataset.column
         self.status = 'ready'
+        self.result_dataset = DataSet()
 
+
+    def apply(self,
+        func: Callable[..., np.ndarray] = lambda x: x,
+        naming_func: Callable[[], dict[str, list[str] | None]] | None = None,
+        input_name: str | None = None,
+        indicies: list[int] | int | None = None,
+        column: list[Column] | None = None,
+        input_unit: str | None = None,
+        New_group: bool = False,
+        input_groups_idx: int | None = None,
+        extended: bool = True
+    ) -> DataSet:
+        
+        col_data, _, _, _ = self._resolve_input_data(column, indicies)
+
+        transformed_data = self._get_datadim(func(col_data))
+        colnum_of_result = transformed_data.shape[1]
+
+ 
+
+        local_dataset = self._cal_pipe(
+            naming_func = naming_func,
+            col_num = colnum_of_result,
+            column = column,
+            indicies = indicies,
+            input_data = transformed_data,
+            input_name = input_name,
+            input_unit = input_unit,
+            input_group_idx = input_groups_idx,
+            New_group = New_group
+        )   
+
+        if extended:
+            self.result_dataset.expandata(local_dataset)
+        else:
+            self.result_dataset = copy.deepcopy(local_dataset)
+        
+        
+        return self.result_dataset
 
 
         
@@ -372,11 +412,11 @@ class DataTransformer:
     def Norm(
         self,
         order: int = 2,
-        indicies: (list[int],int) = None,  # type: ignore
-        column: list[Column] = None,  # type: ignore
-        norm_unit: str = None,  # type: ignore
-        New_group: bool = False,  # type: ignore
-        norm_groups_idx: int = None,  # type: ignore
+        indicies: list[int] | int | None = None,
+        column: list[Column] | None = None,
+        norm_unit: str | None = None,
+        New_group: bool = False,
+        norm_groups_idx: int | None = None,
         extended: bool = True
         ):
         """
@@ -408,29 +448,67 @@ class DataTransformer:
         )
 
         if extended:      
-            self.dataset.expandata(local_dataset)
+            self.result_dataset.expandata(local_dataset)
         else:
-            self.dataset = copy.deepcopy(local_dataset)
+            self.result_dataset = copy.deepcopy(local_dataset)
 
 
-        return self.dataset
+        return self.result_dataset
 
 
-    def _cal_pipe(self,column, indicies, input_data, input_unit, input_group_idx, New_group):
+    def _cal_pipe(self,
+        naming_func: Callable[[], dict[str, list[str] | None]] | None = None,
+        col_num: int = 1,
+        column: list[Column] | None= None, 
+        indicies: list[int] | int | None = None, 
+        input_data: np.ndarray | None = None, 
+        input_name: str | None = None, 
+        input_unit: str | None = None, 
+        input_group_idx: int | None = None, 
+        New_group: bool = False
+        ):
+
         _, names, units, groups_idx = self._resolve_input_data(column, indicies)
-        data_name, data_unit, data_groups_idx = self.__update_dataset_attributes(
-            names_extracted = names,
-            units_extracted = units,
-            groups_idx_extracted = groups_idx,
-            units_input = input_unit,   
-            groups_idx_input = input_group_idx,
-            New_group = New_group) # type: ignore
+
+        data_name = self._auto_naming(
+            names_extracted=names,
+            names_input=input_name,
+            col_num=col_num
+        )
+
+        data_unit = self._auto_units(
+            units_extracted=units,
+            units_input=input_unit,
+            col_num=col_num
+        )
+
+        data_groups_idx = self._auto_groups_idx(
+            groups_idx_extracted=groups_idx,
+            groups_idx_input=input_group_idx,
+            New_group=New_group
+        )
+
+        if naming_func is not None:
+            meta = naming_func()
+            func_names = meta.get('names')
+            func_units = meta.get('units')
+            func_groups_idx = meta.get('groups_idx')
+            
+            if func_names is not None:
+                data_name = func_names
+            if func_units is not None:
+                data_unit = func_units
+            if func_groups_idx is not None:
+                data_groups_idx = func_groups_idx
+    
+           
         
         local_dataset = DataSet().form_array(
             data = input_data,
             name = data_name,
             unit = data_unit,
-            group_idx = data_groups_idx
+            group_idx = data_groups_idx,
+            repeat_times = col_num
         )
 
         return local_dataset
@@ -467,36 +545,47 @@ class DataTransformer:
 
 
     
-    def __update_dataset_attributes(self,
-        names_extracted,
-        units_extracted,
-        groups_idx_extracted,
-        names_input = None,  # type: ignore
-        units_input = None,  # type: ignore
-        groups_idx_input = None,  # type: ignore
-        New_group = False,  # type: ignore
-        ):
 
+    def _auto_naming(self,
+        names_extracted,
+        names_input = None,
+        col_num: int = 1
+          ):
+        
         if names_input is not None:
             data_name = names_input
         
         elif len(names_extracted) == 1:
-            data_name = f"{names_extracted[0]}"
+            data_name = [f"{names_extracted[0]}"]*col_num
         elif len(set(names_extracted)) == 1:
-            data_name = f"Norm_of_{names_extracted[0]}"
+            data_name = [f"Results_{i}_of_{names_extracted[0]}" for i in range(col_num)]
         else:
-            data_name = "Norm_of_" + "_".join(names_extracted)
-
+            data_name = [f"Results_{i}_of_" + "_".join(names_extracted)for i in range(col_num)]
         
+        return data_name
+    
+    def _auto_units(self,
+        units_extracted,
+        units_input = None,
+        col_num: int = 1
+          ):
         
         if units_input is not None:
-            data_unit = units_input
+            data_unit = [units_input]*col_num
+                   
         elif len(set(units_extracted)) == 1:
-            data_unit = units_extracted[0]
+            data_unit = [units_extracted[0]]*col_num
         else:
-            data_unit = "unitless"
-
-
+            data_unit = [f"unitless_{i}"for i in range(col_num)]
+        
+        return data_unit
+    
+    def _auto_groups_idx(self,
+        groups_idx_extracted:list[int],
+        groups_idx_input:int| None = None,
+        New_group: bool = False,
+            ):
+        
         if groups_idx_input is not None:
             data_groups_idx = groups_idx_input
         elif New_group:
@@ -507,8 +596,26 @@ class DataTransformer:
         else:
             data_groups_idx = None
 
-        return [data_name], [data_unit], data_groups_idx  
+        return data_groups_idx
     
+    
+    
+    @staticmethod
+    def _get_datadim(data):
+        if data.ndim == 0:
+            data = data.reshape(1, 1)
+        elif data.ndim == 1:
+            data = data.reshape(-1, 1)
+        return data
+    
+
+
+
+    
+
+
+
+
     
 
 

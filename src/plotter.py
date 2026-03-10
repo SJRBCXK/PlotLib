@@ -2,7 +2,6 @@
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 import numpy as np
-from . import processor as DataProcessor
 from .dataset import DataSet
 
 # ============================================================================
@@ -141,7 +140,8 @@ class DataPlotter:
         self.groups_idx = self.dataset.groups_idx
         self.group_local_idx = self.dataset.group_local_idx
         self.column = self.dataset.column
-        self.line_objects: list = []
+        self.plot_artists: list = []
+        self.axesset: dict = {}
         self.plotrange = plotrange
         self.plotdataRowNum_x = plotdataRowNum_x
         self.plotdataRowNum_y = plotdataRowNum_y
@@ -156,12 +156,139 @@ class DataPlotter:
     # 绘图方法
     # ========================================================================
 
-    def plot_lines(self,
+    def _get_data(self,
+        group_idx: int,
+        local_idx_x: int,
+        local_idx_y: int,
+        neglog_x: bool = False, 
+        neglog_y: bool = False):
+
+        Row_x,x_label,x_unit = self._get_column_data(
+        group_idx = group_idx, 
+        group_local_idx= local_idx_x,
+        plotrange=self.plotrange)#type: ignore
+        
+        Row_y, y_label, y_unit = self._get_column_data(
+        group_idx = group_idx, 
+        group_local_idx= local_idx_y, 
+        plotrange=self.plotrange)#type: ignore
+
+        if neglog_x:
+            Row_x = np.abs(Row_x)
+        if neglog_y:
+            Row_y = np.abs(Row_y)
+
+        return Row_x, Row_y, x_label, y_label, x_unit,  y_unit
+    
+    
+    def _get_column_data(self, group_idx: int, group_local_idx: int, plotrange: int):
+        """根据组索引和组内索引获取列数据。"""
+        for column in self.column:
+            if column['group_idx'] == group_idx and column['group_local_idx'] == group_local_idx:
+                return column['data'][0:plotrange], column['name'], column['unit']
+        raise RuntimeError("未找到对应的列数据")
+    
+
+    def _plot_data(self, ax, x, y, plot_kind='line', **kwargs):
+        match plot_kind:
+            case 'line':
+                return ax.plot(x, y, **kwargs)[0]
+            case 'scatter':
+                return ax.scatter(x, y, **kwargs)
+            case 'bar':
+                return ax.bar(x, y, **kwargs)
+            case _:
+                raise ValueError(f"不支持的 plot_kind: '{plot_kind}'")
+            
+
+
+    def _default_plot_formatter(self, ax, fig, plot_kind='line', group_name=None, x_aixlabel=None, y_aixlabel=None):
+        """应用默认绘图格式。"""
+        self._set_plot_legends(ax, fig)
+        self._configure_xaxis(ax, fig, x_aixlabel=x_aixlabel)
+        self._configure_yaxis(ax, fig, y_aixlabel=y_aixlabel)
+        match plot_kind:
+            case 'line':
+                self._configure_lines(ax, fig, group_name)
+            case _:
+                pass
+
+        self._configure_figures(ax, fig)
+
+    def _set_plot_legends(self, ax, fig, draggable=True, loc='center left',
+                          bbox_to_anchor=(1, 0.5), **kwargs):
+        """配置图例样式。"""
+        
+        leg = ax.legend(loc=loc, bbox_to_anchor=bbox_to_anchor, **kwargs)
+        if draggable:
+            leg.set_draggable(True)
+
+
+
+    def _configure_xaxis(self, ax, fig, x_aixlabel=None):  
+        """配置 X 轴样式。"""
+        ax.set_xlabel(x_aixlabel)
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda x, p: f'{x:.2f}'))
+        ax.xaxis.set_tick_params(which='both', width=3, direction='out')
+
+    def _configure_yaxis(self, ax, fig, y_aixlabel=None):  
+        """配置 Y 轴样式。"""
+        ax.set_ylabel(y_aixlabel)
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.2f}"))
+        ax.tick_params(axis='y', which='both', width=3, direction='out')
+
+    def _configure_lines(self, ax, fig, group_name=None, **kwargs):  
+        """配置线条样式。"""
+        default_lw = self.rc_params.get('lines.linewidth', 3)
+        if group_name is None:
+            for line in ax.get_lines():
+                line.set_linewidth(default_lw)
+        elif group_name in self.groups_config:
+            group_config = self.groups_config[group_name]
+            indices = group_config.get('num', [])
+            for i in indices:
+                artist = self.groups_config[group_name]['members_datasets'][i]['artist']
+                artist.set_linewidth(default_lw)
+
+    def _configure_figures(self, ax, fig):  
+        """配置图形布局。"""
+        fig.subplots_adjust(right=0.75)
+
+
+    def _apply_neglog_formatter(self, ax, NegLogScale_x: bool, NegLogScale_y: bool):
+        """为坐标轴添加负号前缀（用于负对数刻度显示）。"""
+        if NegLogScale_x:
+            original_formatter = ax.xaxis.get_major_formatter()
+            ax.xaxis.set_major_formatter(
+                FuncFormatter(lambda x, pos: f"-{original_formatter(x, pos)}"))
+        if NegLogScale_y:
+            original_formatter = ax.yaxis.get_major_formatter()
+            ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda y, pos: f"-{original_formatter(y, pos)}"))
+        return ax
+    
+    def _apply_optional_formatters(self, ax, fig, lines, legends,
+            axes_formatter, lines_formatter, legend_formatter):
+        """应用用户自定义格式化器。"""
+        if axes_formatter is not None:
+            axes_formatter(ax, fig)
+        if lines_formatter is not None:
+            lines_formatter(lines)
+            self._set_plot_legends(ax, fig)
+        if legend_formatter is not None:
+            legend_formatter(legends)
+
+
+
+
+    def plot_objects(self,
                    axes_formatter=None,
                    lines_formatter=None,
                    legend_formatter=None,
                    NegLogScale_x: bool = False,
-                   NegLogScale_y: bool = False) -> DataPlotter:
+                   NegLogScale_y: bool = False,
+                   plot_kind: str = 'line',
+                   ) -> DataPlotter:
         """
         绘制多线图。
 
@@ -186,7 +313,7 @@ class DataPlotter:
             返回 self 以支持链式调用。
         """
         with plt.rc_context(self.rc_params):
-            self.fig, self.ax = plt.subplots(figsize=(10, 8))
+            fig, ax = plt.subplots(figsize=(10, 8))
 
             if self.data is None or self.column is None:
                 raise RuntimeError("未加载数据")
@@ -198,116 +325,46 @@ class DataPlotter:
                 self.plotrange = self.data.shape[0]
 
             # Initialize storage for Line2D objects (for future style modifications)
-            self.line_objects = []
-
-            with plt.rc_context(self.rc_params):
-                for i in sorted(set(self.groups_idx)):
-                    
-                    Row_x,_,x_unit = self._get_column_data(
-                    group_idx=i, 
-                    group_local_idx=self.plotdataRowNum_x,
-                    plotrange=self.plotrange)#type: ignore
-                    
-                    Row_y, y_label, y_unit = self._get_column_data(
-                    group_idx=i, 
-                    group_local_idx=self.plotdataRowNum_y, 
-                    plotrange=self.plotrange)#type: ignore
+            self.plot_artists = []
 
 
-                    # Get color from colormap (evenly distributed)
-                    colors = self.cmap(i / self.num_datagroups)
-
-                    if NegLogScale_x:
-                        Row_x = np.abs(Row_x)
-                    if NegLogScale_y:
-                        Row_y = np.abs(Row_y)
-
-                    line = self.ax.plot(
-                    Row_x,
-                    Row_y,
-                    color=colors,
-                    label=y_label  # 直接绑定标签到线条对象
-                    )[0]
-
-                    # Store Line2D object for later modification
-                    self.line_objects.append(line)
-
-
-                self._default_plot_formatter(self.ax, self.fig, x_aixlabel=x_unit, y_aixlabel=y_unit)
-            
-                self._apply_optional_formatters(
-                    ax = self.ax, fig = self.fig, lines = self.line_objects, legends = [self.ax.get_legend()],
-                    axes_formatter = axes_formatter,
-                    lines_formatter = lines_formatter,
-                    legend_formatter = legend_formatter
-                )   
+            for i in sorted(set(self.groups_idx)):
                 
-                self._apply_neglog_formatter(self.ax, NegLogScale_x, NegLogScale_y)
+                Row_x, Row_y, x_label, y_label, x_unit, y_unit = self._get_data(
+                    group_idx=i,
+                    local_idx_x=self.plotdataRowNum_x,
+                    local_idx_y=self.plotdataRowNum_y,
+                    neglog_x=NegLogScale_x,
+                    neglog_y=NegLogScale_y
+                )
+
+                # Get color from colormap (evenly distributed)
+                colors = self.cmap(i / self.num_datagroups)
+
+                artist = self._plot_data(
+                    ax, Row_x, Row_y, plot_kind,
+                    color=colors,
+                    label=y_label)
+
+                self.plot_artists.append(artist)
+
+            self._default_plot_formatter(ax, fig, plot_kind=plot_kind, x_aixlabel=x_unit, y_aixlabel=y_unit)
+
+            self._apply_optional_formatters(
+                ax = ax, fig = fig, lines = self.plot_artists, legends = [ax.get_legend()],
+                axes_formatter = axes_formatter,
+                lines_formatter = lines_formatter,
+                legend_formatter = legend_formatter
+            )
+
+            self._apply_neglog_formatter(ax, NegLogScale_x, NegLogScale_y)
+
+            self.axesset = {'main': {'ax': ax, 'fig': fig, 'artists': self.plot_artists}}
 
         return self
-    
 
 
 
-    def _get_column_data(self, group_idx: int, group_local_idx: int, plotrange: int):
-        """根据组索引和组内索引获取列数据。"""
-        for column in self.column:
-            if column['group_idx'] == group_idx and column['group_local_idx'] == group_local_idx:
-                return column['data'][0:plotrange], column['name'], column['unit']
-        raise RuntimeError("未找到对应的列数据")
-
-    # ========================================================================
-    # 内部格式化方法
-    # ========================================================================
-
-    def _default_plot_formatter(self, ax, fig, group_name=None, x_aixlabel=None, y_aixlabel=None):
-        """应用默认绘图格式。"""
-        self._set_plot_legends(ax, fig)
-        self._configure_xaxis(ax, fig, x_aixlabel=x_aixlabel)
-        self._configure_yaxis(ax, fig, y_aixlabel=y_aixlabel)
-        self._configure_lines(ax, fig, group_name)
-        self._configure_figures(ax, fig)
-
-    def _set_plot_legends(self, ax, fig, draggable=True, loc='center left',
-                          bbox_to_anchor=(1, 0.5), **kwargs):
-        """配置图例样式。"""
-        with plt.rc_context(self.rc_params):
-            leg = ax.legend(loc=loc, bbox_to_anchor=bbox_to_anchor, **kwargs)
-            if draggable:
-                leg.set_draggable(True)
-
-
-
-    def _configure_xaxis(self, ax, fig, x_aixlabel=None):  # noqa: ARG002
-        """配置 X 轴样式。"""
-        with plt.rc_context(self.rc_params):
-            ax.set_xlabel(x_aixlabel)
-            ax.xaxis.set_major_formatter(FuncFormatter(lambda x, p: f'{x:.2f}'))
-            ax.xaxis.set_tick_params(which='both', width=3, direction='out')
-
-    def _configure_yaxis(self, ax, fig, y_aixlabel=None):  # noqa: ARG002
-        """配置 Y 轴样式。"""
-        with plt.rc_context(self.rc_params):
-            ax.set_ylabel(y_aixlabel)
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.2f}"))
-        ax.tick_params(axis='y', which='both', width=3, direction='out')
-
-    def _configure_lines(self, ax, fig, group_name=None, **kwargs):  # noqa: ARG002
-        """配置线条样式。"""
-        default_lw = self.rc_params.get('lines.linewidth', 3)
-        if group_name is None:
-            for line in ax.get_lines():
-                line.set_linewidth(default_lw)
-        elif group_name in self.groups_config:
-            group_config = self.groups_config[group_name]
-            indices = group_config.get('num', [])
-            for i in indices:
-                line = self.groups_config[group_name]['members_datasets'][i]['line']
-                line.set_linewidth(default_lw)
-
-    def _configure_figures(self, ax, fig):  # noqa: ARG002
-        """配置图形布局。"""
-        fig.subplots_adjust(right=0.75)
 
     def group_plotter(self,
                       NegLogScale_x: bool = False,
@@ -315,7 +372,9 @@ class DataPlotter:
                       axes_formatter=None,
                       lines_formatter=None,
                       legend_formatter=None,
-                      merge_groups: bool = False) -> DataPlotter:
+                      merge_groups: bool = False,
+                      plot_kind: str = 'line'
+                      ) -> DataPlotter:
         """
         分组绘图。
 
@@ -354,14 +413,14 @@ class DataPlotter:
         if merge_groups:
             with plt.rc_context(self.rc_params):
                 fig, ax = plt.subplots(figsize=(16,12))
-                self.fig, self.ax = fig, ax
 
         if not self.groups_config:
             if merge_groups and fig is not None:
                 plt.close(fig)
-            self.plot_lines(axes_formatter=axes_formatter,
+            self.plot_objects(axes_formatter=axes_formatter,
                             lines_formatter=lines_formatter,
-                            legend_formatter=legend_formatter)
+                            legend_formatter=legend_formatter,
+                            plot_kind=plot_kind)
 
             return self
 
@@ -391,50 +450,43 @@ class DataPlotter:
                         # 将数据集信息存储在 datasets 子字典中
                         self.groups_config[group_name]['members_datasets'][i] = {}
                         
-                        Row_x,_,x_unit = self._get_column_data(
-                        group_idx=i,
-                        group_local_idx=self.plotdataRowNum_x,
-                        plotrange=self.plotrange
-                        )#type: ignore
-                       
-                        Row_y, y_label, y_unit = self._get_column_data(
-                        group_idx=i,
-                        group_local_idx=self.plotdataRowNum_y,
-                        plotrange=self.plotrange
-                        )#type: ignore
 
-                        if NegLogScale_x:
-                            Row_x = np.abs(Row_x)
-                        if NegLogScale_y:
-                            Row_y = np.abs(Row_y)
+                        Row_x, Row_y, x_label, y_label, x_unit, y_unit = self._get_data(
+                            group_idx=i,
+                            local_idx_x=self.plotdataRowNum_x,
+                            local_idx_y=self.plotdataRowNum_y,
+                            neglog_x=NegLogScale_x,
+                            neglog_y=NegLogScale_y
+                        )
 
-                        line = ax.plot(
-                            Row_x,
-                            Row_y,
+                        artist = self._plot_data(
+                            ax, Row_x, Row_y, plot_kind,
                             color=colors,
-                            label= y_label  # 直接绑定标签到线条对象
-                        )[0]
+                            label=y_label
+                        )
 
                         if merge_groups:
                             colors = self.cmap(indices[0]/self.num_datagroups)
-                            line.set_linestyle(group_config.get('linestyle', '-'))
-                            line.set_color(colors)
+                            if hasattr(artist, 'set_linestyle'):
+                                artist.set_linestyle(group_config.get('linestyle', '-'))  # type: ignore[union-attr]
+                            if hasattr(artist, 'set_color'):
+                                artist.set_color(colors)  # type: ignore[union-attr]
 
                         self.groups_config[group_name]['members_datasets'][i]['legend'] = y_label
-                        self.groups_config[group_name]['members_datasets'][i]['line'] = line
+                        self.groups_config[group_name]['members_datasets'][i]['artist'] = artist
 
                 # 只在分离模式下格式化（merge模式会在循环外统一格式化）
                 if not merge_groups and fig is not None:
-                    self._default_plot_formatter(ax, fig, 
+                    self._default_plot_formatter(ax, fig, plot_kind=plot_kind,
                     group_name=group_name, x_aixlabel=x_unit, y_aixlabel=y_unit)
 
-                    lines_objects = [
-                        self.groups_config[group_name]['members_datasets'][i]['line']
+                    artists_objects = [
+                        self.groups_config[group_name]['members_datasets'][i]['artist']
                         for i in indices
                     ]
 
                     self._apply_optional_formatters(
-                        ax = ax, fig = fig, lines = lines_objects, legends = [ax.get_legend()],
+                        ax = ax, fig = fig, lines = artists_objects, legends = [ax.get_legend()],
                         axes_formatter = axes_formatter,
                         lines_formatter = lines_formatter,
                         legend_formatter = legend_formatter
@@ -446,20 +498,21 @@ class DataPlotter:
                     self.groups_config[group_name]['axes']['fig'] = fig
 
             if merge_groups:
-                # Ensure self.ax and self.fig are defined
-                if not hasattr(self, 'ax') or self.ax is None or not hasattr(self, 'fig') or self.fig is None:
-                    raise RuntimeError("self.ax or self.fig is not defined in merge_groups mode")
+                if ax is None or fig is None:
+                    raise RuntimeError("ax or fig is not defined in merge_groups mode")
 
-                self._default_plot_formatter(self.ax, self.fig, x_aixlabel=x_unit, y_aixlabel=y_unit)
+                self._default_plot_formatter(ax, fig, plot_kind=plot_kind, x_aixlabel=x_unit, y_aixlabel=y_unit)
 
                 self._apply_optional_formatters(
-                    ax = self.ax, fig = self.fig, lines = self.ax.get_lines(), legends = [self.ax.get_legend()],
+                    ax = ax, fig = fig, lines = ax.get_lines(), legends = [ax.get_legend()],
                     axes_formatter = axes_formatter,
                     lines_formatter = lines_formatter,
                     legend_formatter = legend_formatter
                 )
 
-                self._apply_neglog_formatter(self.ax, NegLogScale_x, NegLogScale_y)
+                self._apply_neglog_formatter(ax, NegLogScale_x, NegLogScale_y)
+
+                self.axesset = {'main': {'ax': ax, 'fig': fig, 'artists': ax.get_children()}}
 
         return self
 
@@ -471,6 +524,7 @@ class DataPlotter:
                       axes_formatter=None,
                       lines_formatter=None,
                       legend_formatter=None,
+                      plot_kind: str = 'line',
                       NegLogScale_Y1: bool = False,
                       NegLogScale_Y2: bool = False,
                       plotdataRowNum_Y1: int = dataRowNum_unit2,
@@ -505,51 +559,35 @@ class DataPlotter:
         if self.data is None:
             raise RuntimeError("先调用load(file_path)加载数据")
 
-        self.plotdataRowNum_Y1 = plotdataRowNum_Y1
-        self.plotdataRowNum_Y2 = plotdataRowNum_Y2
+
 
         if self.plotrange is None:
             self.plotrange = self.data.shape[0]
 
-        self.subplotyy_axesset = {}
+        self.axesset = {}
 
         with plt.rc_context(self.rc_params):
             for i in sorted(set(self.groups_idx)):
                 # Create new figure for each dataset
                 fig, ax = plt.subplots(figsize=(12, 8))
 
-                # Calculate column indices
-                Row_Y1, Y1_label, Y1_unit = self._get_column_data(
+                Row_Y1, Row_Y2, Y1_label, Y2_label, Y1_unit, Y2_unit = self._get_data(
                     group_idx=i,
-                    group_local_idx=self.plotdataRowNum_Y1,
-                    plotrange=self.plotrange
-                )  # type: ignore
-                
-                Row_Y2, Y2_label, Y2_unit = self._get_column_data(
-                    group_idx=i,
-                    group_local_idx=self.plotdataRowNum_Y2,
-                    plotrange=self.plotrange
-                )  # type: ignore
+                    local_idx_x = plotdataRowNum_Y1,
+                    local_idx_y = plotdataRowNum_Y2,
+                    neglog_x=NegLogScale_Y1,
+                    neglog_y=NegLogScale_Y2
+                )
 
-
-                self.subplotyy_axesset[Y1_label] = {}
-
-                if NegLogScale_Y1:
-                    Row_Y1 = np.abs(Row_Y1)
-
-                if NegLogScale_Y2:
-                    Row_Y2 = np.abs(Row_Y2)
-
-                line = ax.plot(
-                    Row_Y1,
-                    Row_Y2,
-                    label=Y1_label  # 直接绑定标签到线条对象
-                )[0]
+                artist = self._plot_data(
+                    ax, Row_Y1, Row_Y2, plot_kind,
+                    label= Y1_label
+                )
 
                 self._default_yy_formatter(ax, fig, x_aixlabel=Y1_unit, y_aixlabel=Y2_unit)
 
                 self._apply_optional_formatters(
-                    ax = ax, fig = fig, lines = [line], legends= [ax.get_legend()],
+                    ax = ax, fig = fig, lines = [artist], legends= [ax.get_legend()],
                     axes_formatter = axes_formatter,
                     lines_formatter = lines_formatter,
                     legend_formatter = legend_formatter
@@ -557,9 +595,9 @@ class DataPlotter:
 
                 self._apply_neglog_formatter(ax, NegLogScale_Y1, NegLogScale_Y2)
 
-                self.subplotyy_axesset[Y1_label]['line'] = line
-                self.subplotyy_axesset[Y1_label]['ax'] = ax
-                self.subplotyy_axesset[Y1_label]['fig'] = fig
+                self.axesset[Y1_label] = {
+                    'artist': artist, 'ax': ax, 'fig': fig
+                }
 
         return self
 
@@ -582,6 +620,8 @@ class DataPlotter:
                        NegLogScale_X2: bool = False,
                        NegLogScale_Y1: bool = False,
                        NegLogScale_Y2: bool = False,
+                       plot_kind_Y1: str = 'line',
+                       plot_kind_Y2: str = 'line',
                        custom_formatter=None,
                        plotdataRowNum_X1: int = dataRowNum_unit1,
                        plotdataRowNum_Y1: int = dataRowNum_unit2,
@@ -633,12 +673,8 @@ class DataPlotter:
         if self.data is None:
             raise RuntimeError("先调用load(file_path)加载数据")
 
-        self.plotdataRowNum_X1 = plotdataRowNum_X1
-        self.plotdataRowNum_Y1 = plotdataRowNum_Y1
-        self.plotdataRowNum_X2 = plotdataRowNum_X2
-        self.plotdataRowNum_Y2 = plotdataRowNum_Y2
 
-        self.subplotxyy_axesset = {}
+        self.axesset = {}
 
         if self.plotrange is None:
             self.plotrange = self.data.shape[0]
@@ -648,71 +684,55 @@ class DataPlotter:
                 # Create new figure for each dataset
                 fig, ax1 = plt.subplots(figsize=(12, 8))
 
-                # Calculate column indices first
-                Row_X1, X1_label, X1_unit = self._get_column_data(
+                Row_X1, Row_Y1, X1_label, Y1_label, X1_unit, Y1_unit = self._get_data(
                     group_idx=i,
-                    group_local_idx=self.plotdataRowNum_X1,
-                    plotrange=self.plotrange
-                )  # type: ignore
-                Row_Y1, Y1_label, Y1_unit = self._get_column_data(
-                    group_idx=i,
-                    group_local_idx=self.plotdataRowNum_Y1,
-                    plotrange=self.plotrange
-                )  # type: ignore
-                Row_X2, X2_label, X2_unit = self._get_column_data(
-                    group_idx=i,
-                    group_local_idx=self.plotdataRowNum_X2,
-                    plotrange=self.plotrange
-                )  # type: ignore
-                Row_Y2, Y2_label, Y2_unit = self._get_column_data(
-                    group_idx=i,
-                    group_local_idx=self.plotdataRowNum_Y2,
-                    plotrange=self.plotrange
-                )  # type: ignore
+                    local_idx_x = plotdataRowNum_X1,
+                    local_idx_y = plotdataRowNum_Y1,
+                    neglog_x=NegLogScale_X1,
+                    neglog_y=NegLogScale_Y1
+                )
 
+                Row_X2, Row_Y2, X2_label, Y2_label, X2_unit, Y2_unit = self._get_data(
+                    group_idx=i,
+                    local_idx_x = plotdataRowNum_X2,
+                    local_idx_y = plotdataRowNum_Y2,
+                    neglog_x=NegLogScale_X2,
+                    neglog_y=NegLogScale_Y2
+                )
+
+                # Calculate column indices first     
 
                 # Use col_X1 to create dictionary key
-                self.subplotxyy_axesset[Y1_label] = {}
+                self.axesset[Y1_label] = {}
 
-
-
-                if NegLogScale_X1:
-                    Row_X1 = np.abs(Row_X1)
-                if NegLogScale_Y1:
-                    Row_Y1 = np.abs(Row_Y1)
-                if NegLogScale_X2:
-                    Row_X2 = np.abs(Row_X2)
-                if NegLogScale_Y2:
-                    Row_Y2 = np.abs(Row_Y2)
 
                 # Plot displacement on left y-axis (red)
-                line_Y1 = ax1.plot(
-                    Row_X1,
-                    Row_Y1,
+
+                artist_Y1 = self._plot_data(
+                    ax1, Row_X1, Row_Y1, plot_kind_Y1,
                     color='red',
                     label=Y1_label
-                )[0]
+                )
 
                 # Create second y-axis for voltage (blue)
                 ax2 = ax1.twinx()
-                line_Y2 = ax2.plot(
-                    Row_X2,
-                    Row_Y2,
+                artist_Y2 = self._plot_data(
+                    ax2, Row_X2, Row_Y2, plot_kind_Y2,
                     color='blue',
                     label=Y2_label
-                )[0]
+                )
 
                 self._default_xyy_formatter(ax1, ax2, fig,
                 X1_aixlabel = X1_unit, Y1_aixlabel = Y1_unit, Y2_aixlabel = Y2_unit)
 
                 self._apply_optional_formatters(
-                    ax = ax1, fig = fig, lines = [line_Y1], legends = [ax1.get_legend()],
+                    ax = ax1, fig = fig, lines = [artist_Y1], legends = [ax1.get_legend()],
                     axes_formatter = axes_formatter_ax1,
                     lines_formatter = lines_formatter_ax1,
                     legend_formatter = legend_formatter_ax1,
                 )
                 self._apply_optional_formatters(
-                    ax = ax2, fig = fig, lines = [line_Y2], legends = [ax2.get_legend()],
+                    ax = ax2, fig = fig, lines = [artist_Y2], legends = [ax2.get_legend()],
                     axes_formatter = axes_formatter_ax2,
                     lines_formatter = lines_formatter_ax2,
                     legend_formatter = legend_formatter_ax2,
@@ -723,11 +743,9 @@ class DataPlotter:
                 self._apply_neglog_formatter(ax1, NegLogScale_X1, NegLogScale_Y1)
                 self._apply_neglog_formatter(ax2, NegLogScale_X2, NegLogScale_Y2)
 
-                self.subplotxyy_axesset[Y1_label]['line_Y1'] = line_Y1
-                self.subplotxyy_axesset[Y1_label]['line_Y2'] = line_Y2
-                self.subplotxyy_axesset[Y1_label]['ax1'] = ax1
-                self.subplotxyy_axesset[Y1_label]['ax2'] = ax2
-                self.subplotxyy_axesset[Y1_label]['fig'] = fig
+
+                self.axesset[Y1_label] = {'artist_Y1': artist_Y1, 'artist_Y2': artist_Y2, 'ax1': ax1, 'ax2': ax2, 'fig': fig}
+       
         return self
 
     def _default_xyy_formatter(self, ax1, ax2, fig,
@@ -744,30 +762,10 @@ class DataPlotter:
         ax2.spines['right'].set_color('blue')
         fig.subplots_adjust(right=0.85)
 
-    # ========================================================================
-    # 辅助方法
-    # ========================================================================
 
-    def _apply_neglog_formatter(self, ax, NegLogScale_x: bool, NegLogScale_y: bool):
-        """为坐标轴添加负号前缀（用于负对数刻度显示）。"""
-        if NegLogScale_x:
-            original_formatter = ax.xaxis.get_major_formatter()
-            ax.xaxis.set_major_formatter(
-                FuncFormatter(lambda x, pos: f"-{original_formatter(x, pos)}"))
-        if NegLogScale_y:
-            original_formatter = ax.yaxis.get_major_formatter()
-            ax.yaxis.set_major_formatter(
-                FuncFormatter(lambda y, pos: f"-{original_formatter(y, pos)}"))
-        return ax
 
-    def _apply_optional_formatters(self, ax, fig, lines, legends,
-                                   axes_formatter, lines_formatter, legend_formatter):
-        """应用用户自定义格式化器。"""
-        if axes_formatter is not None:
-            axes_formatter(ax, fig)
-        if lines_formatter is not None:
-            lines_formatter(lines)
-            self._set_plot_legends(ax, fig)
-        if legend_formatter is not None:
-            legend_formatter(legends)
+
+
+
+
 

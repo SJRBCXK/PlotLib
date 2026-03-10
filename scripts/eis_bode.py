@@ -41,15 +41,18 @@ dataRowNum_unit9 = 8  # Tan Phi
 
 # 数据分组配置（用于 group_plotter）
 data_groups = {
-    '1th': {'num': [0,1], 'linestyle': "-"},
-    '2st': {'num': [2,3], 'linestyle': "--"},
-    '3nd': {'num': [4,5], 'linestyle': "-."},
-    '4rd': {'num': [6,7], 'linestyle': ":"},
-    '5th': {'num': [8,9], 'linestyle': (0, (3, 5))},
-    '6th': {'num': [10,11], 'linestyle': (0, (5, 7))},
-    '7th': {'num': [12,13], 'linestyle': (0, (7, 9))},
-    '8th': {'num': [14,15], 'linestyle': (0, (3, 11))},
-    '9th': {'num': [16,17], 'linestyle': (0, (5, 5))}
+    '1th': {'num': [0, 1], 'linestyle': "-"},
+    '2st': {'num': [2, 3], 'linestyle': "--"},
+    '3nd': {'num': [4, 5], 'linestyle': "-."},
+    '4rd': {'num': [6, 7], 'linestyle': ":"},
+    '5th': {'num': [8, 9], 'linestyle': (0, (3, 5))},
+    '6th': {'num': [10, 11], 'linestyle': (0, (5, 7))},
+    '7th': {'num': [12, 13], 'linestyle': (0, (7, 9))},
+    '8th': {'num': [14, 15], 'linestyle': (0, (3, 11))},
+    '9th': {'num': [16, 17], 'linestyle': (0, (5, 5))},
+    '10th': {'num': [18, 19], 'linestyle': (0, (7, 7))},
+    '11th': {'num': [20, 21], 'linestyle': (0, (3, 9))},
+    '12th': {'num': [22, 23], 'linestyle': (0, (5, 11))}
 }
 
 # ============================================================
@@ -109,7 +112,7 @@ Bode_Plotter_TanDelta = DataPlotter(
     input_dataset=data,#type: ignore
     plotdataRowNum_x=dataRowNum_unit1,
     plotdataRowNum_y=dataRowNum_unit8
-).plot_lines(axes_formatter=Bode_Delta_formatter)
+).plot_objects(axes_formatter=Bode_Delta_formatter)
 
 Bode_Plotter_TanDelta_group = DataPlotter(
     input_dataset=data,#type: ignore
@@ -147,7 +150,7 @@ RevCampdata_v2_pltsubsyy = DataPlotter(
     input_dataset=RevCampdata_v2,#type: ignore
     plotdataRowNum_x=2,
     plotdataRowNum_y=1,
-).plot_lines(
+).plot_objects(
     axes_formatter=NegLog_formatter
 )
 
@@ -161,7 +164,7 @@ Conductivity_pltliner1 = DataPlotter(
     input_dataset=data,#type: ignore
     plotdataRowNum_x = 0,
     plotdataRowNum_y = 9
-).plot_lines(
+).plot_objects(
     axes_formatter=NegLog_formatter,
 )
 
@@ -183,14 +186,17 @@ f_delta_peak = DataSet()
 for dataslice in Selected_data.iter('groups'): #type: ignore
     f_delta_peak_slice = DT(dataslice).apply(func=f_peak,extended=False)#type: ignore
     f_delta_peak.expandata(f_delta_peak_slice)
-print(f_delta_peak.names)#type: ignore
 
 fig, ax = plt.subplots()
 ax2 = ax.twinx()
-ax.plot(range(1,len(f_delta_peak.data[0]),2), f_delta_peak.data[0,range(0,len(f_delta_peak.data[0]),2)],  'o', markersize=10) #type: ignore
-ax2.plot(range(1,len(f_delta_peak.data[0]),2), f_delta_peak.data[0,range(1,len(f_delta_peak.data[0]),2)],  'x', markersize=10) #type: ignore
-# ax.set_xscale('log')
-# ax.set_yscale('log')
+
+x_labels = f_delta_peak.names[0::2]
+x = range(len(x_labels))
+
+ax.plot(x, f_delta_peak.data[0, 0::2], 'o', markersize=10)
+ax2.plot(x, f_delta_peak.data[0, 1::2], 'x', markersize=10)
+ax.set_xticks(x)
+ax.set_xticklabels(x_labels, rotation=45, ha='right')
 ax2.set_yscale('log')
 
 

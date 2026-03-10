@@ -80,14 +80,14 @@ DV_pltliner = DataPlotter(
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit3,
     plotdataRowNum_y = dataRowNum_unit5,
-).plot_lines(axes_formatter=DV_axes_formatter)
+).plot_objects(axes_formatter=DV_axes_formatter)
 
 DV_pltliner_log = DataPlotter(
     input_dataset=data,#type: ignore
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit3,
     plotdataRowNum_y = dataRowNum_unit5,
-).plot_lines(axes_formatter=DV_axes_formatter_log)
+).plot_objects(axes_formatter=DV_axes_formatter_log)
 
 # --- Time-Voltage (T-V) 关系图 ---
 TV_Zoomed_pltliner = DataPlotter(
@@ -95,13 +95,13 @@ TV_Zoomed_pltliner = DataPlotter(
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit4,
     plotdataRowNum_y = dataRowNum_unit5
-).plot_lines(axes_formatter=TV_axes_formatter_zoomed)
+).plot_objects(axes_formatter=TV_axes_formatter_zoomed)
 
 TV_pltliner = DataPlotter(
     input_dataset=data,#type: ignore
     plotdataRowNum_x = dataRowNum_unit4,
     plotdataRowNum_y = dataRowNum_unit5
-).plot_lines(axes_formatter=TV_axes_formatter)
+).plot_objects(axes_formatter=TV_axes_formatter)
 
 # --- Force-Voltage (F-V) 关系图 ---
 FV_pltliner = DataPlotter(
@@ -109,14 +109,14 @@ FV_pltliner = DataPlotter(
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit2,
     plotdataRowNum_y = dataRowNum_unit5
-).plot_lines(axes_formatter=FV_axes_formatter)
+).plot_objects(axes_formatter=FV_axes_formatter)
 
 FV_pltliner_log = DataPlotter(
     input_dataset=data, #type: ignore
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit2,
     plotdataRowNum_y = dataRowNum_unit5
-).plot_lines(axes_formatter=FV_axes_formatter_log)
+).plot_objects(axes_formatter=FV_axes_formatter_log)
 
 # --- 分组绘图 (Group Plots) ---
 DV_pltGliner2 = DataPlotter(
@@ -142,6 +142,7 @@ DV_pltsubsyy = DataPlotter(
 ).subplotter_yy(
     plotdataRowNum_Y1=dataRowNum_unit3,
     plotdataRowNum_Y2=dataRowNum_unit5,
+    axes_formatter=DV_axes_formatter
 )
 
 FV_pltsubsyy = DataPlotter(
@@ -150,17 +151,19 @@ FV_pltsubsyy = DataPlotter(
 ).subplotter_yy(
     plotdataRowNum_Y1=dataRowNum_unit2,
     plotdataRowNum_Y2=dataRowNum_unit5,
+    axes_formatter=FV_axes_formatter
 )
 
 # --- X-YY 双轴子图（两个Y共享一个X）---
 DTV_pltsubsxyy = DataPlotter(
     input_dataset=data,#type: ignore
-    plotrange=299
+    plotrange=299,
 ).subplotter_xyy(
     plotdataRowNum_X1=dataRowNum_unit1,
     plotdataRowNum_Y1=dataRowNum_unit3,
     plotdataRowNum_X2=dataRowNum_unit4,
     plotdataRowNum_Y2=dataRowNum_unit5,
+
 )
 
 FTV_pltsubsxyy = DataPlotter(

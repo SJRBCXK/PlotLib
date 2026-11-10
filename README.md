@@ -46,7 +46,7 @@ DataPlotter(
     input_dataset=data,
     plotdataRowNum_x=0,  # X轴：第0列
     plotdataRowNum_y=1   # Y轴：第1列
-).plot_lines()
+).plot_objects()
 
 plt.show()
 ```
@@ -85,7 +85,7 @@ data = Dataloader(
 
 ### DataPlotter - 绘图器
 
-#### plot_lines() - 多线图
+#### plot_objects() - 多线图
 
 将所有数据组绘制在同一坐标系：
 
@@ -94,7 +94,7 @@ DataPlotter(
     input_dataset=data,
     plotdataRowNum_x=0,  # X轴数据的组内列索引
     plotdataRowNum_y=1   # Y轴数据的组内列索引
-).plot_lines(
+).plot_objects(
     axes_formatter=my_formatter,  # 可选：坐标轴格式化
     NegLogScale_y=True            # 可选：Y轴负对数显示
 )
@@ -257,7 +257,7 @@ DataPlotter(
     input_dataset=data,
     plotdataRowNum_x=5,  # Real Z'
     plotdataRowNum_y=6   # -Imaginary Z''
-).plot_lines(
+).plot_objects(
     axes_formatter=nyquist_fmt,
     NegLogScale_y=True
 )
@@ -308,7 +308,7 @@ DataPlotter(
     plotrange=299,       # 只绘制前299个点
     plotdataRowNum_x=2,  # Displacement
     plotdataRowNum_y=4   # Voltage
-).plot_lines(axes_formatter=dv_fmt)
+).plot_objects(axes_formatter=dv_fmt)
 
 # 双轴图：位移和电压随时间变化
 DataPlotter(

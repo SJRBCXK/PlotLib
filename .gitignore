@@ -13,3 +13,7 @@ venv/
 .idea/
 .vscode/
 *.log
+
+# pytest-cov 覆盖率数据
+.coverage
+htmlcov/

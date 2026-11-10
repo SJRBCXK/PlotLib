@@ -50,9 +50,9 @@ data_groups = {
     '7th': {'num': [12, 13], 'linestyle': (0, (7, 9))},
     '8th': {'num': [14, 15], 'linestyle': (0, (3, 11))},
     '9th': {'num': [16, 17], 'linestyle': (0, (5, 5))},
-    '10th': {'num': [18, 19], 'linestyle': (0, (7, 7))},
-    '11th': {'num': [20, 21], 'linestyle': (0, (3, 9))},
-    '12th': {'num': [22, 23], 'linestyle': (0, (5, 11))}
+    # '10th': {'num': [18, 19], 'linestyle': (0, (7, 7))},
+    # '11th': {'num': [20, 21], 'linestyle': (0, (3, 9))},
+    # '12th': {'num': [22, 23], 'linestyle': (0, (5, 11))}
 }
 
 # ============================================================
@@ -153,6 +153,8 @@ RevCampdata_v2_pltsubsyy = DataPlotter(
 ).plot_objects(
     axes_formatter=NegLog_formatter
 )
+
+
 
 Selected_data = DPL(dataset=data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data #type: ignore
 Conductivity = DataSet()

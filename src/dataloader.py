@@ -153,7 +153,9 @@ class Dataloader:
         elif self.file_path.endswith(('.xlsx', '.xls')):
             self.dataset = pd.read_excel(self.file_path, header=None)
         elif self.file_path.endswith(('.txt', '.dat')):
-            self.dataset = pd.read_csv(self.file_path, delim_whitespace=True, low_memory=False, header=None)#type: ignore
+            # sep=r'\s+'：任意连续空白（空格/制表符）作为分隔符。
+            # pandas 3 已移除 delim_whitespace=True；python engine 不支持 low_memory，此处不再传
+            self.dataset = pd.read_csv(self.file_path, sep=r'\s+', header=None)
 
         if self.dataset is None:
             raise RuntimeError("数据集加载失败")

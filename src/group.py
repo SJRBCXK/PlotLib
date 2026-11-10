@@ -1,8 +1,39 @@
 from collections.abc import Callable
+from numbers import Integral
 
 import numpy as np
 from .dataset import DataSet
 from .processor import DataProcessLayer
+
+
+def resolve_num(group_name, group_config: dict) -> list[int]:
+    """
+    取出并规范化分组配置中的 'num'（Group 计算与 DataPlotter 绘图共用）。
+
+    支持 int / list / tuple / range / ndarray，统一返回 list[int]。
+    （data_reorder_app 生成的配置中，单元素组为 int，连续多元素组为 range。）
+    缺失或为空时报错，避免某组被静默忽略。
+    """
+    if 'num' not in group_config:
+        raise ValueError(f"数据分组配置错误：'{group_name}' 缺少 'num' 键。")
+    num = group_config['num']
+    if isinstance(num, Integral):
+        indices = [int(num)]
+    elif isinstance(num, (list, tuple, range, np.ndarray)):
+        # 逐个检查元素：直接 int() 会把 1.9 截成 1、把 '2' 转成 2，组号写错也不报错
+        bad = [i for i in num if not isinstance(i, Integral)]
+        if bad:
+            raise TypeError(
+                f"数据分组配置错误：'{group_name}' 的 'num' 含非整数元素：{bad[0]!r}"
+            )
+        indices = [int(i) for i in num]
+    else:
+        raise TypeError(
+            f"数据分组配置错误：'{group_name}' 的 'num' 类型不支持：{type(num).__name__}"
+        )
+    if not indices:
+        raise ValueError(f"数据分组配置错误：'{group_name}' 的 'num' 为空。")
+    return indices
 
 
 class Group():
@@ -17,7 +48,7 @@ class Group():
 
         if group_name not in self.group_config:
             raise ValueError(f"数据分组配置错误：缺少 '{group_name}' 组。")
-        return self.group_config[group_name]['num']
+        return resolve_num(group_name, self.group_config[group_name])
 
 
     def apply(
@@ -104,11 +135,7 @@ class Group():
         result_group_idx = 0
 
         for group_name, config in self.group_config.items():
-            if 'num' not in config:
-                raise ValueError(
-                    f"数据分组配置错误：'{group_name}' 缺少 'num' 键。"
-                )
-            group_indices = config['num']
+            group_indices = resolve_num(group_name, config)
 
             # 选择对应组的列
             dpl = DataProcessLayer(dataset=self.dataset)
@@ -149,14 +176,13 @@ class Group():
                 result_data = result_data.reshape(-1, 1)
             n_cols = result_data.shape[1]
 
-            # 生成命名
-            result_names, result_units = self._auto_naming(
-                    slices, n_cols, callback
-                )
-            
+            # 生成命名：提供了 naming 就只用它。
+            # 不能先跑 _auto_naming——它按列号取 slice 的单位，结果列多于输入列时会越界
             if naming is not None:
                 result_names, result_units = naming(slices, result_data)
-            
+            else:
+                result_names, result_units = self._auto_naming(slices, n_cols, callback)
+
 
 
             # 组装结果切片

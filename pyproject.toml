@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "plotlib"
 version = "0.1.0"
 description = "科学数据绘图库"
-requires-python = ">=3.8"
+requires-python = ">=3.14"   # match 语法需 3.10+；类内不加引号的自引用类型标注（如 -> DataPlotter）需 3.14
 dependencies = [
     "matplotlib",
     "numpy",
@@ -16,3 +16,7 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]   # pytest 只在 tests/ 目录里找测试
+pythonpath = ["."]      # 把项目根目录加入导入路径，测试里才能 from src... import

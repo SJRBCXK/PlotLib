@@ -2,6 +2,7 @@
 import re
 import copy
 from collections.abc import Callable
+from typing import TypedDict
 
 import numpy as np
 from .dataset import DataSet, Column, ColumnList
@@ -9,6 +10,14 @@ from .dataset import DataSet, Column, ColumnList
 
 
 
+
+
+class TransformMetadata(TypedDict, total=False):
+    """命名回调可覆盖的结果元数据；省略或设为 None 时保留自动值。"""
+
+    names: list[str] | None
+    units: list[str] | None
+    groups_idx: int | list[int] | None
 
 
 class DataProcessLayer:
@@ -147,11 +156,13 @@ class DataProcessLayer:
 
             if isinstance(var, str):
                 if var == 'all':
-                    Selected_data = copy.deepcopy(dataset_for_select)
-                    Selected_data.father_idx = list(range(len(dataset_for_select.names))) #type: ignore
-                    Selected_data.initial_idx = list(range(len(dataset_for_select.names))) #type: ignore
-                    continue
-                
+                    # 与其他条件走同一条路径（getdata），结果才会加入已选数据，
+                    # 且在 by('all') 时 initial_idx 仍能追溯到原始数据
+                    Selected_data = self.getdata(
+                        varlist_idx=list(range(len(dataset_for_select.names))),
+                        father_dataset=dataset_for_select
+                    )
+
                 elif re.match(r'group\w*',var,re.IGNORECASE):
                     if len(select_rc) > i+1 and \
                     isinstance(select_rc[i+1], list) and\
@@ -178,10 +189,14 @@ class DataProcessLayer:
                 
                 elif var in dataset_for_select.units:#type: ignore
                     Selected_data = self.getdata(
-                    varname=var, 
+                    varname=var,
                     varset=dataset_for_select.units,#type: ignore
                     father_dataset = dataset_for_select
                     ) #type: ignore
+
+                else:
+                    # 不能静默跳过：否则 Selected_data 还是上一个条件的结果，会被重复追加
+                    raise ValueError(f"找不到名称或单位：'{var}'")
 
             elif isinstance(var, int):
                 Selected_data = self.getdata(varlist_idx=[var],
@@ -197,6 +212,9 @@ class DataProcessLayer:
             elif isinstance(var, (tuple, list)):
                 Local_Docker = DataProcessLayer(dataset_for_select)
                 Selected_data = Local_Docker.select(*var, dataset_for_select=dataset_for_select).Selected_data
+
+            else:
+                raise TypeError(f"不支持的选择条件类型：{type(var).__name__}（{var!r}）")
 
 
 
@@ -364,12 +382,16 @@ class DataTransformer:
         self.column = dataset.column
         self.status = 'ready'
         self.result_dataset = DataSet()
+        # New_group 时分配的下一个组号：从「已有最大组号 + 1」开始，
+        # 不能用组数推算——组号可能不连续（如 [0, 3]），按组数会撞上已有组
+        existing = [g for g in dataset.groups_idx if g is not None]
+        self._next_new_group = max(existing) + 1 if existing else 0
 
 
     def apply(self,
         func: Callable[..., np.ndarray] = lambda x: x,
-        naming_func: Callable[[], dict[str, list[str] | None]] | None = None,
-        input_name: str | None = None,
+        naming_func: Callable[[], TransformMetadata] | None = None,
+        input_name: str | list[str] | None = None,
         indicies: list[int] | int | None = None,
         column: list[Column] | None = None,
         input_unit: str | None = None,
@@ -457,12 +479,12 @@ class DataTransformer:
 
 
     def _cal_pipe(self,
-        naming_func: Callable[[], dict[str, list[str] | None]] | None = None,
+        naming_func: Callable[[], TransformMetadata] | None = None,
         col_num: int = 1,
         column: list[Column] | None= None, 
         indicies: list[int] | int | None = None, 
         input_data: np.ndarray | None = None, 
-        input_name: str | None = None, 
+        input_name: str | list[str] | None = None, 
         input_unit: str | None = None, 
         input_group_idx: int | None = None, 
         New_group: bool = False
@@ -526,20 +548,16 @@ class DataTransformer:
             return col_data, names, units, groups_idx
 
         if indicies is None:
-            return self.data, list(self.names), list(self.units), list(self.groups_idx)
+            # 交给 func 的必须是副本：func 原地修改（如 data *= 0）不能改到原始数据集
+            return self.data.copy(), list(self.names), list(self.units), list(self.groups_idx)
 
-        # 允许 int / list[int] / tuple[int] / np.ndarray
-        if isinstance(indicies, int):
-            col_data = self.data[:, indicies:indicies + 1]
-            names = [self.names[indicies]]
-            units = [self.units[indicies]]
-            groups_idx = [self.groups_idx[indicies]]
-        else:
-            idx = list(indicies)
-            col_data = self.data[:, idx]
-            names = [self.names[i] for i in idx]
-            units = [self.units[i] for i in idx]
-            groups_idx = [self.groups_idx[i] for i in idx]
+        # 允许 int / list[int] / tuple[int] / np.ndarray；int 也按列表处理：
+        # 花式索引返回副本（不是视图），且负索引与 Python 一致（-1 = 最后一列）
+        idx = [indicies] if isinstance(indicies, int) else list(indicies)
+        col_data = self.data[:, idx]
+        names = [self.names[i] for i in idx]
+        units = [self.units[i] for i in idx]
+        groups_idx = [self.groups_idx[i] for i in idx]
 
         return col_data, names, units, groups_idx
 
@@ -552,9 +570,13 @@ class DataTransformer:
         col_num: int = 1
           ):
         
-        if names_input is not None:
-            data_name = names_input
-        
+        if isinstance(names_input, str):
+            # 与 _auto_units 对 input_unit 的处理一致：单个字符串按列数重复
+            # （直接当列表用会被拆成单个字符：'sum' → ['s', 'u', 'm']）
+            data_name = [names_input] * col_num
+        elif names_input is not None:
+            data_name = list(names_input)
+
         elif len(names_extracted) == 1:
             data_name = [f"{names_extracted[0]}"]*col_num
         elif len(set(names_extracted)) == 1:
@@ -589,7 +611,8 @@ class DataTransformer:
         if groups_idx_input is not None:
             data_groups_idx = groups_idx_input
         elif New_group:
-            data_groups_idx = self.num_datagroups + 1
+            data_groups_idx = self._next_new_group
+            self._next_new_group += 1
             self.num_datagroups += 1
         elif len(set(groups_idx_extracted)) == 1:
             data_groups_idx = groups_idx_extracted[0]

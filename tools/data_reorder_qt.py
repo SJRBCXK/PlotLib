@@ -76,6 +76,8 @@ class ReorderLogic:
         self.file_path = file_path
         self.columns_per_group = columns_per_group
         self.original_columns_per_group = columns_per_group
+        self.group_column_structure = None
+        self.header_skip_states = {}
 
         # 检测格式
         try:
@@ -177,26 +179,40 @@ class ReorderLogic:
         df_reordered.columns = range(len(new_columns))
 
         # 更新表头行
-        new_header_row = []
-        for group_idx in selected_order:
-            col_start = self.original_columns_per_group * group_idx
-            if self.group_column_structure is not None:
-                for col_info in self.group_column_structure:
-                    if col_info['enabled']:
-                        original_col_idx = col_start + col_info['index']
-                        if self.names and original_col_idx < len(self.names):
-                            new_header_row.append(self.names[original_col_idx])
+        def _collect_header(source: list) -> list:
+            row = []
+            for group_idx in selected_order:
+                col_start = self.original_columns_per_group * group_idx
+                if self.group_column_structure is not None:
+                    for col_info in self.group_column_structure:
+                        if col_info['enabled']:
+                            idx = col_start + col_info['index']
+                            if idx < len(source):
+                                row.append(source[idx])
+                            else:
+                                row.append(f"列{len(row)}")
+                else:
+                    for offset in range(self.columns_per_group):
+                        idx = col_start + offset
+                        if idx < len(source):
+                            row.append(source[idx])
                         else:
-                            new_header_row.append(f"列{len(new_header_row)}")
-            else:
-                for offset in range(self.columns_per_group):
-                    original_col_idx = col_start + offset
-                    if self.names and original_col_idx < len(self.names):
-                        new_header_row.append(self.names[original_col_idx])
-                    else:
-                        new_header_row.append(f"列{len(new_header_row)}")
+                            row.append(f"列{len(row)}")
+            return row
 
-        df_reordered.iloc[0] = new_header_row[:len(df_reordered.columns)]
+        if self.is_new_format:
+            # 新格式：第 0 行是名称/单位（names 和 units 相同）
+            if self.names:
+                new_row = _collect_header(self.names)
+                df_reordered.iloc[0] = new_row[:len(df_reordered.columns)]
+        else:
+            # 旧格式：第 0 行是单位，第 1 行是名称
+            if self.units:
+                units_row = _collect_header(self.units)
+                df_reordered.iloc[0] = units_row[:len(df_reordered.columns)]
+            if self.names:
+                names_row = _collect_header(self.names)
+                df_reordered.iloc[1] = names_row[:len(df_reordered.columns)]
 
         save_ext = save_path.lower().split('.')[-1]
         if save_ext == 'xlsx':
@@ -592,6 +608,18 @@ class GroupSelectionDialog(QDialog):
         gbl.addWidget(self.preview_text)
         layout.addWidget(group_box, stretch=1)
 
+        # 连续划分
+        consec_layout = QHBoxLayout()
+        consec_layout.addWidget(QLabel("每组数量:"))
+        self.consec_spin = QSpinBox()
+        self.consec_spin.setRange(1, 9999)
+        self.consec_spin.setValue(1)
+        consec_layout.addWidget(self.consec_spin)
+        self.consec_btn = QPushButton("连续划分")
+        consec_layout.addWidget(self.consec_btn)
+        consec_layout.addStretch()
+        layout.addLayout(consec_layout)
+
         # 按钮
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("添加为新组")
@@ -604,9 +632,22 @@ class GroupSelectionDialog(QDialog):
 
         # 信号
         self.add_btn.clicked.connect(self._on_add_group)
+        self.consec_btn.clicked.connect(self._on_consecutive_group)
         self.finish_btn.clicked.connect(self._on_finish)
         self.cancel_btn.clicked.connect(self.reject)
 
+        self._update_preview()
+
+    def _on_consecutive_group(self):
+        n = self.consec_spin.value()
+        selected = self.list_widget.get_checked_positions()
+        if not selected:
+            QMessageBox.warning(self, "警告", "请至少勾选一项数据")
+            return
+        groups = [selected[i:i + n] for i in range(0, len(selected), n)]
+        self.user_groups.extend(groups)
+        self.list_widget.set_all_checked(False)
+        self.groups_label.setText(f"已创建 {len(self.user_groups)} 个组")
         self._update_preview()
 
     def _on_add_group(self):
@@ -678,7 +719,7 @@ class CodeDialog(QDialog):
         layout.addLayout(btn_layout)
 
         copy_btn.clicked.connect(lambda: (
-            QApplication.clipboard().setText(code),
+            QApplication.clipboard().setText(self.text_edit.toPlainText()),
             QMessageBox.information(self, "成功", "已复制到剪贴板！")
         ))
         close_btn.clicked.connect(self.accept)

@@ -57,7 +57,15 @@ class Column:
 
     @group_idx.setter
     def group_idx(self, value: int):
+        """改组号后重算组数、组内序号并校验；校验失败则回滚，不留下半改的状态。"""
+        old = self._dataset.groups_idx[self._idx]
         self._dataset.groups_idx[self._idx] = value
+        try:
+            self._dataset.update_attributes()
+        except RuntimeError:
+            self._dataset.groups_idx[self._idx] = old
+            self._dataset.update_attributes()
+            raise
 
     @property
     def group_local_idx(self) -> int:
@@ -209,27 +217,31 @@ class DataSet():
             print("father_idx 长度:", len(self.father_idx))
             print("initial_idx 长度:", len(self.initial_idx)) 
             raise RuntimeError("数据解析错误：数据维度与元数据不匹配。")
-        else:
-            # numpy 无需重置列索引，直接更新 local_idx
-            self.local_idx = list(range(self.data.shape[1]))
-            self.num_datagroups = self.get_groupnumber()
-            self.group_local_idx = list(range(len(self.groups_idx)))
-            self._get_group_local_idx()
-            # Ensure same group-local position uses a consistent unit across groups.
-            self._group_local_indices_unify_check()
-            self.status = 'written'
+        # numpy 无需重置列索引，直接更新 local_idx
+        self.local_idx = list(range(self.data.shape[1]))
 
+        # 先把 None 补成实际值，再计算派生属性——
+        # 顺序反了的话，组数和组内序号会按 None 统计，与补全后的组号对不上
         for i, loc in enumerate(self.local_idx):
             if self.father_idx[i] is None:
                 self.father_idx[i] = loc
             if self.initial_idx[i] is None:
                 self.initial_idx[i] = loc
-            if self.groups_idx[i] is None:
-                if all(g is None for g in self.groups_idx):
-                    self.groups_idx[i] = 0
-                else:
-                    self.groups_idx[i] = max(g for g in self.groups_idx if g is not None) + 1 if self.groups_idx else 0
-                
+        # 未指定组号的列（如 DataTransformer 跨组计算的结果）属于同一次计算，
+        # 共用一个新组号；逐列递增会把它们拆进不同组，单位不同时触发单位一致性检查
+        missing = [i for i, g in enumerate(self.groups_idx) if g is None]
+        if missing:
+            known = [g for g in self.groups_idx if g is not None]
+            new_group = max(known) + 1 if known else 0
+            for i in missing:
+                self.groups_idx[i] = new_group
+
+        self.num_datagroups = self.get_groupnumber()
+        self._get_group_local_idx()
+        # Ensure same group-local position uses a consistent unit across groups.
+        self._group_local_indices_unify_check()
+        self.status = 'written'
+
         return self
     
     

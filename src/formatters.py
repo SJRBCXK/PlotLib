@@ -29,7 +29,7 @@
     )
 
     # 2. 应用到 Plotter
-    plotter.plot_lines(
+    plotter.plot_objects(
         axes_formatter=axes_fmt,
         lines_formatter=lines_fmt,
         legend_formatter=legend_fmt
@@ -154,8 +154,9 @@ class LinesFormatterFactory:
                 line.set_linewidth(linewidth)
                 line.set_color(linecolor)
                 line.set_linestyle(linestyle)
-                line.set_marker(linemarker)
+                # 未指定 marker 时不动它：set_marker(None) 在 matplotlib 3.10 会报错
                 if linemarker is not None:
+                    line.set_marker(linemarker)
                     line.set_markersize(linemarkersize)
                 if custom_formations:
                     for func in custom_formations:
@@ -201,8 +202,10 @@ class LegendsFormatterFactory:
             _ = _args, _kwargs
 
             for legend in legends:
-                legend.set_fontsize(legend_fontsize)
-                legend.set_frameon(legend_frameon)
+                # Legend 没有 set_fontsize，字号要逐个设到图例文字上
+                for text in legend.get_texts():
+                    text.set_fontsize(legend_fontsize)
+                legend.set_frame_on(legend_frameon)   # 方法名是 set_frame_on，没有 set_frameon
                 legend.set_draggable(legend_draggable)
                 legend.set_loc(legend_location)
                 

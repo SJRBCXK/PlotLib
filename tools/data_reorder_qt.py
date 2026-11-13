@@ -25,8 +25,8 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QPlainTextEdit, QStatusBar,
     QToolBar, QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem
 )
-from PySide6.QtCore import Qt, Signal, QMimeData, QSize
-from PySide6.QtGui import QFont, QAction, QPen, QPainter
+from PySide6.QtCore import Qt, Signal, QMimeData, QSize, QTimer
+from PySide6.QtGui import QFont, QAction, QPen, QPainter, QCursor
 
 
 # ============================================================================
@@ -251,9 +251,21 @@ class ReorderLogic:
 class BorderDelegate(QStyledItemDelegate):
     """为每个列表项绘制边框和序号。"""
 
+    NUMBER_WIDTH = 64
+
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
         # 先画默认内容（勾选框 + 文本）
-        super().paint(painter, option, index)
+        content = QStyleOptionViewItem(option)
+        self.initStyleOption(content, index)
+        content.text = str(index.data(Qt.ItemDataRole.UserRole + 1))
+        content.rect = option.rect.adjusted(self.NUMBER_WIDTH, 0, 0, 0)
+        super().paint(painter, content, index)
+        painter.save()
+        painter.setPen(option.palette.text().color())
+        number_rect = option.rect.adjusted(4, 0, 0, 0)
+        number_rect.setWidth(self.NUMBER_WIDTH - 8)
+        painter.drawText(number_rect, Qt.AlignmentFlag.AlignCenter, f"{index.row() + 1}.")
+        painter.restore()
 
         # 画边框
         painter.save()
@@ -263,9 +275,29 @@ class BorderDelegate(QStyledItemDelegate):
         painter.drawRect(rect)
         painter.restore()
 
+    def createEditor(self, parent, option, index):
+        editor = QSpinBox(parent)
+        editor.setRange(1, index.model().rowCount())
+        editor.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        editor.setKeyboardTracking(False)
+        return editor
+
+    def setEditorData(self, editor, index):
+        editor.setValue(index.row() + 1)
+        editor.selectAll()
+
+    def setModelData(self, editor, model, index):
+        editor.interpretText()
+        self.parent().move_item(index.row(), editor.value() - 1)
+
+    def updateEditorGeometry(self, editor, option, index):
+        rect = option.rect.adjusted(2, 2, 0, -2)
+        rect.setWidth(self.NUMBER_WIDTH - 4)
+        editor.setGeometry(rect)
+
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
         size = super().sizeHint(option, index)
-        return QSize(size.width(), max(size.height(), 36))
+        return QSize(size.width() + self.NUMBER_WIDTH, max(size.height(), 36))
 
 
 class CheckableListWidget(QListWidget):
@@ -282,44 +314,114 @@ class CheckableListWidget(QListWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._pressed_item = None
+        self._press_pos = None
+        self._dragging = False
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setInterval(50)
+        self._scroll_timer.timeout.connect(self._drag_tick)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setFont(QFont("Arial", 11, QFont.Weight.Bold))
         self.setSpacing(2)
         self.setItemDelegate(BorderDelegate(self))
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setAutoScroll(True)
         self.setAutoScrollMargin(40)
         self.currentRowChanged.connect(self._on_row_changed)
-        self.model().rowsMoved.connect(self._update_indices)
+        self.model().modelAboutToBeReset.connect(self._finish_drag)
 
-    def dragMoveEvent(self, event):
-        """拖拽时靠近边缘自动滚动。"""
-        super().dragMoveEvent(event)
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            item = self.itemAt(pos)
+            # 只从名称区域拖动，序号和勾选框保留各自的操作。
+            if item and pos.x() > self.visualItemRect(item).left() + BorderDelegate.NUMBER_WIDTH + 24:
+                self._pressed_item = item
+                self._press_pos = pos
+
+    def mouseDoubleClickEvent(self, event):
         pos = event.position().toPoint()
-        margin = 40
-        if pos.y() < margin:
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - 20)
-        elif pos.y() > self.viewport().height() - margin:
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() + 20)
+        index = self.indexAt(pos)
+        if index.isValid() and pos.x() < self.visualRect(index).left() + BorderDelegate.NUMBER_WIDTH:
+            self._finish_drag()
+            self.edit(index)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._pressed_item is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            if not self._dragging and (pos - self._press_pos).manhattanLength() >= QApplication.startDragDistance():
+                self._dragging = True
+                self._scroll_timer.start()
+            if self._dragging:
+                self._snap_to_position(pos)
+                event.accept()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        was_dragging = self._dragging
+        self._finish_drag()
+        if was_dragging:
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
+    def _finish_drag(self):
+        self._scroll_timer.stop()
+        self._pressed_item = None
+        self._press_pos = None
+        self._dragging = False
+
+    def _drag_tick(self):
+        pos = self.viewport().mapFromGlobal(QCursor.pos())
+        bar = self.verticalScrollBar()
+        if pos.y() < 40:
+            bar.setValue(bar.value() - 20)
+        elif pos.y() > self.viewport().height() - 40:
+            bar.setValue(bar.value() + 20)
+        self._snap_to_position(pos)
+
+    def _snap_to_position(self, pos):
+        if self._pressed_item is None:
+            return
+        source = self.row(self._pressed_item)
+        target = source
+        for row in range(self.count()):
+            center = self.visualItemRect(self.item(row)).center().y()
+            if row < source and pos.y() < center:
+                target = row
+                break
+            if row > source and pos.y() > center:
+                target = row
+        self.move_item(source, target)
+
+    def move_item(self, source: int, target: int):
+        """插入目标位置（零起始），拖动和序号编辑共用。"""
+        if source == target or not (0 <= source < self.count() and 0 <= target < self.count()):
+            return
+        # 使用模型移动以保留 item、勾选状态和编辑器的持久索引。
+        root = self.rootIndex()
+        destination = target + 1 if target > source else target
+        self.model().moveRows(root, source, 1, root, destination)
+        self.setCurrentRow(target)
+        self.viewport().update()
+        self._on_row_changed(target)
 
     def add_item(self, text: str, original_idx: int, checked: bool = True):
-        pos = self.count()
-        display_text = f"{pos + 1}.  {text}"
+        display_text = text
         item = QListWidgetItem(display_text)
         item.setData(Qt.ItemDataRole.UserRole, original_idx)
         item.setData(Qt.ItemDataRole.UserRole + 1, text)  # 保存原始名称
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsDragEnabled)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEditable)
         item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
         self.addItem(item)
-
-    def _update_indices(self):
-        """拖拽后更新所有序号。"""
-        for i in range(self.count()):
-            item = self.item(i)
-            if item:
-                raw_name = item.data(Qt.ItemDataRole.UserRole + 1)
-                item.setText(f"{i + 1}.  {raw_name}")
 
     def get_checked_indices(self) -> list[int]:
         """返回勾选项的 original_idx 列表（按当前显示顺序）。用于保存数据。"""
@@ -782,7 +884,7 @@ class ReorderMainWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         # 左侧：列表
-        left_group = QGroupBox("数据列名称 (勾选 + 拖动排序)")
+        left_group = QGroupBox("数据列名称 (拖动吸附排序 / 双击序号改位置)")
         left_layout = QVBoxLayout(left_group)
         self.list_widget = CheckableListWidget()
         left_layout.addWidget(self.list_widget)

@@ -1,0 +1,37 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import plotly.graph_objects as go
+
+
+from src.dataloader import Dataloader
+from src.interactive import InteractivePlotter
+
+
+INPUT_COLUMNS_PER_DATASET = 6  # 每组数据集的列数
+INPUT_DATASET_FRACTION = 1/INPUT_COLUMNS_PER_DATASET
+
+
+dataRowNum_unit1 = 0  # Time for displacement
+dataRowNum_unit2 = 1  # Force
+dataRowNum_unit3 = 2  # Displacement
+dataRowNum_unit4 = 3  # Time for voltage
+dataRowNum_unit5 = 4  # Voltage
+
+
+data = Dataloader(
+    DATASET_FRACTION = INPUT_DATASET_FRACTION,
+    COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
+).load_data()
+
+
+
+
+interactive_plot = InteractivePlotter(plot_data_group=None,
+                                    input_dataset=data, 
+                                    plotrange=300, 
+                                    plotdataRowNum_x=dataRowNum_unit3,
+                                    plotdataRowNum_y=dataRowNum_unit5)  # Replace 'None' with the appropriate group if needed
+interactive_plot.plot_plotly_object().add_slider(mode="cumulative")
+interactive_plot.asset.show()

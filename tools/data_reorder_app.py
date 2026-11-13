@@ -9,7 +9,7 @@ class DraggableItem(ttk.Frame):
     """
     可拖拽的列表项,包含序号、勾选框和文本标签
     """
-    def __init__(self, parent, text, original_idx, on_drag_start, on_drag_motion, on_drag_end, on_click):
+    def __init__(self, parent, text, original_idx, on_drag_start, on_drag_motion, on_drag_end, on_click, on_move=None):
         super().__init__(parent, relief=tk.RAISED, borderwidth=5)
         self.parent = parent
         self.original_idx = original_idx
@@ -17,6 +17,8 @@ class DraggableItem(ttk.Frame):
         self.on_drag_motion = on_drag_motion
         self.on_drag_end = on_drag_end
         self.on_click_callback = on_click
+        self.on_move_callback = on_move
+        self._index_editor = None
 
         # 配置空心边框样式
         self.configure(style='Hollow.TFrame')
@@ -27,6 +29,9 @@ class DraggableItem(ttk.Frame):
         # 创建序号标签
         self.index_label = ttk.Label(self, text="1.", font=("Arial", 10, "bold"), width=4, anchor=tk.E)
         self.index_label.pack(side=tk.LEFT, padx=(5, 2))
+        if self.on_move_callback is not None:
+            self.index_label.configure(cursor="xterm")
+            self.index_label.bind("<Double-Button-1>", self.edit_index)
 
         # 创建勾选框
         self.checkbutton = ttk.Checkbutton(
@@ -46,6 +51,45 @@ class DraggableItem(ttk.Frame):
         self.label.bind("<ButtonRelease-1>", self.end_drag)
 
         self.drag_start_y = 0
+
+    def edit_index(self, event=None):
+        """双击序号原位编辑；Enter/失焦确认，Esc 取消。"""
+        if self._index_editor is not None:
+            self._index_editor.focus_set()
+            return "break"
+        editor = ttk.Entry(self, width=4, justify=tk.RIGHT)
+        self._index_editor = editor
+        editor.insert(0, self.index_label.cget("text").rstrip("."))
+        editor.place(in_=self.index_label, relwidth=1, relheight=1)
+        editor.bind("<Return>", self._commit_index)
+        editor.bind("<KP_Enter>", self._commit_index)
+        editor.bind("<FocusOut>", self._commit_index)
+        editor.bind("<Escape>", self._cancel_index)
+        editor.focus_set()
+        editor.selection_range(0, tk.END)
+        return "break"
+
+    def _cancel_index(self, event=None):
+        editor = self._index_editor
+        self._index_editor = None
+        if editor is not None:
+            editor.destroy()
+        return "break"
+
+    def _commit_index(self, event=None):
+        editor = self._index_editor
+        if editor is None:
+            return "break"
+        value = editor.get().strip()
+        self._cancel_index()
+        try:
+            position = int(value)
+        except ValueError:
+            self.bell()
+            return "break"
+        if self.on_move_callback is not None:
+            self.on_move_callback(self, position)
+        return "break"
 
     def start_drag(self, event):
         """开始拖拽"""
@@ -135,7 +179,8 @@ class DraggableList(ttk.Frame):
             self.on_drag_start,
             self.on_drag_motion,
             self.on_drag_end,
-            self.on_item_click
+            self.on_item_click,
+            self.move_item
         )
         item.pack(fill=tk.X, padx=5, pady=2)
         self.items.append(item)
@@ -209,16 +254,26 @@ class DraggableList(ttk.Frame):
             else:
                 continue
 
-            # 从列表中移除再插入到目标位置
-            self.items.pop(drag_index)
-            self.items.insert(target_index, self.drag_item)
-
-            # 重新排列UI
-            for it in self.items:
-                it.pack_forget()
-            for it in self.items:
-                it.pack(fill=tk.X, padx=5, pady=2)
+            self.move_item(self.drag_item, target_index + 1)
             break
+
+    def move_item(self, item, position):
+        """移动到从 1 开始的目标位置；拖动和序号编辑共用插入规则。"""
+        if item not in self.items or not 1 <= position <= len(self.items):
+            self.bell()
+            return
+        source = self.items.index(item)
+        target = position - 1
+        if source == target:
+            return
+        self.items.pop(source)
+        self.items.insert(target, item)
+        for current in self.items:
+            current.pack_forget()
+        for current in self.items:
+            current.pack(fill=tk.X, padx=5, pady=2)
+        self.update_indices()
+        self.on_item_click(item)
 
     def on_drag_end(self, item, y):
         """结束拖拽"""
@@ -334,7 +389,7 @@ class DataReorderGUI:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         # 左侧 - 列名列表
-        left_frame = ttk.LabelFrame(main_frame, text="数据列名称 (勾选+拖动排序)")
+        left_frame = ttk.LabelFrame(main_frame, text="数据列名称 (勾选 / 拖动排序 / 双击序号改位置)")
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
         # 可拖拽的列表

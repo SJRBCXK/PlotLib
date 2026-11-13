@@ -55,12 +55,12 @@ class DataPlotter:
         self,
         input_dataset: DataSet,
         plot_data_groups: dict | None = None,
-        cmap=None,
+        cmap : str | None = None,
         font_family: str = 'Arial',
         font_size: int = 22,
         font_weight: str = 'bold',
-        axis_lw: int = 3,
         plot_lw: int = 3,
+        axis_lw: int = 3,
         plot_style: str = '-',
         plotrange: int | None = None,
         plotdataRowNum_x: int = dataRowNum_unit1,
@@ -108,11 +108,12 @@ class DataPlotter:
         """
         if num_datagroups is None:
             num_datagroups = input_dataset.num_datagroups
+       
         if plot_data_groups is None:
             plot_data_groups = {}
-        if cmap is None:
-            cmap = plt.cm.plasma  # type: ignore
-
+       
+        resolved_cmap = plt.get_cmap('plasma' if cmap is None else cmap)
+        
         # 样式设置以 rcParams 字典形式保存，绘图时通过 plt.rc_context 应用
         self.rc_params = {
             'font.family': font_family,
@@ -141,7 +142,7 @@ class DataPlotter:
         self.plotrange = plotrange
         self.plotdataRowNum_x = plotdataRowNum_x
         self.plotdataRowNum_y = plotdataRowNum_y
-        self.cmap = cmap
+        self.cmap = resolved_cmap
         self.num_datagroups = num_datagroups
 
     # ========================================================================
@@ -154,6 +155,7 @@ class DataPlotter:
             raise RuntimeError("未加载数据")
         if self.plotrange is None:
             self.plotrange = self.data.shape[0]
+        
 
     def _get_data(self, group_idx: int, local_idx_x: int, local_idx_y: int,
                   neglog_x: bool = False, neglog_y: bool = False):

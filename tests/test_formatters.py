@@ -6,8 +6,14 @@ lines_formatter / legend_formatter 参数使用。测试直接在一张空图上
 """
 import matplotlib.pyplot as plt
 import pytest
+from matplotlib.ticker import ScalarFormatter
 
-from src.formatters import make_axes_formatter, make_legend_formatter, make_lines_formatter
+from src.formatters import (
+    combine_formatters,
+    make_axes_formatter,
+    make_legend_formatter,
+    make_lines_formatter,
+)
 from src.plotter import DataPlotter
 
 
@@ -22,13 +28,23 @@ def fig_ax():
 # axes formatter
 # ══════════════════════════════════════════════
 def test_axes_defaults(fig_ax):
+    """不传 x_format/y_format 时不替换刻度格式器，保留 matplotlib 自动刻度。"""
     fig, ax = fig_ax
     make_axes_formatter()(ax, fig)
 
     assert ax.get_xscale() == ax.get_yscale() == 'linear'
-    assert ax.xaxis.get_major_formatter()(2.0, 0) == '2.00'
+    # set_xscale 会重建默认格式器，所以只检查类型，不比较对象身份。
+    assert isinstance(ax.xaxis.get_major_formatter(), ScalarFormatter)
+    assert isinstance(ax.yaxis.get_major_formatter(), ScalarFormatter)
     assert not ax.spines['top'].get_visible()
     assert not ax.spines['right'].get_visible()
+
+
+def test_axes_scaler_without_format(fig_ax):
+    """只给 scaler 时仍要换算显示值，按 '{x:g}' 输出。"""
+    fig, ax = fig_ax
+    make_axes_formatter(xscaler=1000)(ax, fig)
+    assert ax.xaxis.get_major_formatter()(0.002, 0) == '2'
 
 
 def test_axes_scale_and_limits(fig_ax):
@@ -123,6 +139,35 @@ def test_legend_formatter(fig_ax):
     assert legend.get_frame_on()
     assert not legend.get_draggable()
     assert legend._loc == 2          # 'upper left' 的内部编号（matplotlib 无公开 getter）
+
+
+def test_plotly_axes_keeps_auto_tickformat():
+    """Plotly 默认不写 tickformat；显式传入时才翻译成 d3 格式。"""
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
+    make_axes_formatter(backend="plotly")(fig)
+    assert fig.layout.xaxis.tickformat is None
+    assert fig.layout.yaxis.tickformat is None
+
+    make_axes_formatter(backend="plotly", x_format='{x:.1e}')(fig)
+    assert fig.layout.xaxis.tickformat == '.1e'
+    assert fig.layout.yaxis.tickformat is None
+
+
+def test_combine_formatters_runs_in_order_and_skips_none():
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4], name='a'))
+    calls = []
+    fmt = combine_formatters(
+        make_lines_formatter(backend="plotly", linewidth=5),
+        None,
+        make_legend_formatter(backend="plotly", legend_fontsize=11),
+        lambda f: calls.append(f),
+    )
+    fmt(fig)
+    assert fig.data[0].line.width == 5
+    assert fig.layout.legend.font.size == 11
+    assert calls == [fig]
 
 
 def test_legend_formatter_works_with_plotter(eis_dataset):

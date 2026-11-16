@@ -1,0 +1,89 @@
+<!doctype html>
+<!--
+  页面适配缩放外壳（tools/html_export.py 使用的模板）
+
+  原理：内容按固定的“逻辑尺寸”排版，脚本量出窗口大小，用 transform: scale()
+  把整块内容等比缩放并居中。transform 只改变绘制结果、不改变排版，
+  所以 Plotly 仍按原尺寸工作，字号、线宽与面板一起按同一比例缩放；页面永不出现滚动条。
+
+  以美元符号开头的占位符由 Python 的 string.Template 填写；
+  本文件里如需字面量美元符号，要连写两个，否则会被当成占位符。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title</title>
+<style>
+/* ① 关掉滚动条：窗口多大，页面就多大 */
+html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: #ffffff; }
+body { position: relative; }
+
+/* ② “画”：永远按 ${canvas_width} × ${canvas_height} 排版，以左上角为原点缩放 */
+#fit-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: ${canvas_width}px;
+  height: ${canvas_height}px;
+  transform-origin: 0 0;
+  overflow: hidden;
+  visibility: hidden;   /* 第一次缩放完成前隐藏，避免闪现原尺寸 */
+}
+
+/* 画里的布局：图在左，可选的侧边面板在右，面板与图垂直居中 */
+#fit-stage { display: flex; align-items: center; gap: ${gap}px; width: 100%; height: 100%; }
+#fit-plot { flex: 0 0 ${plot_width}px; height: ${plot_height}px; }
+#fit-side { flex: 0 0 ${side_width}px; }
+</style>
+</head>
+<body>
+<main id="fit-canvas" data-fit-width="${canvas_width}" data-fit-height="${canvas_height}">
+  <div id="fit-stage">
+    <div id="fit-plot">
+$plot_html
+    </div>
+$side_block
+  </div>
+</main>
+<script>
+// ③ 量窗口 → 算比例 → 缩放并居中；④ 窗口变化时重算
+(function () {
+  "use strict";
+  var canvas = document.getElementById("fit-canvas");
+  var width = Number(canvas.getAttribute("data-fit-width"));
+  var height = Number(canvas.getAttribute("data-fit-height"));
+  var pending = false;
+
+  function fit() {
+    pending = false;
+    var hostWidth = document.body.clientWidth;
+    var hostHeight = document.body.clientHeight;
+    if (!(width > 0 && height > 0 && hostWidth > 0 && hostHeight > 0)) return;
+    // 宽、高各算一个比例，取较小者：整块内容完整放进窗口且不变形
+    var scale = Math.min(hostWidth / width, hostHeight / height);
+    canvas.style.left = Math.max(0, (hostWidth - width * scale) / 2) + "px";
+    canvas.style.top = Math.max(0, (hostHeight - height * scale) / 2) + "px";
+    canvas.style.transform = "scale(" + scale + ")";
+    canvas.style.visibility = "visible";
+  }
+
+  // 连续触发时每一帧最多计算一次
+  function scheduleFit() {
+    if (!pending) {
+      pending = true;
+      requestAnimationFrame(fit);
+    }
+  }
+
+  fit();
+  addEventListener("resize", scheduleFit);
+  addEventListener("load", scheduleFit);
+  // 窗口没变、但宿主容器变了（如 PPT 渲染器调整嵌入框）时也能重算
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(scheduleFit).observe(document.body);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!--
+  压电极化测试的压缩示意图面板，供 tools.html_export.write_fit_html(side_html=...) 使用。
+  面板宽 300 逻辑像素（与 write_fit_html 的默认 side_width 一致）。
+
+  与图表的唯一连接：通过 .plotly-graph-div 找到 Plotly 图，监听 plotly_sliderchange。
+  规则：当前档位名称含 rev → B 面朝上（电极 - B 面 - 凝胶 - A 面 - 电极）；
+        其余（含 back）→ A 面朝上（电极 - A 面 - 凝胶 - B 面 - 电极）。
+-->
+<style>
+  .pz-panel {
+    width: 300px;
+    font-family: Arial, "Microsoft YaHei", sans-serif;
+    font-weight: bold;
+    color: #000000;
+    text-align: center;
+  }
+  .pz-title { font-size: 24px; margin-bottom: 8px; }
+  .pz-panel svg { display: block; width: 300px; height: auto; }
+  .pz-panel text { font-family: Arial, "Microsoft YaHei", sans-serif; font-weight: bold; }
+  .pz-state {
+    display: inline-block;
+    margin-top: 8px;
+    padding: 6px 14px;
+    border: 2px solid #000000;
+    border-radius: 6px;
+    font-size: 18px;
+  }
+</style>
+
+<aside class="pz-panel">
+  <div class="pz-title">压缩示意</div>
+  <svg viewBox="0 0 300 390" role="img" aria-label="压缩示意图：电极、凝胶、电极叠层，上方加载，下方固定">
+    <!-- 上方压力箭头 -->
+    <line x1="130" y1="22" x2="130" y2="84" stroke="#000000" stroke-width="4"/>
+    <polygon points="118,82 142,82 130,102" fill="#000000"/>
+    <text x="148" y="62" font-size="22">F</text>
+
+    <!-- 叠层：电极 - 凝胶 - 电极；材料名在左侧 -->
+    <rect x="60" y="110" width="140" height="34" fill="#a7adb3" stroke="#000000" stroke-width="2"/>
+    <text x="50" y="134" font-size="18" text-anchor="end">电极</text>
+
+    <rect x="60" y="144" width="140" height="172" fill="#cfe8f3" stroke="#000000" stroke-width="2"/>
+    <text x="50" y="236" font-size="18" text-anchor="end">凝胶</text>
+
+    <rect x="60" y="316" width="140" height="34" fill="#a7adb3" stroke="#000000" stroke-width="2"/>
+    <text x="50" y="340" font-size="18" text-anchor="end">电极</text>
+
+    <!-- A / B 面：沿电极-凝胶界面的虚线，水平延伸到右侧文字。写在叠层之后，画在最上层 -->
+    <line id="pz-face-top-line" x1="60" y1="144" x2="236" y2="144" stroke="#e8743b" stroke-width="3" stroke-dasharray="8 5"/>
+    <text id="pz-face-top-label" x="242" y="150" font-size="18" fill="#e8743b">A 面</text>
+
+    <line id="pz-face-bottom-line" x1="60" y1="316" x2="236" y2="316" stroke="#7b61c9" stroke-width="3" stroke-dasharray="8 5"/>
+    <text id="pz-face-bottom-label" x="242" y="322" font-size="18" fill="#7b61c9">B 面</text>
+
+    <!-- 下方固定支座：底边粗线 + 斜线阴影，表示下电极固定，载荷从上方施加 -->
+    <line x1="44" y1="352" x2="216" y2="352" stroke="#000000" stroke-width="4"/>
+    <g stroke="#000000" stroke-width="2">
+      <line x1="58" y1="354" x2="44" y2="370"/>
+      <line x1="72" y1="354" x2="58" y2="370"/>
+      <line x1="86" y1="354" x2="72" y2="370"/>
+      <line x1="100" y1="354" x2="86" y2="370"/>
+      <line x1="114" y1="354" x2="100" y2="370"/>
+      <line x1="128" y1="354" x2="114" y2="370"/>
+      <line x1="142" y1="354" x2="128" y2="370"/>
+      <line x1="156" y1="354" x2="142" y2="370"/>
+      <line x1="170" y1="354" x2="156" y2="370"/>
+      <line x1="184" y1="354" x2="170" y2="370"/>
+      <line x1="198" y1="354" x2="184" y2="370"/>
+      <line x1="212" y1="354" x2="198" y2="370"/>
+    </g>
+  </svg>
+  <div class="pz-state" id="pz-state">正向：A 面朝上</div>
+</aside>
+
+<script>
+  // 滑块切换时更新示意图：标签含 rev → B 面朝上；其余（含 back）→ A 面朝上。
+  (function () {
+    var FACES = {
+      A: { name: "A 面", color: "#e8743b" },
+      B: { name: "B 面", color: "#7b61c9" }
+    };
+
+    // 一个表面 = 界面虚线 + 文字，两者同色
+    function paintFace(position, face) {
+      var prefix = "pz-face-" + position;
+      document.getElementById(prefix + "-line").setAttribute("stroke", face.color);
+      var label = document.getElementById(prefix + "-label");
+      label.textContent = face.name;
+      label.setAttribute("fill", face.color);
+    }
+
+    function setOrientation(label) {
+      var reversed = /-rev-/i.test(label || "");
+      paintFace("top", reversed ? FACES.B : FACES.A);
+      paintFace("bottom", reversed ? FACES.A : FACES.B);
+      document.getElementById("pz-state").textContent =
+        reversed ? "反向（rev）：B 面朝上" : "正向：A 面朝上";
+    }
+
+    function attach() {
+      var gd = document.querySelector(".plotly-graph-div");
+      if (!gd || typeof gd.on !== "function" || !gd.layout) {
+        setTimeout(attach, 50);   // 等 Plotly 初始化完成
+        return;
+      }
+      gd.on("plotly_sliderchange", function (event) {
+        setOrientation(event.step.label);
+      });
+      var slider = gd.layout.sliders && gd.layout.sliders[0];
+      if (slider) {
+        setOrientation(slider.steps[slider.active || 0].label);
+      }
+    }
+    attach();
+  })();
+</script>

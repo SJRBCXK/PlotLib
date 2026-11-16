@@ -158,6 +158,8 @@ class InteractivePlotter:
                 xaxis_minor_tickwidth=3,
                 xaxis_minor_ticklen=3,
                 xaxis_minor_showgrid=False,
+                # 对数轴 10^n 之间的 2、5 等标签：默认是小号数字，与主标签大小不一致，不显示。
+                xaxis_minorloglabels="none",
                 xaxis_showgrid=False,
                 xaxis_zeroline=False,
                 xaxis_automargin=True,
@@ -177,6 +179,7 @@ class InteractivePlotter:
                 yaxis_minor_tickwidth=3,
                 yaxis_minor_ticklen=3,
                 yaxis_minor_showgrid=False,
+                yaxis_minorloglabels="none",
                 yaxis_showgrid=False,
                 yaxis_zeroline=False,
                 yaxis_automargin=True,

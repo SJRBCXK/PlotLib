@@ -154,6 +154,70 @@ def test_plotly_axes_keeps_auto_tickformat():
     assert fig.layout.yaxis.tickformat is None
 
 
+@pytest.mark.parametrize("axis, kwargs, expected", [
+    # 只给一侧：用 autorangeoptions，另一侧自动；对数轴边界取 log10
+    ("xaxis", dict(xlim_left=0.001, xscale_type='log'),
+     dict(autorange=True, autorangeoptions={'minallowed': -3.0})),
+    ("xaxis", dict(xlim_right=5), dict(autorange=True, autorangeoptions={'maxallowed': 5})),
+    ("yaxis", dict(ylim_bottom=-2), dict(autorange=True, autorangeoptions={'minallowed': -2})),
+    ("yaxis", dict(ylim_top=100, yscale_type='log'),
+     dict(autorange=True, autorangeoptions={'maxallowed': 2.0})),
+    # 两侧都给：固定 range
+    ("xaxis", dict(xlim_left=1, xlim_right=1000, xscale_type='log'),
+     dict(range=[0.0, 3.0], autorange=False)),
+    ("yaxis", dict(ylim_bottom=-1, ylim_top=1), dict(range=[-1, 1], autorange=False)),
+])
+def test_plotly_axis_bounds(axis, kwargs, expected):
+    """
+    回归：只给一侧时曾用 autorange="min"/"max"。
+    Plotly.js 在 automargin 扩边重绘时会把它重置为完全自动，边界失效。
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
+    make_axes_formatter(backend="plotly", **kwargs)(fig)
+    layout = fig.to_dict()["layout"]
+    assert {k: layout[axis][k] for k in expected} == expected
+    assert layout[axis].get("autorange") not in ("min", "max")
+    # 只设置了一根轴的边界，另一根轴不应被写入范围设置
+    other = layout["yaxis" if axis == "xaxis" else "xaxis"]
+    assert not {"range", "autorangeoptions"} & other.keys()
+
+
+@pytest.mark.render
+@pytest.mark.parametrize("axis, kwargs, expected", [
+    # expected = (低端, 高端)；None 表示该端自动，只检查它覆盖了数据
+    ("xaxis", dict(xscale_type='log', xlim_left=5), (5, None)),
+    ("xaxis", dict(xscale_type='log', xlim_left=0.1), (0.1, None)),   # 边界在数据之外也照用
+    ("xaxis", dict(xscale_type='log', xlim_right=50), (None, 50)),
+    ("yaxis", dict(ylim_bottom=15), (15, None)),
+    ("yaxis", dict(ylim_top=60), (None, 60)),
+    ("yaxis", dict(ylim_bottom=0, ylim_top=100), (0, 100)),
+])
+def test_plotly_axis_bounds_after_render(eis_dataset, render, axis, kwargs, expected):
+    """
+    断言 Plotly.js 实际渲染出的范围，而不是 JSON 里的设置。
+    使用真实模板：模板开了 automargin，正是它的扩边重绘曾让单侧边界失效。
+    """
+    from src.interactive import InteractivePlotter
+
+    plot = InteractivePlotter(None, eis_dataset, plotdataRowNum_x=0, plotdataRowNum_y=1)
+    fig = plot.plot_plotly_object(
+        figure_formatter=make_axes_formatter(backend="plotly", **kwargs)).asset
+    full_axis = render(fig).layout[axis]
+    low, high = (10 ** v if full_axis.type == "log" else v for v in full_axis.range)
+
+    data_min, data_max = {"xaxis": (1, 100), "yaxis": (10, 90)}[axis]   # eis_dataset 的数据范围
+    want_low, want_high = expected
+    if want_low is None:
+        assert low <= data_min
+    else:
+        assert low == pytest.approx(want_low)
+    if want_high is None:
+        assert high >= data_max
+    else:
+        assert high == pytest.approx(want_high)
+
+
 def test_combine_formatters_runs_in_order_and_skips_none():
     go = pytest.importorskip("plotly.graph_objects")
     fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4], name='a'))

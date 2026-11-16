@@ -44,6 +44,39 @@ def close_figures():
     plt.close('all')
 
 
+@pytest.fixture(scope="session")
+def render():
+    """
+    返回函数 render(fig) -> 渲染后的完整 Figure。
+
+    Plotly 的 fig 只是 Python 端拼出的 JSON；坐标范围、边距等最终值由浏览器里的
+    Plotly.js 计算，可能与 JSON 中的设置不同（例如 automargin 重绘会重置部分自动范围）。
+    full_figure_for_development() 让 kaleido 在后台 Chrome 里真正跑一遍 Plotly.js，
+    返回计算后的 layout，测试就能断言“实际画出来的”结果。
+
+    scope="session"：整轮测试只启动一次 Chrome（约 4 秒），之后每次渲染约 0.06 秒。
+    没装 kaleido 或没有 Chrome 时，用到它的测试会被跳过而不是失败。
+    """
+    pytest.importorskip("plotly")
+    kaleido = pytest.importorskip("kaleido")
+    import plotly.graph_objects as go
+    # 常驻 Chrome 的接口只在较新的 kaleido 1.x 中提供；没有时每次渲染单独启动，只是更慢。
+    persistent = hasattr(kaleido, "start_sync_server")
+    try:
+        if persistent:
+            kaleido.start_sync_server(silence_warnings=True)
+        go.Figure().full_figure_for_development(warn=False)   # 试渲染一次，确认 Chrome 可用
+    except Exception as exc:
+        pytest.skip(f"kaleido 无法渲染（需要 Chrome）：{exc}")
+
+    def render_figure(fig):
+        return fig.full_figure_for_development(warn=False)
+
+    yield render_figure
+    if persistent:
+        kaleido.stop_sync_server(silence_warnings=True)
+
+
 def write_grouped_file(path, units: list[str], groups: dict[str, list[list[float]]]):
     """
     按 tools/ 的输出格式写一个分组数据文件，格式由扩展名决定：

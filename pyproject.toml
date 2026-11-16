@@ -11,6 +11,20 @@ dependencies = [
     "matplotlib",
     "numpy",
     "pandas",
+    "openpyxl",   # Dataloader 读取 .xlsx（pandas.read_excel 的引擎）
+    "xlrd",       # Dataloader 读取旧版 Excel .xls（openpyxl 不支持 .xls）
+]
+
+# 可选依赖：pip install -e ".[interactive]" / pip install -e ".[test]"
+[project.optional-dependencies]
+# Plotly 交互绘图（InteractivePlotter、formatter 的 backend="plotly"）。
+# 下限：autorangeoptions 需要 5.17+；与 kaleido 1.x 配合需要 6.1+。
+interactive = ["plotly>=6.1"]
+# 运行测试；kaleido 让渲染测试（pytest -m render）调用真实的 Plotly.js，还需要本机装有 Chrome。
+test = [
+    "pytest",
+    "plotlib[interactive]",
+    "kaleido>=1.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -20,3 +34,7 @@ include = ["src*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]   # pytest 只在 tests/ 目录里找测试
 pythonpath = ["."]      # 把项目根目录加入导入路径，测试里才能 from src... import
+markers = [
+    # 跳过：pytest -m "not render"
+    "render: 用 kaleido 调真实的 Plotly.js 渲染后再断言（需要 Chrome，首次启动约 4 秒）",
+]

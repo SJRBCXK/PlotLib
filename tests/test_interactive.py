@@ -49,6 +49,14 @@ def test_plot_data_and_repeated_calls(eis_dataset):
     assert all(a is b for a, b in zip(plot.plot_artists, _traces(_asset(plot))))
 
 
+def test_template_hides_minor_log_labels(eis_dataset):
+    """对数轴 10^n 之间默认显示小号 2、5 标签，大小不一致，模板默认关闭。"""
+    fig = _asset(InteractivePlotter(None, eis_dataset).plot_plotly_object())
+    template_layout = _layout(fig)['template']['layout']
+    assert template_layout['xaxis']['minorloglabels'] == 'none'
+    assert template_layout['yaxis']['minorloglabels'] == 'none'
+
+
 @pytest.mark.parametrize("mode, expected", [
     ("single", [[True, False, False], [False, True, False], [False, False, True]]),
     ("cumulative", [[True, False, False], [True, True, False], [True, True, True]]),

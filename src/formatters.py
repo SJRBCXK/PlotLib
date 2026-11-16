@@ -189,16 +189,20 @@ class AxesFormatterFactory:
             )
             if tick_format is not None:
                 options["tickformat"] = tick_format
-            if any(v is not None for v in bounds):
-                # 公共输入使用数据值；Plotly 对数轴的 range 使用 log10。
-                options["range"] = [
-                    math.log10(v) if scale == "log" and v is not None else v
-                    for v in bounds
-                ]
-                # 只给一侧边界时，另一侧保持自动。
-                options["autorange"] = (
-                    "min" if bounds[0] is None else
-                    "max" if bounds[1] is None else False
+            # 公共输入使用数据值；Plotly 对数轴的边界使用 log10。
+            low, high = (
+                math.log10(v) if scale == "log" and v is not None else v
+                for v in bounds
+            )
+            if low is not None and high is not None:
+                options.update(range=[low, high], autorange=False)
+            elif low is not None or high is not None:
+                # 只给一侧时用 minallowed / maxallowed：自动范围照常计算，
+                # 给定的一侧直接作为边界。不用 autorange="min"/"max"：
+                # Plotly.js 在 automargin 扩边重绘时会把它重置成完全自动，边界失效。
+                options["autorange"] = True
+                options["autorangeoptions"] = (
+                    {"minallowed": low} if low is not None else {"maxallowed": high}
                 )
             axis_settings.append(options)
 

@@ -1,5 +1,5 @@
 """
-测试对象：src/processor.py 的 DataTransformer —— 对列做数学变换（apply / Norm）
+测试对象：src/plotlib/processor.py 的 DataTransformer —— 对列做数学变换（apply / Norm）
 
 结果的命名规则（未手动指定时）：
   - 名字：只有一列 → 沿用原名；多列同名 → Results_i_of_<名>；否则 Results_i_of_<名1>_<名2>
@@ -11,7 +11,7 @@ eis_dataset 列号：S0 = 0~2，S1 = 3~5，S2 = 6~8；每组 [Freq, Zs', Zs'']
 import numpy as np
 import pytest
 
-from src.processor import DataTransformer
+from plotlib.processor import DataTransformer
 
 ZS_RE = "Zs'(ohm)"
 
@@ -176,7 +176,7 @@ def test_norm_new_group_with_sparse_group_ids():
     组号不连续时也不能撞号：已有组 [0, 3] → 新组 4。
     回归：曾经按「组数 + 1」算，得到 3，与已有组冲突。
     """
-    from src.dataset import DataSet
+    from plotlib.dataset import DataSet
 
     ds = DataSet().form_array(np.ones(2), ['a'], ['u'], 0)
     ds.expandata(DataSet().form_array(np.ones(2), ['b'], ['u'], 3))

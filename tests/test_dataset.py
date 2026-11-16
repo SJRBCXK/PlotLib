@@ -1,5 +1,5 @@
 """
-测试对象：src/dataset.py —— DataSet（数据容器）、Column / ColumnList（列视图）
+测试对象：src/plotlib/dataset.py —— DataSet（数据容器）、Column / ColumnList（列视图）
 
 DataSet 的核心约定（各测试围绕它们展开）：
   1. 元数据长度一致：data 的列数 == len(names) == len(units) == len(groups_idx) ...
@@ -9,7 +9,7 @@ DataSet 的核心约定（各测试围绕它们展开）：
 import numpy as np
 import pytest
 
-from src.dataset import DataSet
+from plotlib.dataset import DataSet
 
 
 def make(data, names, units, group_idx=0):

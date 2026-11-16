@@ -1,17 +1,14 @@
-import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import plotly.graph_objects as go
-
-
-from src.dataloader import Dataloader
-from src.interactive import InteractivePlotter
-from src.formatters import make_axes_formatter, make_lines_formatter, make_legend_formatter, combine_formatters
-from tools.html_export import write_fit_html
+from plotlib.dataloader import Dataloader
+from plotlib.interactive import InteractivePlotter
+from plotlib.formatters import make_axes_formatter
+from plotlib.html_export import write_fit_html
 
 # 右侧压缩示意图面板（含 rev 翻转规则），导出时拼进页面
 PANEL_HTML = Path(__file__).parent / "assets" / "piezo_panel.html"
+# 导出的页面写到当前目录下的 output/（已加入 .gitignore）
+OUTPUT_HTML = Path("output") / "output.html"
 
 
 INPUT_COLUMNS_PER_DATASET = 6  # 每组数据集的列数
@@ -51,8 +48,9 @@ interactive_plot = InteractivePlotter(plot_data_group=None,
 fig = interactive_plot.plot_plotly_object(figure_formatter=axes_fmt).add_slider(mode="cumulative")
 
 # 导出可随窗口等比缩放的页面（PPT 中嵌入不会出现滚动条），右侧附压缩示意图
+OUTPUT_HTML.parent.mkdir(parents=True, exist_ok=True)
 write_fit_html(
-    fig, "output.html",
+    fig, OUTPUT_HTML,
     side_html=PANEL_HTML.read_text(encoding="utf-8"),
     title="压电极化测试",
 )

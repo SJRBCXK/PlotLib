@@ -3,7 +3,7 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**161 个全部通过**，`src/` 语句覆盖率 97%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**206 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
 
 > 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各组都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
@@ -22,12 +22,14 @@
 | `python -m pytest -x` | 遇到第一个失败就停 |
 | `python -m pytest -rx` | 额外列出每个 xfail（已知 bug）的原因 |
 | `python -m pytest --co -q` | 只列出所有测试名，不运行（最新、最全的清单） |
-| `python -m pytest --cov=src --cov-report=term-missing` | 覆盖率：每个文件哪些行没被测到 |
+| `python -m pytest --cov=plotlib --cov-report=term-missing` | 覆盖率：每个文件哪些行没被测到 |
+| `python -m pytest -m "not render"` | 跳过需要 Chrome 的渲染测试 |
 
 VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 🔄 刷新。
 
 配置在 `pyproject.toml` 的 `[tool.pytest.ini_options]`。
-依赖：`pytest`；`openpyxl`（xlsx 测试）；`pytest-cov`（可选，仅覆盖率命令需要）。
+依赖：`pip install -e ".[test]"`（pytest、pytest-cov、plotly、kaleido）。
+渲染测试（标记 `render`）还需要本机装有 Chrome；Qt 工具的测试需要另装 `".[gui]"`（PySide6），没装时自动跳过。
 
 结果里如果出现 `x`，是标了 `xfail` 的「已知会失败」测试，不算失败（目前没有）。
 
@@ -36,14 +38,18 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | 测试文件 | 被测代码 | 一句话 |
 |---|---|---|
 | `conftest.py` | — | 共享的测试数据与环境（见下节），不含测试 |
-| `test_dataloader.py` | `src/dataloader.py` | 数据文件能正确读成 DataSet |
-| `test_dataset.py` | `src/dataset.py` | DataSet 的创建、拼接、列视图、遍历、重排 |
-| `test_processor.py` | `src/processor.py` 的 `DataProcessLayer` | `select` / `by` 按组、名字、单位、索引选列 |
-| `test_transformer.py` | `src/processor.py` 的 `DataTransformer` | `apply` / `Norm` 的计算结果与自动命名 |
-| `test_group.py` | `src/group.py` 的 `resolve_num` | 分组配置里的 `num` 能正确解析，写错能报出是哪组 |
-| `test_group_apply.py` | `src/group.py` 的 `Group` | 组间计算结果、命名、分组编号正确 |
-| `test_plotter.py` | `src/plotter.py` | 四种绘图方法画出的线、标签、样式正确 |
-| `test_formatters.py` | `src/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性 |
+| `test_dataloader.py` | `src/plotlib/dataloader.py` | 数据文件能正确读成 DataSet |
+| `test_dataset.py` | `src/plotlib/dataset.py` | DataSet 的创建、拼接、列视图、遍历、重排 |
+| `test_processor.py` | `src/plotlib/processor.py` 的 `DataProcessLayer` | `select` / `by` 按组、名字、单位、索引选列 |
+| `test_transformer.py` | `src/plotlib/processor.py` 的 `DataTransformer` | `apply` / `Norm` 的计算结果与自动命名 |
+| `test_group.py` | `src/plotlib/group.py` 的 `resolve_num` | 分组配置里的 `num` 能正确解析，写错能报出是哪组 |
+| `test_group_apply.py` | `src/plotlib/group.py` 的 `Group` | 组间计算结果、命名、分组编号正确 |
+| `test_plotter.py` | `src/plotlib/plotter.py` | 四种绘图方法画出的线、标签、样式正确 |
+| `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
+| `test_interactive.py` | `src/plotlib/interactive.py` | Plotly 曲线的数据与标签、滑块档位（single / cumulative）与默认外观、报错 |
+| `test_html_export.py` | `src/plotlib/html_export.py` | 导出页面的画框尺寸、侧边面板位置、占位符全部填写、不修改 Figure |
+| `test_data_reorder_app.py` | `tools/data_reorder_app.py`（Tk 版） | 直接改序号插入并保留勾选、非法输入不移动、取消与失焦；没有显示环境时跳过 |
+| `test_data_reorder_qt.py` | `tools/data_reorder_qt.py`（Qt 版） | 插入与勾选保留、中点吸附、改序号、鼠标拖动；没装 PySide6 时跳过 |
 
 ## 测试数据与环境（conftest.py）
 
@@ -159,10 +165,34 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - xyy：左右两侧各用自己的 X、Y 列；左轴红、右轴蓝，两轴共享 X 轴，`twinx` 不新开图窗；`custom_formatter` 每组调用一次
 
 ### 格式化器 — `test_formatters.py`
-- axes：默认线性刻度、两位小数、隐藏上/右边框；可设对数刻度、坐标范围、刻度格式与换算倍数（`xscaler`）
+**matplotlib（默认 backend）**
+- axes：默认线性刻度、隐藏上/右边框；不传 `x_format` / `y_format` 时保留 matplotlib 默认的刻度格式器
+- axes：可设对数刻度、坐标范围、刻度格式与换算倍数（`xscaler`）；只给 `xscaler` 不给格式时按 `{x:g}` 显示换算后的值
 - axes：`custom_formation` 里的函数以 `(ax, fig)` 调用；可直接交给 `DataPlotter` 使用
 - lines：线宽、颜色、线型、marker 与大小；不传 marker 时保持无标记；`custom_formations` 逐条线调用
 - legend：字号、边框、可拖拽、位置；可直接交给 `DataPlotter` 使用
+
+**Plotly（`backend="plotly"`）**
+- 不传刻度格式时不写 `tickformat`（保留 Plotly 自动格式）；传入时翻译成 d3 格式（如 `'{x:.1e}'` → `.1e`）
+- 坐标轴边界：两侧都给时固定 `range`；只给一侧时用 `autorangeoptions.minallowed` / `maxallowed`，另一侧自动；对数轴边界取 log10；只影响设置了边界的那根轴
+- 渲染测试（标记 `render`）：用 kaleido 调真实的 Plotly.js，断言实际画出的坐标范围。
+  回归：只给一侧边界时曾用 `autorange="min"/"max"`，模板开了 automargin，扩边重绘后被重置成完全自动，边界失效
+- `combine_formatters`：按传入顺序调用，跳过 `None`
+
+### 交互绘图 — `test_interactive.py`
+- 每个数据组一条曲线，X/Y 数据等于数据集对应列，曲线名是组名，坐标轴标题是单位
+- 重复调用 `plot_plotly_object` 生成新的 Figure，`plot_artists` 与 Figure 中的 trace 一一对应
+- 模板默认关闭对数轴 10ⁿ 之间的小号数字标签（`minorloglabels="none"`）
+- 滑块：`single` 每档只显示当前曲线，`cumulative` 显示第一条到当前一条；初始可见性与第 0 档一致；档位标签和标题都是组名；重复添加只保留一个滑块
+- 滑块默认外观：初始标题为第 0 档的名字；短标签可见，名称太长（如 33 条 `Mg10-back-1mm-relax-i`）时隐藏刻度标签、保留当前值文字；`slider_formatter` 可覆盖默认值
+- 报错：未绘图就加滑块、图中没有曲线 → `RuntimeError`；`mode` 写错 → `ValueError`，且不改动已有的图；空数据集 → 明确的 `RuntimeError`
+
+### HTML 导出 — `test_html_export.py`
+- 图的尺寸先取 layout、再取模板，layout 优先；两处都没有固定宽高 → `ValueError`
+- 无侧边面板：画框尺寸等于图的尺寸；页面不出现滚动条；Plotly 的 `responsive` 默认关闭，图只由外壳整体缩放
+- 有侧边面板：画框宽 = 图宽 + 间距 + 面板宽；面板位于图之后、画框之内；网页标题经过 HTML 转义
+- 模板占位符全部填写，不残留 `$...`；用户传入的 `config` 会合并进去，且保留 `responsive: false`
+- 写文件不修改传入的 Figure；与 `InteractivePlotter` 的默认模板配合时画框为 1524 × 800
 
 ## 已修复的 bug
 
@@ -199,11 +229,11 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 覆盖率报告中剩下没测到的行：
 - `dataloader.py` 的文件对话框本身（需要真实 GUI）
 - 各处「理论上走不到」的防御性检查、`__repr__`
-- `tools/`、`gui/`、`scripts/`：界面和脚本，不做自动化测试，仍靠手动运行检查
+- `tools/`（data_reorder 两个工具除外）、`learning/gui/`、`scripts/`：界面和脚本，不做自动化测试，仍靠手动运行检查
 
 ## 新增测试时的约定
 
-1. **文件**：测 `src/xxx.py` 就写在 `tests/test_xxx.py`；测试函数以 `test_` 开头。
+1. **文件**：测 `src/plotlib/xxx.py` 就写在 `tests/test_xxx.py`；测试函数以 `test_` 开头。
 2. **命名**：测试名写成「行为」，如 `test_group_config_is_not_modified`，让 `pytest -v` 的输出本身就是一份清单；docstring 写一句「为什么要测」。
 3. **数据**：用 `eis_dataset` 或 `make_dataset` 造小数据，数值设计成能心算；不要读真实数据文件。
 4. **多组输入**用 `@pytest.mark.parametrize`，并加 `ids` 让输出可读。

@@ -37,7 +37,7 @@ MatplotlibBackend    PlotlyBackend
 设想中的文件组织（第 4 步时再建，不要提前铺开）：
 
 ```text
-src/
+src/plotlib/
 ├── plotter.py            # DataPlotter：公共入口与模式组织
 ├── plot_spec.py          # 绘图计划
 ├── formatters.py         # 格式化器工厂（已支持 backend 参数）
@@ -93,4 +93,5 @@ src/
 ## 7. 已知遗留问题
 
 - **稀疏组号配色越界**：`InteractivePlotter._get_color` 用实际组号作为下标，去取按 `num_datagroups`（组的个数）采样出的颜色列表。组号不连续时（例如筛选后只剩组 0 和 5）会越界。应在完整组集合上一次性建立“实际组号 → 颜色”的映射。
-- ~~**Plotly 依赖未声明**~~（2026-11-14 已解决）：`pyproject.toml` 增加可选依赖 `interactive`（plotly）和 `test`（pytest、plotly、kaleido）；`src/__init__.py` 改为首次访问 `InteractivePlotter` 时才导入，没装 Plotly 也能使用数据模块和 matplotlib 绘图。
+  matplotlib 一侧（`src/plotlib/plotter.py` 的 `cmap(i / num_datagroups)`）在组号不连续时也有配色错误：比值超过 1 被截断，例如组号 0 / 5 / 9 时 5 和 9 得到同一个颜色，不报错，更隐蔽（见 `STRUCTURE_REVIEW.md` A.4 第 1 条）。
+- ~~**Plotly 依赖未声明**~~（2026-11-14 已解决）：`pyproject.toml` 增加可选依赖 `interactive`（plotly）和 `test`（pytest、plotly、kaleido）；`src/plotlib/__init__.py` 改为首次访问 `InteractivePlotter` 时才导入，没装 Plotly 也能使用数据模块和 matplotlib 绘图。

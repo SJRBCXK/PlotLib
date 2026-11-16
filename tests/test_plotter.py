@@ -1,5 +1,5 @@
 """
-测试对象：src/plotter.py 的 DataPlotter
+测试对象：src/plotlib/plotter.py 的 DataPlotter
 
 思路（Step 5）：不看图、不比像素，而是检查 matplotlib 对象的属性。
 DataPlotter 把画出的东西都存在 self.axesset 里，测试就从这里取：
@@ -22,7 +22,7 @@ from matplotlib.container import BarContainer
 from matplotlib.lines import Line2D
 from numpy.typing import NDArray
 
-from src.plotter import DataPlotter
+from plotlib.plotter import DataPlotter
 
 FREQ, ZS_RE, ZS_IM = 0, 1, 2      # 组内列索引
 
@@ -296,7 +296,7 @@ def test_neglog_both_axes_keep_their_own_format(eis_dataset):
     两轴同时负对数时各用各的格式。两轴格式故意设成不同，否则看不出区别。
     回归：X、Y 的 lambda 曾共用一个变量（闭包晚绑定），X 轴用上了 Y 轴的格式。
     """
-    from src.formatters import make_axes_formatter
+    from plotlib.formatters import make_axes_formatter
 
     fmt = make_axes_formatter(x_format='{x:.1f}', y_format='{y:.3f}')
     ax = DataPlotter(eis_dataset, plotdataRowNum_x=ZS_IM, plotdataRowNum_y=ZS_IM).plot_objects(

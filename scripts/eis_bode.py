@@ -1,22 +1,22 @@
 """
-EIS 电化学阻抗谱绘图脚本
-用途：绘制 EIS 数据的 Nyquist 图、Bode 图及双轴图
+EIS 介电谱 Bode 图脚本
+用途：绘制损耗角正切 tan δ 随频率变化的 Bode 图（全部组 / 分组），
+      计算组间电导率比与电导率模 |C| 并绘图，以及提取各组 tan δ 损耗峰及其对应频率
 """
 
 
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, LogLocator
 import numpy as np
 import scipy as sp
 
 
-from src.dataloader import Dataloader
-from src.plotter import DataPlotter
-from src.dataset import DataSet
-from src.processor import DataProcessLayer as DPL
-from src.processor import DataTransformer as DT
-from src.formatters import make_axes_formatter, make_lines_formatter, make_legend_formatter
+from plotlib.dataloader import Dataloader
+from plotlib.plotter import DataPlotter
+from plotlib.dataset import DataSet
+from plotlib.processor import DataProcessLayer as DPL
+from plotlib.processor import DataTransformer as DT
+from plotlib.formatters import make_axes_formatter
 
 plt.close('all')
 
@@ -107,13 +107,13 @@ data = Dataloader(
 # ============================================================
 
 Bode_Plotter_TanDelta = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotdataRowNum_x=dataRowNum_unit1,
     plotdataRowNum_y=dataRowNum_unit8
 ).plot_objects(axes_formatter=Bode_Delta_formatter)
 
 Bode_Plotter_TanDelta_group = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotdataRowNum_x=dataRowNum_unit1,
     plotdataRowNum_y=dataRowNum_unit8,
     plot_data_groups=data_groups
@@ -129,7 +129,7 @@ Bode_Plotter_TanDelta_group = DataPlotter(
 # ============================================================
 
 
-from src.group import Group
+from plotlib.group import Group
 
 def rev_camp(*slices):
     camp = slices[1].data[:,:2] / slices[0].data[:,:2]
@@ -145,7 +145,7 @@ RevCampdata_v2 = Group(data, data_groups).apply(
 )
 
 RevCampdata_v2_pltsubsyy = DataPlotter(
-    input_dataset=RevCampdata_v2,#type: ignore
+    input_dataset=RevCampdata_v2,
     plotdataRowNum_x=2,
     plotdataRowNum_y=1,
 ).plot_objects(
@@ -154,14 +154,14 @@ RevCampdata_v2_pltsubsyy = DataPlotter(
 
 
 
-Selected_data = DPL(dataset=data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data #type: ignore
+Selected_data = DPL(dataset=data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data
 Conductivity = DataSet()
-for dataslice in Selected_data.iter('groups'): #type: ignore
-    conductivity_slice = DT(dataslice).Norm(extended=False,norm_unit='|C|(S/cm)') #type: ignore
+for dataslice in Selected_data.iter('groups'):
+    conductivity_slice = DT(dataslice).Norm(extended=False,norm_unit='|C|(S/cm)')
     Conductivity.expandata(conductivity_slice)
-data = data.expandata(Conductivity)._rearrange_columns() #type: ignore
+data = data.expandata(Conductivity)._rearrange_columns()
 Conductivity_pltliner1 = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotdataRowNum_x = 0,
     plotdataRowNum_y = 9
 ).plot_objects(
@@ -172,19 +172,18 @@ Conductivity_pltliner1 = DataPlotter(
 
 
 def f_peak(data):
-    result_data_indice,_= sp.signal.find_peaks(data[:,0].ravel()) #type: ignore
+    result_data_indice,_= sp.signal.find_peaks(data[:,0].ravel())
     result_tan_values = data[result_data_indice,0].ravel()
     result_freq_values = data[result_data_indice,1].ravel()
-     #type: ignore
     result_data = np.vstack((result_tan_values, result_freq_values)).T
     
     return  result_data
 
 
-Selected_data = DPL(dataset=data).select("Tan(Delta)","Frequency(Hz)").Selected_data #type: ignore
+Selected_data = DPL(dataset=data).select("Tan(Delta)","Frequency(Hz)").Selected_data
 f_delta_peak = DataSet()
-for dataslice in Selected_data.iter('groups'): #type: ignore
-    f_delta_peak_slice = DT(dataslice).apply(func=f_peak,extended=False)#type: ignore
+for dataslice in Selected_data.iter('groups'):
+    f_delta_peak_slice = DT(dataslice).apply(func=f_peak,extended=False)
     f_delta_peak.expandata(f_delta_peak_slice)
 
 fig, ax = plt.subplots()

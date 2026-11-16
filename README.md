@@ -29,12 +29,23 @@ cd PlotLib
 pip install -e .
 ```
 
+安装后在任意目录都能 `import plotlib`。按需加装可选依赖，可以组合，如 `pip install -e ".[interactive,test]"`：
+
+| 可选依赖 | 包含 | 用途 |
+|---|---|---|
+| `interactive` | plotly | Plotly 交互绘图：`InteractivePlotter`、格式化器的 `backend="plotly"`、`html_export` |
+| `gui` | PySide6 | `tools/` 下的 `*_qt.py` 工具和 `learning/gui/` 的 PySide6 学习示例 |
+| `analysis` | scipy | 分析脚本用到的科学计算（`scripts/eis_bode.py` 的寻峰） |
+| `test` | pytest、pytest-cov、plotly、kaleido | 运行测试；渲染测试（`pytest -m render`）还需要本机装有 Chrome |
+
 ## 快速开始
 
 ```python
-from src.dataloader import Dataloader
-from src.plotter import DataPlotter
-from src.formatters import make_axes_formatter
+import matplotlib.pyplot as plt
+
+from plotlib.dataloader import Dataloader
+from plotlib.plotter import DataPlotter
+from plotlib.formatters import make_axes_formatter
 
 # 1. 加载数据（弹出文件选择对话框）
 data = Dataloader(
@@ -50,6 +61,8 @@ DataPlotter(
 
 plt.show()
 ```
+
+> 根目录的 `matplotlibrc`（`backend: TkAgg`）只在从项目根目录启动 Python 时生效，从其他目录启动时不会读取它。
 
 ## 数据格式
 
@@ -67,7 +80,7 @@ plt.show()
 ### Dataloader - 数据加载器
 
 ```python
-from src.dataloader import Dataloader
+from plotlib.dataloader import Dataloader
 
 # 自动弹出文件选择对话框
 data = Dataloader(
@@ -153,7 +166,7 @@ DataPlotter(input_dataset=data).subplotter_xyy(
 链式语法筛选数据列：
 
 ```python
-from src.processor import DataProcessLayer
+from plotlib.processor import DataProcessLayer
 
 layer = DataProcessLayer(data)
 
@@ -178,7 +191,7 @@ layer.select('group', [0, 1], 'Ohm', (3, 4, 5)).Selected_data
 #### 坐标轴格式化器
 
 ```python
-from src.formatters import make_axes_formatter
+from plotlib.formatters import make_axes_formatter
 
 formatter = make_axes_formatter(
     xlim_left=0,
@@ -199,7 +212,7 @@ formatter = make_axes_formatter(
 #### 线条格式化器
 
 ```python
-from src.formatters import make_lines_formatter
+from plotlib.formatters import make_lines_formatter
 
 formatter = make_lines_formatter(
     linewidth=2,
@@ -215,7 +228,7 @@ formatter = make_lines_formatter(
 #### 图例格式化器
 
 ```python
-from src.formatters import make_legend_formatter
+from plotlib.formatters import make_legend_formatter
 
 formatter = make_legend_formatter(
     legend_location='upper right',
@@ -225,14 +238,55 @@ formatter = make_legend_formatter(
 )
 ```
 
+## 交互图与 HTML 导出（Plotly）
+
+需要可选依赖 `pip install -e ".[interactive]"`。用法与 `scripts/piezo_interactive.py` 一致：
+
+```python
+from plotlib.dataloader import Dataloader
+from plotlib.interactive import InteractivePlotter
+from plotlib.formatters import make_axes_formatter
+from plotlib.html_export import write_fit_html
+
+data = Dataloader(COLUMNS_PER_DATASET=6).load_data()
+
+# Plotly 版坐标轴格式化器：参数与 matplotlib 版相同，另加 backend="plotly"
+axes_fmt = make_axes_formatter(backend="plotly", xlim_left=0.001, xscale_type='log')
+
+plot = InteractivePlotter(
+    None,                 # 第一个参数目前未使用，传 None
+    input_dataset=data,
+    plotrange=300,
+    plotdataRowNum_x=2,   # Displacement
+    plotdataRowNum_y=4,   # Voltage
+)
+# 每个数据组画成一条曲线，再加一个控制曲线显示的滑块
+fig = plot.plot_plotly_object(figure_formatter=axes_fmt).add_slider(mode="cumulative")
+
+# 导出随窗口等比缩放的 HTML（嵌入 PPT 等页面时不出现滚动条）
+write_fit_html(fig, "plot.html", title="压电极化测试")
+```
+
+- **滑块** `add_slider(mode=...)`：`"single"` 每档只显示当前一条曲线；`"cumulative"`（默认）显示第一条到当前一条。
+  拖动时标题变为当前曲线名；档位名称太长、放不下时，滑块的刻度标签自动隐藏。
+- **自定义外观**：`plot_plotly_object(figure_formatter=fn)` 中 `fn(fig)` 原地修改 Figure；
+  `add_slider(slider_formatter=fn)` 中 `fn(slider)` 原地修改滑块。多个 Plotly 回调可用 `combine_formatters(...)` 合成一个。
+- **Plotly 版格式化器的限制**：不支持 `xscaler` / `yscaler`；坐标轴只支持 `'linear'` 和 `'log'`；
+  刻度格式只支持 `'{x:.Nf}'`、`'{x:.Ne}'`、`'{x:.Ng}'`、`'{x:.N%}'`。不支持的设置在创建格式化器时直接报错。
+- **HTML 导出** `write_fit_html(fig, path, side_html=None, side_width=300, gap=24, title=..., include_plotlyjs=True)`：
+  - 页面按图的固定尺寸排版（`InteractivePlotter` 的默认模板为 1200 × 800），打开时按窗口大小整体等比缩放并居中；
+  - `include_plotlyjs=True` 把 Plotly.js 内嵌进文件（约 4.5 MB），离线也能打开；
+  - `side_html` 在图的右侧附加一段 HTML（可包含自己的 `<style>`、`<script>`）。面板脚本可以通过 `.plotly-graph-div` 找到图、
+    监听 `plotly_sliderchange` 事件与滑块联动，示例见 `scripts/assets/piezo_panel.html`（按档位名称是否含 `rev` 切换示意图）。
+
 ## 完整示例
 
 ### EIS 电化学阻抗谱
 
 ```python
-from src.dataloader import Dataloader
-from src.plotter import DataPlotter
-from src.formatters import make_axes_formatter
+from plotlib.dataloader import Dataloader
+from plotlib.plotter import DataPlotter
+from plotlib.formatters import make_axes_formatter
 import matplotlib.pyplot as plt
 
 # 配置
@@ -285,9 +339,9 @@ plt.show()
 ### 压电测试数据
 
 ```python
-from src.dataloader import Dataloader
-from src.plotter import DataPlotter
-from src.formatters import make_axes_formatter
+from plotlib.dataloader import Dataloader
+from plotlib.plotter import DataPlotter
+from plotlib.formatters import make_axes_formatter
 import matplotlib.pyplot as plt
 
 # 加载数据
@@ -328,30 +382,52 @@ plt.show()
 
 ```
 PlotLib/
+├── pyproject.toml              # 项目配置与依赖
+├── README.md
+├── matplotlibrc                # matplotlib 后端设置（只在从项目根目录启动时生效）
 ├── src/
-│   ├── __init__.py      # 包入口
-│   ├── dataloader.py    # 数据加载器
-│   ├── dataset.py       # 数据集容器
-│   ├── plotter.py       # 绘图器
-│   ├── processor.py     # 数据选择与处理
-│   └── formatters.py    # 格式化器工厂
-├── scripts/
-│   ├── eis_bode.py      # EIS Bode 图示例
-│   ├── eis_nyquist.py   # EIS Nyquist 图示例
-│   └── piezo.py         # 压电测试示例
-├── tools/
-│   └── data_reorder_app.py  # 数据重排工具
-├── pyproject.toml       # 项目配置
-└── README.md
+│   └── plotlib/                # 唯一的可安装包：import plotlib
+│       ├── __init__.py         # 包入口
+│       ├── dataset.py          # 数据集容器
+│       ├── dataloader.py       # 数据加载器
+│       ├── processor.py        # 数据选择与变换
+│       ├── group.py            # 分组配置解析与组间计算
+│       ├── plotter.py          # matplotlib 绘图器
+│       ├── interactive.py      # Plotly 交互绘图器（滑块）
+│       ├── formatters.py       # 格式化器工厂（matplotlib / Plotly）
+│       ├── html_export.py      # 导出随窗口缩放的 HTML 页面
+│       └── templates/ppt_fit_shell.html   # html_export 的页面外壳
+├── scripts/                    # 按实验的分析脚本
+│   ├── eis_bode.py             # EIS 介电谱 Bode 图、电导率比、损耗峰
+│   ├── eis_nyquist.py          # EIS Nyquist 图
+│   ├── piezo.py                # 压电测试（matplotlib）
+│   ├── piezo_interactive.py    # 压电测试交互图 + HTML 导出
+│   ├── tensile.py              # 拉伸测试
+│   ├── select_demo.py          # select().by() 选列演示
+│   └── assets/piezo_panel.html # 交互图右侧的压缩示意面板
+├── tools/                      # 独立 GUI 预处理工具（Tk 与 Qt 两版）
+│   ├── data_collector.py
+│   ├── data_collector_qt.py
+│   ├── data_reorder_app.py
+│   └── data_reorder_qt.py
+├── learning/                   # 学习材料，不属于产品代码
+│   ├── gui/                    # PySide6 学习步骤与路线图
+│   └── testing/LEARNING_PLAN.md   # pytest 学习路线图
+├── docs/                       # 设计文档（BACKEND_PLAN.md、STRUCTURE_REVIEW.md）
+└── tests/                      # pytest 测试，说明见 tests/README.md
 ```
 
 ## 依赖
 
-- Python >= 3.8
+- Python >= 3.14
 - matplotlib
 - numpy
 - pandas
+- openpyxl（读取 `.xlsx`）
+- xlrd（读取旧版 Excel `.xls`）
+
+可选依赖见「安装」一节，以 `pyproject.toml` 为准。
 
 ## License
 
-MIT
+MIT，见 [LICENSE](LICENSE)。

@@ -1,5 +1,5 @@
 """
-测试对象：src/formatters.py —— 格式化器工厂
+测试对象：src/plotlib/formatters.py —— 格式化器工厂
 
 make_xxx_formatter(...) 返回一个函数，交给 DataPlotter 的 axes_formatter /
 lines_formatter / legend_formatter 参数使用。测试直接在一张空图上调用它，再检查属性。
@@ -8,13 +8,13 @@ import matplotlib.pyplot as plt
 import pytest
 from matplotlib.ticker import ScalarFormatter
 
-from src.formatters import (
+from plotlib.formatters import (
     combine_formatters,
     make_axes_formatter,
     make_legend_formatter,
     make_lines_formatter,
 )
-from src.plotter import DataPlotter
+from plotlib.plotter import DataPlotter
 
 
 @pytest.fixture
@@ -198,7 +198,7 @@ def test_plotly_axis_bounds_after_render(eis_dataset, render, axis, kwargs, expe
     断言 Plotly.js 实际渲染出的范围，而不是 JSON 里的设置。
     使用真实模板：模板开了 automargin，正是它的扩边重绘曾让单侧边界失效。
     """
-    from src.interactive import InteractivePlotter
+    from plotlib.interactive import InteractivePlotter
 
     plot = InteractivePlotter(None, eis_dataset, plotdataRowNum_x=0, plotdataRowNum_y=1)
     fig = plot.plot_plotly_object(

@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.dataloader import Dataloader
+from plotlib.dataloader import Dataloader
 
 
 @pytest.fixture(autouse=True)

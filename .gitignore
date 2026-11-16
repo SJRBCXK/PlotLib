@@ -17,3 +17,6 @@ venv/
 # pytest-cov 覆盖率数据
 .coverage
 htmlcov/
+
+# 脚本导出的图表页面（scripts/piezo_interactive.py 等）
+output/

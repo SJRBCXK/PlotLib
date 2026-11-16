@@ -7,7 +7,7 @@
     3. 一个窗口从创建到显示的完整生命周期
 
 运行：
-    python gui/step1_hello.py
+    python learning/gui/step1_hello.py
 """
 import sys
 

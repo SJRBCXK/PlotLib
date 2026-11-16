@@ -15,25 +15,36 @@ dependencies = [
     "xlrd",       # Dataloader 读取旧版 Excel .xls（openpyxl 不支持 .xls）
 ]
 
-# 可选依赖：pip install -e ".[interactive]" / pip install -e ".[test]"
+# 可选依赖：pip install -e ".[interactive]" / pip install -e ".[test]"，可组合：".[interactive,gui]"
 [project.optional-dependencies]
-# Plotly 交互绘图（InteractivePlotter、formatter 的 backend="plotly"）。
+# Plotly 交互绘图（InteractivePlotter、formatter 的 backend="plotly"、html_export）。
 # 下限：autorangeoptions 需要 5.17+；与 kaleido 1.x 配合需要 6.1+。
 interactive = ["plotly>=6.1"]
+# Qt 界面：tools/ 下的 *_qt.py 工具和 PySide6 学习示例。
+gui = ["PySide6"]
+# 分析脚本用到的科学计算（scripts/eis_bode.py 的寻峰）。
+analysis = ["scipy"]
 # 运行测试；kaleido 让渲染测试（pytest -m render）调用真实的 Plotly.js，还需要本机装有 Chrome。
+# 不含 PySide6：Qt 工具的测试在没装时自动跳过，需要时另装 ".[gui]"。
 test = [
     "pytest",
+    "pytest-cov",   # 覆盖率：pytest --cov=plotlib
     "plotlib[interactive]",
     "kaleido>=1.0",
 ]
 
+# 包放在 src/plotlib/ 下（src 布局）：只有 src/ 里的内容会被安装，import 名是 plotlib。
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+where = ["src"]
+
+# 随包安装的非 .py 文件：html_export 的页面外壳模板。
+[tool.setuptools.package-data]
+plotlib = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]   # pytest 只在 tests/ 目录里找测试
-pythonpath = ["."]      # 把项目根目录加入导入路径，测试里才能 from src... import
+# "src"：没安装包也能 import plotlib；"."：测试里要导入 tools/ 下的工具（from tools... import）
+pythonpath = ["src", "."]
 markers = [
     # 跳过：pytest -m "not render"
     "render: 用 kaleido 调真实的 Plotly.js 渲染后再断言（需要 Chrome，首次启动约 4 秒）",

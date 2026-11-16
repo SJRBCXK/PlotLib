@@ -13,7 +13,7 @@
     Qt 窗口可以随意拖动缩放而不会错位。
 
 运行：
-    python gui/step2_layout.py
+    python learning/gui/step2_layout.py
 """
 import sys
 

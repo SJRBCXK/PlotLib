@@ -3,21 +3,16 @@ EIS 电化学阻抗谱绘图脚本
 用途：绘制 EIS 数据的 Nyquist 图、Bode 图及双轴图
 """
 
-import os
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter, LogLocator
 
-from src.dataloader import Dataloader
-from src.dataset import DataSet
-from src.processor import DataProcessLayer as DPL
-from src.processor import DataTransformer as DT
-from src.plotter import DataPlotter
-from src.formatters import make_axes_formatter, make_lines_formatter, make_legend_formatter
+from plotlib.dataloader import Dataloader
+from plotlib.dataset import DataSet
+from plotlib.processor import DataProcessLayer as DPL
+from plotlib.processor import DataTransformer as DT
+from plotlib.plotter import DataPlotter
+from plotlib.formatters import make_axes_formatter
 
 plt.close('all')
 
@@ -122,7 +117,7 @@ data = Dataloader(
 # ============================================================
 # --- Nyquist 图（标准线图）---
 Test_pltliner1 = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotdataRowNum_x = dataRowNum_unit6,
     plotdataRowNum_y = dataRowNum_unit7
 ).plot_objects(
@@ -132,7 +127,7 @@ Test_pltliner1 = DataPlotter(
 
 # --- Nyquist 图（分组绘制）---
 Test_pltGliner2 = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plot_data_groups=data_groups,
     plotdataRowNum_x = dataRowNum_unit6,
     plotdataRowNum_y = dataRowNum_unit7
@@ -146,7 +141,7 @@ Test_pltGliner2 = DataPlotter(
 
 # --- Y-Y 子图（Real Z vs -Imaginary Z）---
 Test_pltsubsyy = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
 ).subplotter_yy(
     plotdataRowNum_Y1=dataRowNum_unit6,
     plotdataRowNum_Y2=dataRowNum_unit7,
@@ -162,7 +157,7 @@ Test_pltsubsyy = DataPlotter(
 
 # --- X-YY 双轴子图（Frequency vs Z components）---
 Test_pltsubsxyy = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
 ).subplotter_xyy(
     plotdataRowNum_X1=dataRowNum_unit1,
     plotdataRowNum_Y1=dataRowNum_unit6,
@@ -186,14 +181,14 @@ Test_pltsubsxyy = DataPlotter(
 #     plotdataRowNum_Y2=dataRowNum_unit7,
 #     custom_formatter=eis_dual_axis_formatter,
 # )
-Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data #type: ignore
+Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data
 Impendence = DataSet()
-for dataslice in Selected_data.iter('groups'): #type: ignore
-    impendence_slice = DT(dataslice).Norm(extended=False,norm_unit='|Z|(ohm)') #type: ignore
+for dataslice in Selected_data.iter('groups'):
+    impendence_slice = DT(dataslice).Norm(extended=False,norm_unit='|Z|(ohm)')
     Impendence.expandata(impendence_slice)
-data = data.expandata(Impendence)._rearrange_columns() #type: ignore
+data = data.expandata(Impendence)._rearrange_columns()
 Impendence_pltliner1 = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotdataRowNum_x = 0,
     plotdataRowNum_y = 7
 ).plot_objects(
@@ -207,7 +202,7 @@ Impendence_pltliner1 = DataPlotter(
 # ============================================================
 # 使用 Group.apply() 重构的组间计算
 # ============================================================
-from src.group import Group
+from plotlib.group import Group
 
 def rev_camp(*slices):
     camp = slices[1].data[:,:2] - slices[0].data[:,:2]
@@ -220,10 +215,10 @@ RevCampdata_v2 = Group(data, data_groups).apply(
     rev_camp,
     select=("Zs'(ohm)", "Zs''(ohm)", "Frequency(Hz)")
 )
-print(RevCampdata_v2.units)  #type: ignore
+print(RevCampdata_v2.units)
 
 RevCampdata_v2_pltsubsyy = DataPlotter(
-    input_dataset=RevCampdata_v2,#type: ignore
+    input_dataset=RevCampdata_v2,
 ).subplotter_yy(
     plotdataRowNum_Y1=2,
     plotdataRowNum_Y2=1,

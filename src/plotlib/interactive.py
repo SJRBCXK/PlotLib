@@ -1,9 +1,6 @@
 """交互绘图学习模块：先迁移 DataPlotter 的数据侧结构。"""
-from pathlib import Path
 from collections.abc import Callable
 from typing import Literal, Self, cast
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import numpy as np
 import plotly.graph_objects as go

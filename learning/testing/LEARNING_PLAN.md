@@ -9,6 +9,8 @@
 
 节奏：一步一个概念，每步都在真实项目代码上练习。想学哪一步就说「开始测试 Step N」。
 
+本路线图原位于 `tests/`，文中提到的 `test_*.py`、`conftest.py` 都在 `tests/` 目录下。
+
 ## 进度
 
 - [x] Step 1 — 第一个测试：`assert` 与运行 pytest（`test_group.py`）
@@ -19,14 +21,14 @@
 - [x] Step 6 — 先写测试再修 bug：用测试复现 `.txt` 读取问题（`xfail(strict=True)` → 修复 → 删标记）
 - [ ] Step 7 — 日常使用：VS Code 测试面板、只跑部分测试、看失败信息
 - 补充（已用到，可对照代码看）：`monkeypatch` 替换弹窗（`test_dataloader.py` 末尾）、
-  覆盖率 `pytest --cov=src --cov-report=term-missing`；全部测试的说明见 `tests/README.md`
+  覆盖率 `pytest --cov=plotlib --cov-report=term-missing`；全部测试的说明见 `tests/README.md`
 
 ## 各步骤内容
 
 ### Step 1 — 第一个测试
 测试就是一个**以 `test_` 开头的函数**：调用你的代码，用 `assert` 断言结果。
 pytest 会自动找到 `tests/` 下所有 `test_*.py` 文件里的 `test_*` 函数并逐个运行。
-练习对象：`src/group.py` 的 `resolve_num`（纯函数，输入配置、输出列表，最适合入门）。
+练习对象：`src/plotlib/group.py` 的 `resolve_num`（纯函数，输入配置、输出列表，最适合入门）。
 
 ### Step 2 — 测试报错
 「配置写错时应该报错」也是一种需要被测试的行为。

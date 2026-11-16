@@ -1,9 +1,9 @@
 """
-测试对象：src/group.py 里的 resolve_num(group_name, group_config)
+测试对象：src/plotlib/group.py 里的 resolve_num(group_name, group_config)
 它的作用：从一组分组配置里取出 'num'，统一转成 list[int]；配置有误时报错。
 
 ─────────────────────────────────────────────────────────────────
-本文件用到的写法（对应 tests/LEARNING_PLAN.md 的 Step 1~3）：
+本文件用到的写法（对应 learning/testing/LEARNING_PLAN.md 的 Step 1~3）：
   - assert                        断言结果（Step 1）
   - pytest.raises(..., match=...) 断言必须报错，并检查报错文字（Step 2）
   - @pytest.mark.parametrize      一个测试函数跑多组输入（Step 3）
@@ -15,7 +15,7 @@
 import numpy as np
 import pytest
 
-from src.group import resolve_num
+from plotlib.group import resolve_num
 
 
 # ──────────────────────────────────────────────

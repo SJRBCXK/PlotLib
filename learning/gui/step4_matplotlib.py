@@ -19,7 +19,7 @@
     互相都不用改代码。
 
 运行：
-    python gui/step4_matplotlib.py
+    python learning/gui/step4_matplotlib.py
 """
 import sys
 

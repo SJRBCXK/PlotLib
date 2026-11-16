@@ -5,14 +5,14 @@
 
 页面由三个零件拼成，只靠三处接头相连：
 
-    外壳（tools/templates/ppt_fit_shell.html）：关滚动条 + 缩放脚本
+    外壳（templates/ppt_fit_shell.html，随包安装）：关滚动条 + 缩放脚本
       └─ #fit-canvas  画框，逻辑尺寸 W × H            ← 接头①：W、H 由图的尺寸算出
            ├─ 图表零件：fig.to_html(full_html=False)  ← 接头②：侧边面板通过 .plotly-graph-div 找到图
            └─ 侧边面板（可选，由调用方传入的 HTML 片段）
       缩放脚本通过 #fit-canvas 找到画框              ← 接头③：外壳内部，已写好
 
 用法：
-    from tools.html_export import write_fit_html
+    from plotlib.html_export import write_fit_html
     write_fit_html(fig, "output.html", side_html=panel_html, title="压电极化测试")
 """
 from __future__ import annotations

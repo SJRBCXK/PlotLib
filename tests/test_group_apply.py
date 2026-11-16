@@ -1,12 +1,12 @@
 """
-测试对象：src/group.py 的 Group.apply()
+测试对象：src/plotlib/group.py 的 Group.apply()
 数据来自 conftest.py 的 eis_dataset：S1 = S0 × 2，S2 = S0 × 3，频率相同。
 所以每个测试的「正确答案」都能心算出来——这就是手工设计测试数据的意义。
 """
 import numpy as np
 import pytest
 
-from src.group import Group
+from plotlib.group import Group
 
 ZS = ("Zs'(ohm)", "Zs''(ohm)")
 S0_ZS = np.array([[10, -1], [20, -2], [30, -3]], dtype=float)
@@ -105,7 +105,7 @@ def test_callback_result_is_reshaped_to_2d(eis_dataset, callback, shape):
 
 def test_slices_with_different_column_counts_raise():
     """组 0 有 2 列、组 1 只有 1 列 → 无法逐列对齐，报错。"""
-    from src.dataset import DataSet
+    from plotlib.dataset import DataSet
     ds = DataSet().form_array(np.ones((2, 2)), ['A', 'A'], ['x', 'y'], 0, repeat_times=2)
     ds.expandata(DataSet().form_array(np.ones(2), ['B'], ['x'], 1))
     with pytest.raises(ValueError, match="列数不一致"):

@@ -1,5 +1,5 @@
 """
-测试对象：src/dataloader.py 的 Dataloader.load_data()
+测试对象：src/plotlib/dataloader.py 的 Dataloader.load_data()
 重点：tools/ 输出格式的文件，读进来后 names / units / groups_idx / data 是否正确。
 
 本文件用到的新写法（Step 4）：
@@ -118,7 +118,7 @@ def test_unsupported_extension_raises(tmp_path):
 # monkeypatch.setattr 在本测试内把它换成直接返回路径的函数，测试结束自动还原。
 # ──────────────────────────────────────────────
 def test_load_without_path_uses_file_dialog(tmp_path, monkeypatch):
-    from src.dataloader import Dataloader
+    from plotlib.dataloader import Dataloader
 
     path = write_grouped_file(tmp_path / 'picked.csv', EIS_UNITS, {'S0': [[1, 2, 3]]})
     monkeypatch.setattr(Dataloader, 'select_data_file', staticmethod(lambda: str(path)))

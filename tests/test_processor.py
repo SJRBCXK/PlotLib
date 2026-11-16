@@ -1,5 +1,5 @@
 """
-测试对象：src/processor.py 的 DataProcessLayer —— 按条件选列
+测试对象：src/plotlib/processor.py 的 DataProcessLayer —— 按条件选列
 
 eis_dataset 的 9 列（便于对照下面的索引）：
     列号    0     1      2       3     4      5       6     7      8
@@ -9,7 +9,7 @@ eis_dataset 的 9 列（便于对照下面的索引）：
 import numpy as np
 import pytest
 
-from src.processor import DataProcessLayer
+from plotlib.processor import DataProcessLayer
 
 ZS_RE, ZS_IM = "Zs'(ohm)", "Zs''(ohm)"
 

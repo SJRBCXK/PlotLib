@@ -28,12 +28,12 @@ __all__ = [
     'make_legend_formatter',
     'combine_formatters',
     'Group',
-    # InteractivePlotter 不放进 __all__：没装 Plotly 时 `from src import *` 会因它失败。
+    # InteractivePlotter 不放进 __all__：没装 Plotly 时 `from plotlib import *` 会因它失败。
 ]
 
 
 def __getattr__(name: str):
-    """首次访问 src.InteractivePlotter 时才导入，让 Plotly 保持为可选依赖。"""
+    """首次访问 plotlib.InteractivePlotter 时才导入，让 Plotly 保持为可选依赖。"""
     if name == 'InteractivePlotter':
         try:
             from .interactive import InteractivePlotter

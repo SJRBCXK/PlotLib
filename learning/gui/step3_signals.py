@@ -15,7 +15,7 @@
     "clicked" 就是信号，"on_button_clicked" 就是槽（其实就是个普通方法）。
 
 运行：
-    python gui/step3_signals.py
+    python learning/gui/step3_signals.py
 """
 import sys
 

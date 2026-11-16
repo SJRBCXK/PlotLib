@@ -7,8 +7,8 @@ import pytest
 pytest.importorskip("plotly")
 import plotly.graph_objects as go
 
-from src.dataset import DataSet
-from src.interactive import InteractivePlotter
+from plotlib.dataset import DataSet
+from plotlib.interactive import InteractivePlotter
 
 
 def _traces(fig: go.Figure) -> tuple[go.Scatter, ...]:

@@ -1,20 +1,13 @@
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, LogLocator
 import numpy as np
-import scipy as sp
 
 
-from src.dataloader import Dataloader
-from src.plotter import DataPlotter
-from src.dataset import DataSet
-from src.processor import DataProcessLayer as DPL
-from src.processor import DataTransformer as DT
-from src.formatters import make_axes_formatter, make_lines_formatter, make_legend_formatter
+from plotlib.dataloader import Dataloader
+from plotlib.plotter import DataPlotter
+from plotlib.dataset import DataSet
+from plotlib.processor import DataProcessLayer as DPL
+from plotlib.processor import DataTransformer as DT
+from plotlib.formatters import make_axes_formatter
 
 plt.close('all')
 
@@ -65,15 +58,15 @@ def cal_EB(data):
 
 Selected_data = DPL(data).select("应变","应力(MPa)").Selected_data
 EB_data = DataSet()
-for dataslice in Selected_data.iter('groups'): #type: ignore
-    EB_slice = DT(dataslice).apply(func = cal_EB) #type: ignore
+for dataslice in Selected_data.iter('groups'):
+    EB_slice = DT(dataslice).apply(func = cal_EB)
     EB_data.expandata(EB_slice)
 print(EB_data.data)
 print(EB_data.names)
 
 
 Tensile = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
 ).subplotter_yy(
     plotdataRowNum_Y1=2,
     plotdataRowNum_Y2=1,

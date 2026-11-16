@@ -2,18 +2,11 @@
 Piezo 压电数据绘图脚本
 用途：绘制压电测试数据的多种图表（D-V, F-V, T-V 关系图及其组合）
 """
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-
-
-
 import matplotlib.pyplot as plt
 
-from src.dataloader import Dataloader
-from src.plotter import DataPlotter
-from src.formatters import make_axes_formatter, make_lines_formatter, make_legend_formatter
+from plotlib.dataloader import Dataloader
+from plotlib.plotter import DataPlotter
+from plotlib.formatters import make_axes_formatter
 
 plt.close('all')
 
@@ -76,14 +69,14 @@ data = Dataloader(
 # ============================================================
 # --- Displacement-Voltage (D-V) 关系图 ---
 DV_pltliner = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit3,
     plotdataRowNum_y = dataRowNum_unit5,
 ).plot_objects(axes_formatter=DV_axes_formatter)
 
 DV_pltliner_log = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit3,
     plotdataRowNum_y = dataRowNum_unit5,
@@ -91,28 +84,28 @@ DV_pltliner_log = DataPlotter(
 
 # --- Time-Voltage (T-V) 关系图 ---
 TV_Zoomed_pltliner = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit4,
     plotdataRowNum_y = dataRowNum_unit5
 ).plot_objects(axes_formatter=TV_axes_formatter_zoomed)
 
 TV_pltliner = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotdataRowNum_x = dataRowNum_unit4,
     plotdataRowNum_y = dataRowNum_unit5
 ).plot_objects(axes_formatter=TV_axes_formatter)
 
 # --- Force-Voltage (F-V) 关系图 ---
 FV_pltliner = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit2,
     plotdataRowNum_y = dataRowNum_unit5
 ).plot_objects(axes_formatter=FV_axes_formatter)
 
 FV_pltliner_log = DataPlotter(
-    input_dataset=data, #type: ignore
+    input_dataset=data,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit2,
     plotdataRowNum_y = dataRowNum_unit5
@@ -120,7 +113,7 @@ FV_pltliner_log = DataPlotter(
 
 # --- 分组绘图 (Group Plots) ---
 DV_pltGliner2 = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plot_data_groups=data_groups,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit3,
@@ -128,7 +121,7 @@ DV_pltGliner2 = DataPlotter(
 ).group_plotter(axes_formatter=DV_axes_formatter)
 
 DV_pltGliner2_merged = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plot_data_groups=data_groups,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit2,
@@ -137,7 +130,7 @@ DV_pltGliner2_merged = DataPlotter(
 
 # --- Y-Y 子图（一个Y对另一个Y）---
 DV_pltsubsyy = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotrange=299
 ).subplotter_yy(
     plotdataRowNum_Y1=dataRowNum_unit3,
@@ -146,7 +139,7 @@ DV_pltsubsyy = DataPlotter(
 )
 
 FV_pltsubsyy = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotrange=299
 ).subplotter_yy(
     plotdataRowNum_Y1=dataRowNum_unit2,
@@ -156,7 +149,7 @@ FV_pltsubsyy = DataPlotter(
 
 # --- X-YY 双轴子图（两个Y共享一个X）---
 DTV_pltsubsxyy = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotrange=299,
 ).subplotter_xyy(
     plotdataRowNum_X1=dataRowNum_unit1,
@@ -167,7 +160,7 @@ DTV_pltsubsxyy = DataPlotter(
 )
 
 FTV_pltsubsxyy = DataPlotter(
-    input_dataset=data,#type: ignore
+    input_dataset=data,
     plotrange=299
 ).subplotter_xyy(
     plotdataRowNum_X1=dataRowNum_unit1,

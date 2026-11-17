@@ -17,6 +17,7 @@ from plotlib.dataset import DataSet
 from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
 from plotlib.formatters import make_axes_formatter
+from plotlib.group import Group
 
 plt.close('all')
 
@@ -93,6 +94,7 @@ data = Dataloader(
     DATASET_FRACTION = INPUT_DATASET_FRACTION,
     COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
 ).load_data()
+groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图和计算都用它
 
 # ============================================================
 # 数据处理
@@ -116,7 +118,7 @@ Bode_Plotter_TanDelta_group = DataPlotter(
     input_dataset=data,
     plotdataRowNum_x=dataRowNum_unit1,
     plotdataRowNum_y=dataRowNum_unit8,
-    plot_data_groups=data_groups
+    groups=groups
 ).group_plotter(    
     axes_formatter=Bode_Delta_formatter,
     lines_formatter=Group_lines_formatter)
@@ -129,8 +131,6 @@ Bode_Plotter_TanDelta_group = DataPlotter(
 # ============================================================
 
 
-from plotlib.group import Group
-
 def rev_camp(*slices):
     camp = slices[1].data[:,:2] / slices[0].data[:,:2]
     freq = slices[0].data[:,2].reshape(-1, 1)  # 假设频率在第三列
@@ -139,7 +139,7 @@ def rev_camp(*slices):
 
 
 
-RevCampdata_v2 = Group(data, data_groups).apply(
+RevCampdata_v2 = groups.apply(
     rev_camp,
     select=("Conductivity'(S/cm)", "Conductivity''(S/cm)", "Frequency(Hz)"),
 )
@@ -156,7 +156,7 @@ RevCampdata_v2_pltsubsyy = DataPlotter(
 
 Selected_data = DPL(dataset=data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data
 Conductivity = DataSet()
-for dataslice in Selected_data.iter('groups'):
+for dataslice in Selected_data.iter('samples'):
     conductivity_slice = DT(dataslice).Norm(extended=False,norm_unit='|C|(S/cm)')
     Conductivity.expandata(conductivity_slice)
 data = data.expandata(Conductivity)._rearrange_columns()
@@ -182,7 +182,7 @@ def f_peak(data):
 
 Selected_data = DPL(dataset=data).select("Tan(Delta)","Frequency(Hz)").Selected_data
 f_delta_peak = DataSet()
-for dataslice in Selected_data.iter('groups'):
+for dataslice in Selected_data.iter('samples'):
     f_delta_peak_slice = DT(dataslice).apply(func=f_peak,extended=False)
     f_delta_peak.expandata(f_delta_peak_slice)
 

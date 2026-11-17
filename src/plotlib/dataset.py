@@ -52,24 +52,24 @@ class Column:
         self._dataset.units[self._idx] = value
 
     @property
-    def group_idx(self) -> int:
-        return self._dataset.groups_idx[self._idx]
+    def sample_idx(self) -> int:
+        return self._dataset.sample_idx[self._idx]
 
-    @group_idx.setter
-    def group_idx(self, value: int):
-        """改组号后重算组数、组内序号并校验；校验失败则回滚，不留下半改的状态。"""
-        old = self._dataset.groups_idx[self._idx]
-        self._dataset.groups_idx[self._idx] = value
+    @sample_idx.setter
+    def sample_idx(self, value: int):
+        """改样品号后重算样品数、通道号并校验；校验失败则回滚，不留下半改的状态。"""
+        old = self._dataset.sample_idx[self._idx]
+        self._dataset.sample_idx[self._idx] = value
         try:
             self._dataset.update_attributes()
         except RuntimeError:
-            self._dataset.groups_idx[self._idx] = old
+            self._dataset.sample_idx[self._idx] = old
             self._dataset.update_attributes()
             raise
 
     @property
-    def group_local_idx(self) -> int:
-        return self._dataset.group_local_idx[self._idx]
+    def channel_idx(self) -> int:
+        return self._dataset.channel_idx[self._idx]
 
     @property
     def data(self) -> np.ndarray:
@@ -94,21 +94,21 @@ class Column:
             'local_idx': self.local_idx,
             'name': self.name,
             'unit': self.unit,
-            'group_idx': self.group_idx,
-            'group_local_idx': self.group_local_idx,
+            'sample_idx': self.sample_idx,
+            'channel_idx': self.channel_idx,
             'data': self.data.copy(),
             'father_idx': self.father_idx,
             'initial_idx': self.initial_idx
         }
 
     def __repr__(self):
-        return f"Column({self.local_idx}, name='{self.name}', unit='{self.unit}', group={self.group_idx})"
+        return f"Column({self.local_idx}, name='{self.name}', unit='{self.unit}', sample={self.sample_idx})"
 
     # 支持字典式访问（向后兼容）
-    _ALLOWED_KEYS = frozenset(['name', 'unit', 'group_idx', 'data'])
+    _ALLOWED_KEYS = frozenset(['name', 'unit', 'sample_idx', 'data'])
 
     def __getitem__(self, key):
-        if key not in self._ALLOWED_KEYS and key not in ('local_idx', 'group_local_idx', 'father_idx', 'initial_idx'):
+        if key not in self._ALLOWED_KEYS and key not in ('local_idx', 'channel_idx', 'father_idx', 'initial_idx'):
             raise KeyError(f"Unknown column key: '{key}'")
         return getattr(self, key)
 
@@ -161,12 +161,12 @@ class DataSet():
         self.data: np.ndarray = np.empty((0, 0))  # 纯数值矩阵 (n_rows, n_cols)
         self.names: list = []
         self.units: list = []
-        self.groups_idx: list = []
-        self.group_local_idx: list = []
+        self.sample_idx: list = []
+        self.channel_idx: list = []
         self.local_idx: list = []
         self.father_idx: list = []
         self.initial_idx: list = []
-        self.num_datagroups: int = 0
+        self.num_samples: int = 0
         self.generation: int = 0
         self.status: str = 'empty'  # empty, selected, processed
 
@@ -193,7 +193,7 @@ class DataSet():
             self.data = np.hstack([a, b])
         self.names.extend(other.names)
         self.units.extend(other.units)
-        self.groups_idx.extend(other.groups_idx)
+        self.sample_idx.extend(other.sample_idx)
         self.father_idx.extend(other.father_idx)
         self.initial_idx.extend(other.initial_idx)
         self.update_attributes()
@@ -206,14 +206,14 @@ class DataSet():
         if  not (self.data.shape[1] \
             == len(self.names) \
             == len(self.units) \
-            == len(self.groups_idx) \
+            == len(self.sample_idx) \
             == len(self.father_idx) \
             == len(self.initial_idx) \
                                         ):
             print("数据维度:", self.data.shape)
             print("names 长度:", len(self.names))
             print("units 长度:", len(self.units))
-            print("groups_idx 长度:", len(self.groups_idx))
+            print("sample_idx 长度:", len(self.sample_idx))
             print("father_idx 长度:", len(self.father_idx))
             print("initial_idx 长度:", len(self.initial_idx)) 
             raise RuntimeError("数据解析错误：数据维度与元数据不匹配。")
@@ -221,57 +221,57 @@ class DataSet():
         self.local_idx = list(range(self.data.shape[1]))
 
         # 先把 None 补成实际值，再计算派生属性——
-        # 顺序反了的话，组数和组内序号会按 None 统计，与补全后的组号对不上
+        # 顺序反了的话，样品数和通道号会按 None 统计，与补全后的样品号对不上
         for i, loc in enumerate(self.local_idx):
             if self.father_idx[i] is None:
                 self.father_idx[i] = loc
             if self.initial_idx[i] is None:
                 self.initial_idx[i] = loc
-        # 未指定组号的列（如 DataTransformer 跨组计算的结果）属于同一次计算，
-        # 共用一个新组号；逐列递增会把它们拆进不同组，单位不同时触发单位一致性检查
-        missing = [i for i, g in enumerate(self.groups_idx) if g is None]
+        # 未指定样品号的列（如 DataTransformer 跨样品计算的结果）属于同一次计算，
+        # 共用一个新样品号；逐列递增会把它们拆成不同样品，单位不同时触发单位一致性检查
+        missing = [i for i, g in enumerate(self.sample_idx) if g is None]
         if missing:
-            known = [g for g in self.groups_idx if g is not None]
+            known = [g for g in self.sample_idx if g is not None]
             new_group = max(known) + 1 if known else 0
             for i in missing:
-                self.groups_idx[i] = new_group
+                self.sample_idx[i] = new_group
 
-        self.num_datagroups = self.get_groupnumber()
-        self._get_group_local_idx()
+        self.num_samples = self.count_samples()
+        self._get_channel_idx()
         # Ensure same group-local position uses a consistent unit across groups.
-        self._group_local_indices_unify_check()
+        self._channel_units_unify_check()
         self.status = 'written'
 
         return self
     
     
     
-    def get_groupnumber(self):
-        """获取数据组数量"""
-        if not self.groups_idx:
+    def count_samples(self):
+        """获取样品数量"""
+        if not self.sample_idx:
             return 0
-        return len(set(self.groups_idx))
+        return len(set(self.sample_idx))
     
 
 
-    def _get_group_local_idx(self):
+    def _get_channel_idx(self):
         counter = {}
-        self.group_local_idx = []
-        for g in self.groups_idx:
+        self.channel_idx = []
+        for g in self.sample_idx:
             counter[g] = counter.get(g, 0)
-            self.group_local_idx.append(counter[g])
+            self.channel_idx.append(counter[g])
             counter[g] += 1
         
         return self
     
 
-    def _group_local_indices_unify_check(self):
+    def _channel_units_unify_check(self):
         unit_by_local = {}
-        for i, local_idx in enumerate(self.group_local_idx):
+        for i, local_idx in enumerate(self.channel_idx):
             unit = self.units[i]
             if local_idx in unit_by_local and unit_by_local[local_idx] != unit:
                 raise RuntimeError(
-                    "Unit mismatch for same group_local_idx: "
+                    "Unit mismatch for same channel_idx: "
                     f"idx={local_idx}, {unit_by_local[local_idx]} vs {unit}"
                 )
             unit_by_local[local_idx] = unit
@@ -279,19 +279,19 @@ class DataSet():
     def _rearrange_columns(self):
 
         
-        indices = np.column_stack([self.local_idx,self.groups_idx,self.group_local_idx])
+        indices = np.column_stack([self.local_idx,self.sample_idx,self.channel_idx])
 
         order = np.lexsort((indices[:,2], indices[:,1])) 
 
         self.data = self.data[:, order]
         self.names = [self.names[i] for i in order]
         self.units = [self.units[i] for i in order]
-        self.groups_idx = [self.groups_idx[i] for i in order]
-        self.group_local_idx = [self.group_local_idx[i] for i in order]
+        self.sample_idx = [self.sample_idx[i] for i in order]
+        self.channel_idx = [self.channel_idx[i] for i in order]
         self.local_idx = list(range(len(order)))
         self.father_idx = [self.father_idx[i] for i in order]
         self.initial_idx = [self.initial_idx[i] for i in order]
-        self.num_datagroups = self.num_datagroups
+        self.num_samples = self.num_samples
         self.generation = self.generation
         self.status = self.status
         self.update_attributes()
@@ -317,7 +317,7 @@ class DataSet():
         local_dataset.data = np.column_stack([col.data for col in columns]) if columns else np.empty((self.data.shape[0], 0))
         local_dataset.names = [col.name for col in columns]
         local_dataset.units = [col.unit for col in columns]
-        local_dataset.groups_idx = [col.group_idx for col in columns]
+        local_dataset.sample_idx = [col.sample_idx for col in columns]
         local_dataset.father_idx = [col.father_idx for col in columns]
         local_dataset.initial_idx = [col.initial_idx for col in columns]
         local_dataset.update_attributes()
@@ -333,12 +333,12 @@ class DataSet():
 
 
     def iter(self, method: str):
-        """按指定方式遍历数据集，逐组产出子 DataSet。
+        """按指定方式遍历数据集，该属性的每个取值产出一个子 DataSet。
 
         Parameters
         ----------
         method : str
-            遍历方式: 'groups' | 'names' | 'units'。
+            遍历方式: 'samples' | 'names' | 'units' | 'channels'。
 
         Yields
         ------
@@ -346,10 +346,10 @@ class DataSet():
             每次迭代产出一个子数据集。
         """
         attr_map = {
-            'groups': self.groups_idx,
+            'samples': self.sample_idx,
             'names': self.names,
             'units': self.units,
-            'group_local_idx': self.group_local_idx,
+            'channels': self.channel_idx,
         }
         if method not in attr_map:
             raise ValueError(f"不支持的遍历方式: '{method}'，可选: {list(attr_map.keys())}")
@@ -359,7 +359,7 @@ class DataSet():
             cols = [self.column[j] for j in self.local_idx if attr[j] == key]  # type: ignore
             yield DataSet().columns_to_dataset(cols, extended=False)  # type: ignore
     
-    def form_array(self, data, name, unit, group_idx, repeat_times=1):
+    def form_array(self, data, name, unit, sample_idx, repeat_times=1):
         """根据输入数据和元信息创建一个新的 DataSet 切片。"""
         local_dataset = DataSet()
         if data.ndim == 0:
@@ -369,7 +369,7 @@ class DataSet():
         local_dataset.data = data
         local_dataset.names = name
         local_dataset.units = unit
-        local_dataset.groups_idx = [group_idx]*repeat_times
+        local_dataset.sample_idx = [sample_idx]*repeat_times
         local_dataset.father_idx = [None]*repeat_times  # type: ignore
         local_dataset.initial_idx = [None]*repeat_times  # type: ignore
         local_dataset.update_attributes()

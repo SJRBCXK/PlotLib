@@ -1,5 +1,4 @@
 """数据处理模块。"""
-import re
 import copy
 from collections.abc import Callable
 from typing import TypedDict
@@ -17,7 +16,7 @@ class TransformMetadata(TypedDict, total=False):
 
     names: list[str] | None
     units: list[str] | None
-    groups_idx: int | list[int] | None
+    sample_idx: int | list[int] | None
 
 
 class DataProcessLayer:
@@ -29,7 +28,7 @@ class DataProcessLayer:
     选择方法
     --------
     select(*args)
-        按名称、单位、索引或分组筛选数据列。
+        按名称、单位、索引或样品号筛选数据列。
     by(*args)
         在已选数据上进行二次筛选。
     getdata(...)
@@ -40,7 +39,7 @@ class DataProcessLayer:
     支持以下参数形式：
 
     - 'all'              : 选择全部列
-    - 'group', [0, 1]    : 按组索引选择
+    - 'samples', [0, 1]  : 按样品号选择
     - 'column_name'      : 按列名选择
     - 'unit_name'        : 按单位选择
     - 0, 1, 2            : 按列索引选择
@@ -50,7 +49,7 @@ class DataProcessLayer:
     --------
     >>> layer = DataProcessLayer(dataset)
     >>> layer.select('all').Selected_data              # 选择全部
-    >>> layer.select('group', [0, 1]).Selected_data    # 选择第 0、1 组
+    >>> layer.select('samples', [0, 1]).Selected_data  # 选择样品 0、1
     >>> layer.select(0, 1, 2).Selected_data            # 选择第 0、1、2 列
     >>> layer.select('Pa').Selected_data               # 按单位选择
     >>> layer.select('all').by(0, 1).Selected_data     # 链式筛选
@@ -108,7 +107,7 @@ class DataProcessLayer:
             选择条件，支持多种形式：
 
             - 'all': 选择全部列
-            - 'group', [idx_list]: 按组索引选择
+            - 'samples', [idx_list]: 按样品号选择（关键字须完全一致）
             - str: 按列名或单位名匹配
             - int: 按单个列索引选择
             - list[int] | tuple[int]: 按索引列表选择
@@ -129,7 +128,7 @@ class DataProcessLayer:
         Raises
         ------
         ValueError
-            使用 'group' 关键字但未提供整数列表。
+            使用 'samples' 关键字但未提供整数列表。
         RuntimeError
             选择操作未正确执行。
 
@@ -163,21 +162,21 @@ class DataProcessLayer:
                         father_dataset=dataset_for_select
                     )
 
-                elif re.match(r'group\w*',var,re.IGNORECASE):
+                elif var == 'samples':
                     if len(select_rc) > i+1 and \
                     isinstance(select_rc[i+1], list) and\
                     all(isinstance(x, int) for x in select_rc[i+1]):
-                        group_idx_list = list(select_rc[i+1])
+                        sample_idx_list = list(select_rc[i+1])
                         varlist_idx = [idx
-                            for g in group_idx_list
-                            for idx, grp in enumerate(dataset_for_select.groups_idx) if grp == g] #type: ignore
+                            for g in sample_idx_list
+                            for idx, grp in enumerate(dataset_for_select.sample_idx) if grp == g] #type: ignore
                         Selected_data = self.getdata(
                             varlist_idx=varlist_idx,
                             father_dataset = dataset_for_select
                         )
                         skip_next = True
                     else:
-                        raise ValueError("使用 'groups' 关键字时，必须提供一个整数列表作为下一个参数。")
+                        raise ValueError("使用 'samples' 关键字时，必须提供一个整数列表作为下一个参数。")
 
                 elif var in dataset_for_select.names:#type: ignore
                     Selected_data = self.getdata(
@@ -302,7 +301,7 @@ class DataProcessLayer:
         Selected_data.data = father_dataset.data[:, varlist_idx].copy()
         Selected_data.names = [father_dataset.names[i] for i in varlist_idx]
         Selected_data.units = [father_dataset.units[i] for i in varlist_idx]
-        Selected_data.groups_idx = [father_dataset.groups_idx[i] for i in varlist_idx]
+        Selected_data.sample_idx = [father_dataset.sample_idx[i] for i in varlist_idx]
         Selected_data.update_attributes()
 
         return Selected_data
@@ -373,8 +372,8 @@ class DataTransformer:
         self.data = dataset.data
         self.names = dataset.names
         self.units = dataset.units
-        self.groups_idx = dataset.groups_idx
-        self.num_datagroups = dataset.num_datagroups
+        self.sample_idx = dataset.sample_idx
+        self.num_samples = dataset.num_samples
         self.local_idx = dataset.local_idx
         self.initial_idx = dataset.initial_idx
         self.father_idx = dataset.father_idx
@@ -382,10 +381,10 @@ class DataTransformer:
         self.column = dataset.column
         self.status = 'ready'
         self.result_dataset = DataSet()
-        # New_group 时分配的下一个组号：从「已有最大组号 + 1」开始，
-        # 不能用组数推算——组号可能不连续（如 [0, 3]），按组数会撞上已有组
-        existing = [g for g in dataset.groups_idx if g is not None]
-        self._next_new_group = max(existing) + 1 if existing else 0
+        # new_sample 时分配的下一个样品号：从「已有最大样品号 + 1」开始，
+        # 不能用样品数推算——样品号可能不连续（如 [0, 3]），按样品数会撞上已有样品
+        existing = [g for g in dataset.sample_idx if g is not None]
+        self._next_new_sample = max(existing) + 1 if existing else 0
 
 
     def apply(self,
@@ -395,8 +394,8 @@ class DataTransformer:
         indicies: list[int] | int | None = None,
         column: list[Column] | None = None,
         input_unit: str | None = None,
-        New_group: bool = False,
-        input_groups_idx: int | None = None,
+        new_sample: bool = False,
+        input_sample_idx: int | None = None,
         extended: bool = True
     ) -> DataSet:
         
@@ -415,8 +414,8 @@ class DataTransformer:
             input_data = transformed_data,
             input_name = input_name,
             input_unit = input_unit,
-            input_group_idx = input_groups_idx,
-            New_group = New_group
+            input_sample_idx = input_sample_idx,
+            new_sample = new_sample
         )   
 
         if extended:
@@ -437,8 +436,8 @@ class DataTransformer:
         indicies: list[int] | int | None = None,
         column: list[Column] | None = None,
         norm_unit: str | None = None,
-        New_group: bool = False,
-        norm_groups_idx: int | None = None,
+        new_sample: bool = False,
+        norm_sample_idx: int | None = None,
         extended: bool = True
         ):
         """
@@ -465,8 +464,8 @@ class DataTransformer:
             indicies = indicies,
             input_data = norm_value,
             input_unit = norm_unit,
-            input_group_idx = norm_groups_idx,
-            New_group = New_group
+            input_sample_idx = norm_sample_idx,
+            new_sample = new_sample
         )
 
         if extended:      
@@ -486,11 +485,11 @@ class DataTransformer:
         input_data: np.ndarray | None = None, 
         input_name: str | list[str] | None = None, 
         input_unit: str | None = None, 
-        input_group_idx: int | None = None, 
-        New_group: bool = False
+        input_sample_idx: int | None = None, 
+        new_sample: bool = False
         ):
 
-        _, names, units, groups_idx = self._resolve_input_data(column, indicies)
+        _, names, units, sample_idx = self._resolve_input_data(column, indicies)
 
         data_name = self._auto_naming(
             names_extracted=names,
@@ -504,24 +503,24 @@ class DataTransformer:
             col_num=col_num
         )
 
-        data_groups_idx = self._auto_groups_idx(
-            groups_idx_extracted=groups_idx,
-            groups_idx_input=input_group_idx,
-            New_group=New_group
+        data_sample_idx = self._auto_sample_idx(
+            sample_idx_extracted=sample_idx,
+            sample_idx_input=input_sample_idx,
+            new_sample=new_sample
         )
 
         if naming_func is not None:
             meta = naming_func()
             func_names = meta.get('names')
             func_units = meta.get('units')
-            func_groups_idx = meta.get('groups_idx')
+            func_sample_idx = meta.get('sample_idx')
             
             if func_names is not None:
                 data_name = func_names
             if func_units is not None:
                 data_unit = func_units
-            if func_groups_idx is not None:
-                data_groups_idx = func_groups_idx
+            if func_sample_idx is not None:
+                data_sample_idx = func_sample_idx
     
            
         
@@ -529,7 +528,7 @@ class DataTransformer:
             data = input_data,
             name = data_name,
             unit = data_unit,
-            group_idx = data_groups_idx,
+            sample_idx = data_sample_idx,
             repeat_times = col_num
         )
 
@@ -544,12 +543,12 @@ class DataTransformer:
             col_data = np.array([col.data for col in column]).T
             names = [col.name for col in column]
             units = [col.unit for col in column]
-            groups_idx = [col.group_idx for col in column]
-            return col_data, names, units, groups_idx
+            sample_idx = [col.sample_idx for col in column]
+            return col_data, names, units, sample_idx
 
         if indicies is None:
             # 交给 func 的必须是副本：func 原地修改（如 data *= 0）不能改到原始数据集
-            return self.data.copy(), list(self.names), list(self.units), list(self.groups_idx)
+            return self.data.copy(), list(self.names), list(self.units), list(self.sample_idx)
 
         # 允许 int / list[int] / tuple[int] / np.ndarray；int 也按列表处理：
         # 花式索引返回副本（不是视图），且负索引与 Python 一致（-1 = 最后一列）
@@ -557,9 +556,9 @@ class DataTransformer:
         col_data = self.data[:, idx]
         names = [self.names[i] for i in idx]
         units = [self.units[i] for i in idx]
-        groups_idx = [self.groups_idx[i] for i in idx]
+        sample_idx = [self.sample_idx[i] for i in idx]
 
-        return col_data, names, units, groups_idx
+        return col_data, names, units, sample_idx
 
 
     
@@ -602,24 +601,24 @@ class DataTransformer:
         
         return data_unit
     
-    def _auto_groups_idx(self,
-        groups_idx_extracted:list[int],
-        groups_idx_input:int| None = None,
-        New_group: bool = False,
+    def _auto_sample_idx(self,
+        sample_idx_extracted:list[int],
+        sample_idx_input:int| None = None,
+        new_sample: bool = False,
             ):
         
-        if groups_idx_input is not None:
-            data_groups_idx = groups_idx_input
-        elif New_group:
-            data_groups_idx = self._next_new_group
-            self._next_new_group += 1
-            self.num_datagroups += 1
-        elif len(set(groups_idx_extracted)) == 1:
-            data_groups_idx = groups_idx_extracted[0]
+        if sample_idx_input is not None:
+            data_sample_idx = sample_idx_input
+        elif new_sample:
+            data_sample_idx = self._next_new_sample
+            self._next_new_sample += 1
+            self.num_samples += 1
+        elif len(set(sample_idx_extracted)) == 1:
+            data_sample_idx = sample_idx_extracted[0]
         else:
-            data_groups_idx = None
+            data_sample_idx = None
 
-        return data_groups_idx
+        return data_sample_idx
     
     
     

@@ -1,6 +1,6 @@
 """
 测试对象：src/plotlib/dataloader.py 的 Dataloader.load_data()
-重点：tools/ 输出格式的文件，读进来后 names / units / groups_idx / data 是否正确。
+重点：tools/ 输出格式的文件，读进来后 names / units / sample_idx / data 是否正确。
 
 本文件用到的新写法（Step 4）：
   - fixture 参数：测试函数参数写 eis_dataset，pytest 自动调用 conftest.py 里同名 fixture
@@ -17,25 +17,25 @@ from conftest import EIS_UNITS, load_file, write_grouped_file
 # 直接使用现成的 fixture
 # ──────────────────────────────────────────────
 def test_eis_dataset_metadata(eis_dataset):
-    """每列的组名、单位、组号都按「组 × 列」展开。"""
+    """每列的样品名、单位、样品号都按「样品 × 通道」展开。"""
     assert eis_dataset.names == ['S0'] * 3 + ['S1'] * 3 + ['S2'] * 3
     assert eis_dataset.units == EIS_UNITS * 3
-    assert eis_dataset.groups_idx == [0, 0, 0, 1, 1, 1, 2, 2, 2]
-    assert eis_dataset.group_local_idx == [0, 1, 2] * 3
+    assert eis_dataset.sample_idx == [0, 0, 0, 1, 1, 1, 2, 2, 2]
+    assert eis_dataset.channel_idx == [0, 1, 2] * 3
 
 
 def test_eis_dataset_values(eis_dataset):
     """标识列被跳过，只剩数值列；第 0 行（单位行）不进 data。"""
     assert eis_dataset.data.shape == (3, 9)
-    # 第 0 组的 Zs' 列
+    # 样品 0 的 Zs' 列
     np.testing.assert_array_equal(eis_dataset.data[:, 1], [10, 20, 30])
-    # 第 1 组 = 第 0 组 × 2
+    # 样品 1 = 样品 0 × 2
     np.testing.assert_array_equal(eis_dataset.data[:, 4], [20, 40, 60])
 
 
 # ──────────────────────────────────────────────
 # 工厂 fixture：一个脚本一种数据，同一套测试覆盖所有列宽
-# piezo 每组 6 列、eis_nyquist 8 列、eis_bode 10 列（都含 1 列标识）
+# piezo 每个样品 6 列、eis_nyquist 8 列、eis_bode 10 列（都含 1 列标识）
 # ──────────────────────────────────────────────
 @pytest.mark.parametrize("columns_per_group", [6, 8, 10],
                          ids=['piezo', 'eis_nyquist', 'eis_bode'])
@@ -45,7 +45,7 @@ def test_various_group_widths(make_dataset, columns_per_group):
     row = list(range(n_units))
     ds = make_dataset(units, {'A': [row, row], 'B': [row, row]})
 
-    assert ds.num_datagroups == 2
+    assert ds.num_samples == 2
     assert ds.data.shape == (2, 2 * n_units)
     assert ds.units == units * 2
 
@@ -83,7 +83,7 @@ def test_empty_cell_becomes_nan(make_dataset, fmt):
 # 报错：列数对不上
 # ──────────────────────────────────────────────
 def test_wrong_columns_per_group_raises(tmp_path):
-    """文件每组 4 列，却按每组 6 列去读 → ValueError。"""
+    """文件每个样品 4 列，却按每个样品 6 列去读 → ValueError。"""
     path = write_grouped_file(tmp_path / 'eis.csv', EIS_UNITS,
                              {'S0': [[1, 2, 3]], 'S1': [[1, 2, 3]]})   # 共 8 列
     with pytest.raises(ValueError, match="multiple of COLUMNS_PER_DATASET"):

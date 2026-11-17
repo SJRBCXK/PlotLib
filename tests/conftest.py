@@ -9,11 +9,11 @@ pytest 会自动加载这个文件，这里定义的 fixture 不用 import，
   不用真实实验数据——太大、会变、看不出「正确答案」。
   而是在测试里**现场生成**一个极小的 CSV，格式与 tools/ 的输出完全一致：
 
-      第 0 行：| 组名 | 单位1 | 单位2 | ... | 组名 | 单位1 | ... |
-      第 1 行起：|      | 数值  | 数值  | ... |      | 数值  | ... |
-                 ↑ 标识列（Dataloader 只读第 0 行的组名）
+      第 0 行：| 样品名 | 单位1 | 单位2 | ... | 样品名 | 单位1 | ... |
+      第 1 行起：|        | 数值  | 数值  | ... |        | 数值  | ... |
+                 ↑ 标识列（Dataloader 只读第 0 行的样品名）
 
-  数值手工设计成「一眼能算出结果」，例如第 1 组 = 第 0 组 × 2，
+  数值手工设计成「一眼能算出结果」，例如样品 1 = 样品 0 × 2，
   这样测 Group.apply 时，期望结果可以直接写出来。
 ─────────────────────────────────────────────────────────────────
 """
@@ -30,6 +30,7 @@ import pandas as pd
 import pytest
 
 from plotlib.dataloader import Dataloader
+from plotlib.dataset import DataSet
 
 
 @pytest.fixture(autouse=True)
@@ -79,13 +80,13 @@ def render():
 
 def write_grouped_file(path, units: list[str], groups: dict[str, list[list[float]]]):
     """
-    按 tools/ 的输出格式写一个分组数据文件，格式由扩展名决定：
+    按 tools/ 的输出格式写一个按样品排列的数据文件，格式由扩展名决定：
       .csv          逗号分隔（与 tools 导出一致）
       .xlsx / .xls  Excel
       .txt / .dat   空白分隔（仪器导出的文本格式）
 
-    units  : 每组数据列的单位（各组相同），如 ["Frequency(Hz)", "Zs'(ohm)"]
-    groups : {组名: 数据行列表}，每行长度 == len(units)
+    units  : 每个样品数据列的单位（各样品相同），如 ["Frequency(Hz)", "Zs'(ohm)"]
+    groups : {样品名: 数据行列表}，每行长度 == len(units)
     """
     path = Path(path)
     suffix = path.suffix.lower()
@@ -98,7 +99,7 @@ def write_grouped_file(path, units: list[str], groups: dict[str, list[list[float
     for group_name, rows in groups.items():
         rows = np.asarray(rows, dtype=float)
         assert rows.shape[1] == len(units), f"{group_name} 的列数与 units 不一致"
-        # 标识列：第 0 行是组名，下面留空
+        # 标识列：第 0 行是样品名，下面留空
         columns.append([group_name] + [blank] * len(rows))
         # 数据列：第 0 行是单位，下面是数值
         for col_idx, unit in enumerate(units):
@@ -131,7 +132,7 @@ def load_file(path, columns_per_group: int):
 
 # ──────────────────────────────────────────────
 # 工厂 fixture：一个脚本一种数据？那就让 fixture 返回「造数据的函数」，
-# 每个测试按自己的数据类型（单位、组数、数值）现场造一份。
+# 每个测试按自己的数据类型（单位、样品数、数值）现场造一份。
 # ──────────────────────────────────────────────
 @pytest.fixture
 def make_dataset(tmp_path):
@@ -157,9 +158,9 @@ EIS_UNITS = ["Frequency(Hz)", "Zs'(ohm)", "Zs''(ohm)"]
 @pytest.fixture
 def eis_dataset(make_dataset):
     """
-    3 组 × 3 行的 EIS 数据（fixture 可以依赖别的 fixture）：
-      - 频率三组相同：1, 10, 100
-      - S1 = S0 × 2，S2 = S0 × 3   → 组间做差/做比的结果可以心算
+    3 个样品 × 3 行的 EIS 数据（fixture 可以依赖别的 fixture）：
+      - 三个样品的频率相同：1, 10, 100
+      - S1 = S0 × 2，S2 = S0 × 3   → 样品间做差/做比的结果可以心算
     """
     s0 = [[1,   10.0, -1.0],
           [10,  20.0, -2.0],
@@ -167,3 +168,17 @@ def eis_dataset(make_dataset):
     s1 = [[f, 2 * a, 2 * b] for f, a, b in s0]
     s2 = [[f, 3 * a, 3 * b] for f, a, b in s0]
     return make_dataset(EIS_UNITS, {'S0': s0, 'S1': s1, 'S2': s2})
+
+
+@pytest.fixture
+def sparse_dataset():
+    """
+    样品号不连续（0、5、9）的数据集，模拟 select 挑出部分样品后的情况。
+    每个样品 2 个通道 [x, y]，各 3 行。用于测试配色不越界、不重色。
+    """
+    ds = DataSet()
+    for sample in (0, 5, 9):
+        values = np.arange(6.0).reshape(3, 2) + sample
+        ds.expandata(DataSet().form_array(values, [f'S{sample}'] * 2, ['x', 'y'],
+                                          sample, repeat_times=2))
+    return ds

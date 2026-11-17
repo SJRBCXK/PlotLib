@@ -1,13 +1,13 @@
 # PlotLib
 
-面向科研人员的 Python 科学数据批量绘图库，专为多组实验数据的快速可视化设计。
+面向科研人员的 Python 科学数据批量绘图库，专为多样品实验数据的快速可视化设计。
 
 ## 与 Origin 等工具的对比
 
 | 特性 | PlotLib | Origin / Excel |
 |------|---------|----------------|
-| **数据集管理** | 自动解析分组结构，统一管理多组数据 | 手动逐列选择，重复操作 |
-| **批量绘图** | 一行代码绘制所有数据组 | 逐个添加数据系列 |
+| **数据集管理** | 自动解析「样品 × 通道」结构，统一管理多个样品 | 手动逐列选择，重复操作 |
+| **批量绘图** | 一行代码绘制所有样品 | 逐个添加数据系列 |
 | **迭代选择** | 链式语法 `.select().by()` 灵活筛选 | 鼠标点选，无法复用 |
 | **分组绘图** | `group_plotter()` 自动按组绘制/合并 | 手动分组，样式逐个设置 |
 | **格式复用** | 格式化器可复用于任意图表 | 模板系统复杂，难以迁移 |
@@ -16,8 +16,8 @@
 
 ### 核心优势
 
-1. **智能数据集管理**：自动识别数据分组结构，通过 `group_idx` 和 `group_local_idx` 追踪每列的归属
-2. **声明式迭代选择**：`select('group', [0,1]).by('Pa')` 链式筛选，告别手动选列
+1. **智能数据集管理**：自动识别「样品 × 通道」结构，通过 `sample_idx` 和 `channel_idx` 追踪每列的归属
+2. **声明式迭代选择**：`select('samples', [0,1]).by('Pa')` 链式筛选，告别手动选列
 3. **一键分组绘图**：`group_plotter()` 支持分离/合并模式，自动应用组内样式
 4. **格式化器系统**：`axes_formatter`、`lines_formatter`、`legend_formatter` 三层定制
 
@@ -49,14 +49,14 @@ from plotlib.formatters import make_axes_formatter
 
 # 1. 加载数据（弹出文件选择对话框）
 data = Dataloader(
-    COLUMNS_PER_DATASET=6  # 每组数据的列数
+    COLUMNS_PER_DATASET=6  # 每个样品在文件中占的列数（含标识列）
 ).load_data()
 
-# 2. 一行代码绘制所有数据组
+# 2. 一行代码绘制所有样品
 DataPlotter(
     input_dataset=data,
-    plotdataRowNum_x=0,  # X轴：第0列
-    plotdataRowNum_y=1   # Y轴：第1列
+    plotdataRowNum_x=0,  # X轴：通道 0
+    plotdataRowNum_y=1   # Y轴：通道 1
 ).plot_objects()
 
 plt.show()
@@ -66,7 +66,7 @@ plt.show()
 
 ## 数据格式
 
-输入文件按固定列宽分组，每组包含标识列 + 数据列：
+输入文件按固定列宽排列，每个样品占「标识列 + 数据列」：
 
 ```
 | 标识列  | 数据列1 | 数据列2 | 数据列3 | 标识列  | 数据列1 | ...
@@ -84,29 +84,29 @@ from plotlib.dataloader import Dataloader
 
 # 自动弹出文件选择对话框
 data = Dataloader(
-    COLUMNS_PER_DATASET=6,      # 每组列数（含标识列）
-    DATASET_FRACTION=1/6        # 组数计算系数
+    COLUMNS_PER_DATASET=6,      # 每个样品的列数（含标识列）
+    DATASET_FRACTION=1/6        # 样品数计算系数
 ).load_data()
 
 # 返回 DataSet 对象，包含：
 # - data: np.ndarray        数值矩阵
-# - names: list[str]        各列的组名
+# - names: list[str]        各列的样品名
 # - units: list[str]        各列的单位
-# - groups_idx: list[int]   各列所属的组索引
-# - group_local_idx: list   各列在组内的位置索引
+# - sample_idx: list[int]   各列所属的样品号
+# - channel_idx: list[int]  各列在样品内的通道号
 ```
 
 ### DataPlotter - 绘图器
 
 #### plot_objects() - 多线图
 
-将所有数据组绘制在同一坐标系：
+将所有样品绘制在同一坐标系：
 
 ```python
 DataPlotter(
     input_dataset=data,
-    plotdataRowNum_x=0,  # X轴数据的组内列索引
-    plotdataRowNum_y=1   # Y轴数据的组内列索引
+    plotdataRowNum_x=0,  # X轴数据的通道号
+    plotdataRowNum_y=1   # Y轴数据的通道号
 ).plot_objects(
     axes_formatter=my_formatter,  # 可选：坐标轴格式化
     NegLogScale_y=True            # 可选：Y轴负对数显示
@@ -115,18 +115,21 @@ DataPlotter(
 
 #### group_plotter() - 分组绘图
 
-按配置分组绘制，支持分离或合并模式：
+按分组绘制，支持分离或合并模式。分组先用 `Group` 创建（创建时校验样品号），绘图器只接受 `Group` 对象：
 
 ```python
-# 定义分组配置
+from plotlib.group import Group
+
+# 定义分组配置：{分组名: {'num': [样品号, ...], 其余字段...}}
 data_groups = {
     'Group A': {'num': [0, 1, 2], 'linestyle': '-'},
     'Group B': {'num': [3, 4, 5], 'linestyle': '--'},
 }
+groups = Group(data, data_groups)   # 与绘图器使用同一个数据集
 
 DataPlotter(
     input_dataset=data,
-    plot_data_groups=data_groups,
+    groups=groups,
     plotdataRowNum_x=0,
     plotdataRowNum_y=1
 ).group_plotter(
@@ -173,8 +176,8 @@ layer = DataProcessLayer(data)
 # 选择全部数据
 layer.select('all').Selected_data
 
-# 按组索引选择
-layer.select('group', [0, 1, 2]).Selected_data
+# 按样品号选择（关键字必须写成 'samples'）
+layer.select('samples', [0, 1, 2]).Selected_data
 
 # 按单位筛选
 layer.select('Pa').Selected_data
@@ -183,7 +186,7 @@ layer.select('Pa').Selected_data
 layer.select('all').by(0, 1, 2).Selected_data
 
 # 混合选择
-layer.select('group', [0, 1], 'Ohm', (3, 4, 5)).Selected_data
+layer.select('samples', [0, 1], 'Ohm', (3, 4, 5)).Selected_data
 ```
 
 ### Formatters - 格式化器
@@ -260,7 +263,7 @@ plot = InteractivePlotter(
     plotdataRowNum_x=2,   # Displacement
     plotdataRowNum_y=4,   # Voltage
 )
-# 每个数据组画成一条曲线，再加一个控制曲线显示的滑块
+# 每个样品画成一条曲线，再加一个控制曲线显示的滑块
 fig = plot.plot_plotly_object(figure_formatter=axes_fmt).add_slider(mode="cumulative")
 
 # 导出随窗口等比缩放的 HTML（嵌入 PPT 等页面时不出现滚动条）
@@ -287,6 +290,7 @@ write_fit_html(fig, "plot.html", title="压电极化测试")
 from plotlib.dataloader import Dataloader
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
+from plotlib.group import Group
 import matplotlib.pyplot as plt
 
 # 配置
@@ -324,7 +328,7 @@ data_groups = {
 
 DataPlotter(
     input_dataset=data,
-    plot_data_groups=data_groups,
+    groups=Group(data, data_groups),
     plotdataRowNum_x=5,
     plotdataRowNum_y=6
 ).group_plotter(

@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 import numpy as np
 from .dataset import DataSet
-from .group import resolve_num
+from .group import Group
+from .plot_common import color_positions
 
 # ============================================================================
 # 默认列索引常量
@@ -24,7 +25,7 @@ class DataPlotter:
     绘图方法
     --------
     plot_objects()
-        标准多线图，所有数据组绘制在同一坐标系。
+        标准多线图，所有样品绘制在同一坐标系。
     group_plotter()
         分组绘图，支持合并或分离模式。
     subplotter_yy()
@@ -54,7 +55,7 @@ class DataPlotter:
     def __init__(
         self,
         input_dataset: DataSet,
-        plot_data_groups: dict | None = None,
+        groups: Group | None = None,
         cmap : str | None = None,
         font_family: str = 'Arial',
         font_size: int = 22,
@@ -67,7 +68,6 @@ class DataPlotter:
         plotdataRowNum_y: int = dataRowNum_unit2,
         legend_fontsize: int = 10,
         ticker_width: int = 3,
-        num_datagroups: int | None = None
     ):
         """
         初始化绘图器。
@@ -76,9 +76,9 @@ class DataPlotter:
         ----------
         input_dataset : DataSet
             输入数据集，包含 data、names、units 等属性。
-        plot_data_groups : dict, optional
-            分组配置，格式：{'组名': {'num': [索引列表], 'linestyle': '-'}, ...}
-            'num' 可为 int / list / range；每组必须提供非空的 'num'，否则绘图时报错。
+        groups : Group, optional
+            分组对象，包含各组的样品号及配置；必须建在 input_dataset 上。
+            不接受字典：请先用 Group(input_dataset, config) 创建。None 表示不分组。
         cmap : Colormap, optional
             matplotlib 颜色映射，默认 plasma。
         font_family : str
@@ -96,22 +96,28 @@ class DataPlotter:
         plotrange : int, optional
             绘制的数据点数，None 表示全部。
         plotdataRowNum_x : int
-            X 轴数据的组内列索引。
+            X 轴数据的通道号（样品内的列序号）。
         plotdataRowNum_y : int
-            Y 轴数据的组内列索引。
+            Y 轴数据的通道号（样品内的列序号）。
         legend_fontsize : int
             图例字体大小。
         ticker_width : int
             刻度线宽度。
-        num_datagroups : int, optional
-            数据组数量，None 则从 dataset 自动获取。
         """
-        if num_datagroups is None:
-            num_datagroups = input_dataset.num_datagroups
-       
-        if plot_data_groups is None:
-            plot_data_groups = {}
-       
+        # 一个绘图器只对应一个数据集和一个 Group，三种情况：
+        if groups is None:
+            # 不分组：用空 Group，后面的代码总是面对一个 Group，不用判断 None
+            groups = Group(input_dataset, {})
+        elif not isinstance(groups, Group):
+            # 类型标注只在编辑器里提醒，运行时要自己检查，才能给出清楚的报错
+            raise TypeError(
+                f"groups 必须是 Group 对象，实际是 {type(groups).__name__}；"
+                "请先用 Group(input_dataset, config) 创建。"
+            )
+        elif groups.dataset is not input_dataset:
+            # 用 is 判断「是不是同一个对象」：内容相同的两个数据集也不算
+            raise ValueError("groups 是基于另一个数据集创建的；请基于绘图用的数据集创建 Group。")
+
         resolved_cmap = plt.get_cmap('plasma' if cmap is None else cmap)
         
         # 样式设置以 rcParams 字典形式保存，绘图时通过 plt.rc_context 应用
@@ -133,9 +139,9 @@ class DataPlotter:
         }
 
         self.dataset: DataSet = input_dataset
-        self.groups_config = plot_data_groups  # 只读，不写回
+        self.groups = groups  # 只读：通过 names / sample_ids / options 读取，不修改
         self.data = self.dataset.data
-        self.groups_idx = self.dataset.groups_idx
+        self.sample_idx = self.dataset.sample_idx
         self.column = self.dataset.column
         self.plot_artists: list = []
         self.axesset: dict = {}
@@ -143,7 +149,9 @@ class DataPlotter:
         self.plotdataRowNum_x = plotdataRowNum_x
         self.plotdataRowNum_y = plotdataRowNum_y
         self.cmap = resolved_cmap
-        self.num_datagroups = num_datagroups
+        # 样品号 → 色带位置，按整个数据集排名一次：
+        # 样品号不连续也不越界，且同一样品在分组绘图的各张图里颜色一致
+        self.color_positions = color_positions(self.sample_idx)
 
     # ========================================================================
     # 数据与绘制
@@ -157,11 +165,11 @@ class DataPlotter:
             self.plotrange = self.data.shape[0]
         
 
-    def _get_data(self, group_idx: int, local_idx_x: int, local_idx_y: int,
+    def _get_data(self, sample_idx: int, channel_x: int, channel_y: int,
                   neglog_x: bool = False, neglog_y: bool = False):
-        """取出一个数据组的 X、Y 两列，返回 (x, y, x_label, y_label, x_unit, y_unit)。"""
-        Row_x, x_label, x_unit = self._get_column_data(group_idx, local_idx_x, self.plotrange)
-        Row_y, y_label, y_unit = self._get_column_data(group_idx, local_idx_y, self.plotrange)
+        """取出一个样品的 X、Y 两列，返回 (x, y, x_label, y_label, x_unit, y_unit)。"""
+        Row_x, x_label, x_unit = self._get_column_data(sample_idx, channel_x, self.plotrange)
+        Row_y, y_label, y_unit = self._get_column_data(sample_idx, channel_y, self.plotrange)
 
         if neglog_x:
             Row_x = np.abs(Row_x)
@@ -170,10 +178,10 @@ class DataPlotter:
 
         return Row_x, Row_y, x_label, y_label, x_unit, y_unit
 
-    def _get_column_data(self, group_idx: int, group_local_idx: int, plotrange: int | None):
-        """根据组索引和组内索引获取列数据，返回 (data, name, unit)。"""
+    def _get_column_data(self, sample_idx: int, channel_idx: int, plotrange: int | None):
+        """根据样品号和通道号获取列数据，返回 (data, name, unit)。"""
         for column in self.column:
-            if column['group_idx'] == group_idx and column['group_local_idx'] == group_local_idx:
+            if column['sample_idx'] == sample_idx and column['channel_idx'] == channel_idx:
                 return column['data'][0:plotrange], column['name'], column['unit']
         raise RuntimeError("未找到对应的列数据")
 
@@ -228,23 +236,22 @@ class DataPlotter:
         配置线条样式。
 
         group_name 为 None 时处理 ax 上的全部线条；
-        否则按 groups_config[group_name] 的配置处理本组线条，artists 为 {数据组索引: artist}。
-        apply_linestyle 为 True 时应用组配置中的 linestyle。
+        否则按 self.groups 中该分组的样品号和选项处理本组线条，artists 为 {样品号: artist}。
+        apply_linestyle 为 True 时应用分组选项中的 linestyle。
         """
         default_lw = self.rc_params.get('lines.linewidth', 3)
         if group_name is None:
             for line in ax.get_lines():
                 line.set_linewidth(default_lw)
-        elif group_name in self.groups_config:
+        elif group_name in self.groups.names:
             if artists is None:
                 raise ValueError("按组配置线条时必须传入 artists")
-            group_config = self.groups_config[group_name]
-            indices = resolve_num(group_name, group_config)
-            for i in indices:
-                artist = artists[i]
+            options = self.groups.options(group_name)    # 每个分组取一次，循环里重复用
+            for sample in self.groups.sample_ids(group_name):
+                artist = artists[sample]
                 artist.set_linewidth(default_lw)
-                if apply_linestyle and 'linestyle' in group_config:  # 未配置时保留 rc 中的 plot_style
-                    artist.set_linestyle(group_config['linestyle'])
+                if apply_linestyle and 'linestyle' in options:  # 未配置时保留 rc 中的 plot_style
+                    artist.set_linestyle(options['linestyle'])
 
     def _configure_figures(self, fig):
         """配置图形布局。"""
@@ -327,7 +334,7 @@ class DataPlotter:
         """
         绘制多线图。
 
-        将所有数据组绘制在同一坐标系中，每组一条线。
+        将所有样品绘制在同一坐标系中，每个样品一条线。
 
         Parameters
         ----------
@@ -355,17 +362,17 @@ class DataPlotter:
             fig, ax = plt.subplots(figsize=(10, 8))
             self.plot_artists = []
 
-            for i in sorted(set(self.groups_idx)):
+            for i in sorted(set(self.sample_idx)):
                 Row_x, Row_y, _, y_label, x_unit, y_unit = self._get_data(
-                    group_idx=i,
-                    local_idx_x=self.plotdataRowNum_x,
-                    local_idx_y=self.plotdataRowNum_y,
+                    sample_idx=i,
+                    channel_x=self.plotdataRowNum_x,
+                    channel_y=self.plotdataRowNum_y,
                     neglog_x=NegLogScale_x,
                     neglog_y=NegLogScale_y
                 )
                 artist = self._plot_data(
                     ax, Row_x, Row_y, plot_kind,
-                    color=self.cmap(i / self.num_datagroups),
+                    color=self.cmap(self.color_positions[i]),
                     label=y_label
                 )
                 self.plot_artists.append(artist)
@@ -397,7 +404,7 @@ class DataPlotter:
         """
         分组绘图。
 
-        根据 groups_config 配置将数据分组绘制，支持合并或分离模式。
+        按 self.groups（Group 对象）将数据分组绘制，支持合并或分离模式。
 
         Parameters
         ----------
@@ -413,23 +420,23 @@ class DataPlotter:
             图例格式化函数。
         merge_groups : bool
             True: 所有组合并到一张图；False: 每组单独一张图。
-            合并模式下，被多个组引用的数据组只画一次，使用第一个包含它的组的样式。
+            合并模式下，被多个组引用的样品只画一次，使用第一个包含它的组的样式。
         plot_kind : str
             绘图类型：'line' / 'scatter' / 'bar'。
         apply_group_linestyle : bool
-            分离模式下是否应用 groups_config 中各组的 linestyle（仅 plot_kind='line'）。
+            分离模式下是否应用各分组选项中的 linestyle（仅 plot_kind='line'）。
             合并模式始终应用组线型以区分各组，不受此参数影响。
 
         Returns
         -------
         DataPlotter
             返回 self 以支持链式调用。
-            分离模式：axesset = {组名: {'ax', 'fig', 'artists': {数据组索引: artist}}}
-            合并模式：axesset = {'main': {'ax', 'fig', 'artists': {数据组索引: artist}}}
+            分离模式：axesset = {组名: {'ax', 'fig', 'artists': {样品号: artist}}}
+            合并模式：axesset = {'main': {'ax', 'fig', 'artists': {样品号: artist}}}
         """
         self._ensure_ready()
 
-        if not self.groups_config:
+        if not self.groups.names:
             return self.plot_objects(axes_formatter=axes_formatter,
                                      lines_formatter=lines_formatter,
                                      legend_formatter=legend_formatter,
@@ -437,8 +444,7 @@ class DataPlotter:
                                      NegLogScale_y=NegLogScale_y,
                                      plot_kind=plot_kind)
 
-        # 建图前先校验并规范化所有组的 num，配置有误时不留下残缺图窗
-        group_indices = {name: resolve_num(name, cfg) for name, cfg in self.groups_config.items()}
+        # 分组配置在创建 Group 时已全部校验，这里不会因配置有误而留下残缺图窗
 
         # Initialize variables for type checking
         fig = None
@@ -446,16 +452,17 @@ class DataPlotter:
         x_unit = y_unit = None
 
         self.axesset = {}
-        merged_artists = {}  # merge 模式：所有组的 {数据组索引: artist}
+        merged_artists = {}  # merge 模式：所有组的 {样品号: artist}
 
         if merge_groups:
             with plt.rc_context(self.rc_params):
                 fig, ax = plt.subplots(figsize=(16, 12))
 
         with plt.rc_context(self.rc_params):
-            for group_name, group_config in self.groups_config.items():
-                indices = group_indices[group_name]
-                artists = {}  # {数据组索引: artist}
+            for group_name in self.groups:
+                sample_ids = self.groups.sample_ids(group_name)
+                options = self.groups.options(group_name)
+                artists = {}  # {样品号: artist}
 
                 if not merge_groups:
                     fig, ax = plt.subplots(figsize=(16, 12))
@@ -464,32 +471,32 @@ class DataPlotter:
                 if ax is None:
                     raise RuntimeError("ax is None - this should not happen")
 
-                for i in indices:
-                    # 合并模式：同一数据组被多个组引用时只画一次（重画只会得到完全重合的线），
+                for sample in sample_ids:
+                    # 合并模式：同一样品被多个组引用时只画一次（重画只会得到完全重合的线），
                     # 沿用第一个包含它的组的样式
-                    if merge_groups and i in merged_artists:
+                    if merge_groups and sample in merged_artists:
                         continue
                     Row_x, Row_y, _, y_label, x_unit, y_unit = self._get_data(
-                        group_idx=i,
-                        local_idx_x=self.plotdataRowNum_x,
-                        local_idx_y=self.plotdataRowNum_y,
+                        sample_idx=sample,
+                        channel_x=self.plotdataRowNum_x,
+                        channel_y=self.plotdataRowNum_y,
                         neglog_x=NegLogScale_x,
                         neglog_y=NegLogScale_y
                     )
                     artist = self._plot_data(
                         ax, Row_x, Row_y, plot_kind,
-                        color=self.cmap(i / self.num_datagroups),
+                        color=self.cmap(self.color_positions[sample]),
                         label=y_label
                     )
 
                     # 合并模式：同组统一为组首色 + 组线型（bar 无对应方法，保留各自颜色）
                     if merge_groups:
                         if hasattr(artist, 'set_linestyle'):
-                            artist.set_linestyle(group_config.get('linestyle', '-'))  # type: ignore[union-attr]
+                            artist.set_linestyle(options.get('linestyle', '-'))  # type: ignore[union-attr]
                         if hasattr(artist, 'set_color'):
-                            artist.set_color(self.cmap(indices[0] / self.num_datagroups))  # type: ignore[union-attr]
+                            artist.set_color(self.cmap(self.color_positions[sample_ids[0]]))  # type: ignore[union-attr]
 
-                    artists[i] = artist
+                    artists[sample] = artist
 
                 merged_artists.update(artists)
 
@@ -539,7 +546,7 @@ class DataPlotter:
         """
         绘制 Y-Y 关系图。
 
-        为每个数据组创建独立的 Y-Y 图，用于展示两个变量的相关性（如 Nyquist 图）。
+        为每个样品创建独立的 Y-Y 图，用于展示两个变量的相关性（如 Nyquist 图）。
 
         Parameters
         ----------
@@ -556,27 +563,27 @@ class DataPlotter:
         NegLogScale_Y2 : bool
             是否对 Y2 轴（Y 方向）应用负对数刻度。
         plotdataRowNum_Y1 : int
-            Y1 数据的组内列索引。
+            Y1 数据的通道号（样品内的列序号）。
         plotdataRowNum_Y2 : int
-            Y2 数据的组内列索引。
+            Y2 数据的通道号（样品内的列序号）。
 
         Returns
         -------
         DataPlotter
             返回 self 以支持链式调用。
-            axesset = {数据组索引: {'artist', 'ax', 'fig'}}
+            axesset = {样品号:{'artist', 'ax', 'fig'}}
         """
         self._ensure_ready()
         self.axesset = {}
 
         with plt.rc_context(self.rc_params):
-            for i in sorted(set(self.groups_idx)):
+            for i in sorted(set(self.sample_idx)):
                 fig, ax = plt.subplots(figsize=(12, 8))
 
                 Row_Y1, Row_Y2, Y1_label, _, Y1_unit, Y2_unit = self._get_data(
-                    group_idx=i,
-                    local_idx_x=plotdataRowNum_Y1,
-                    local_idx_y=plotdataRowNum_Y2,
+                    sample_idx=i,
+                    channel_x=plotdataRowNum_Y1,
+                    channel_y=plotdataRowNum_Y2,
                     neglog_x=NegLogScale_Y1,
                     neglog_y=NegLogScale_Y2
                 )
@@ -591,7 +598,7 @@ class DataPlotter:
                 )
                 self._apply_neglog_formatter(ax, NegLogScale_Y1, NegLogScale_Y2)
 
-                # 以组索引为键：不同组的列名可能相同，用标签作键会互相覆盖
+                # 以样品号为键：不同样品的列名可能相同，用标签作键会互相覆盖
                 self.axesset[i] = {'artist': artist, 'ax': ax, 'fig': fig}
 
         return self
@@ -617,7 +624,7 @@ class DataPlotter:
         """
         绘制 X-YY 双轴图。
 
-        为每个数据组创建共享 X 轴的双 Y 轴图，用于显示不同量纲的变量（如位移和电压）。
+        为每个样品创建共享 X 轴的双 Y 轴图，用于显示不同量纲的变量（如位移和电压）。
 
         Parameters
         ----------
@@ -648,38 +655,38 @@ class DataPlotter:
         custom_formatter : callable, optional
             自定义格式化函数，签名 (ax1, ax2, fig) -> None。
         plotdataRowNum_X1 : int
-            X1 数据的组内列索引。
+            X1 数据的通道号（样品内的列序号）。
         plotdataRowNum_Y1 : int
-            Y1 数据的组内列索引。
+            Y1 数据的通道号（样品内的列序号）。
         plotdataRowNum_X2 : int
-            X2 数据的组内列索引。
+            X2 数据的通道号（样品内的列序号）。
         plotdataRowNum_Y2 : int
-            Y2 数据的组内列索引。
+            Y2 数据的通道号（样品内的列序号）。
 
         Returns
         -------
         DataPlotter
             返回 self 以支持链式调用。
-            axesset = {数据组索引: {'artist_Y1', 'artist_Y2', 'ax1', 'ax2', 'fig'}}
+            axesset = {样品号:{'artist_Y1', 'artist_Y2', 'ax1', 'ax2', 'fig'}}
         """
         self._ensure_ready()
         self.axesset = {}
 
         with plt.rc_context(self.rc_params):
-            for i in sorted(set(self.groups_idx)):
+            for i in sorted(set(self.sample_idx)):
                 fig, ax1 = plt.subplots(figsize=(12, 8))
 
                 Row_X1, Row_Y1, _, Y1_label, X1_unit, Y1_unit = self._get_data(
-                    group_idx=i,
-                    local_idx_x=plotdataRowNum_X1,
-                    local_idx_y=plotdataRowNum_Y1,
+                    sample_idx=i,
+                    channel_x=plotdataRowNum_X1,
+                    channel_y=plotdataRowNum_Y1,
                     neglog_x=NegLogScale_X1,
                     neglog_y=NegLogScale_Y1
                 )
                 Row_X2, Row_Y2, _, Y2_label, _, Y2_unit = self._get_data(
-                    group_idx=i,
-                    local_idx_x=plotdataRowNum_X2,
-                    local_idx_y=plotdataRowNum_Y2,
+                    sample_idx=i,
+                    channel_x=plotdataRowNum_X2,
+                    channel_y=plotdataRowNum_Y2,
                     neglog_x=NegLogScale_X2,
                     neglog_y=NegLogScale_Y2
                 )
@@ -712,7 +719,7 @@ class DataPlotter:
                 self._apply_neglog_formatter(ax1, NegLogScale_X1, NegLogScale_Y1)
                 self._apply_neglog_formatter(ax2, NegLogScale_X2, NegLogScale_Y2)
 
-                # 以组索引为键：不同组的列名可能相同，用标签作键会互相覆盖
+                # 以样品号为键：不同样品的列名可能相同，用标签作键会互相覆盖
                 self.axesset[i] = {'artist_Y1': artist_Y1, 'artist_Y2': artist_Y2,
                                    'ax1': ax1, 'ax2': ax2, 'fig': fig}
 

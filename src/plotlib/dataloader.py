@@ -10,7 +10,7 @@ from .dataset import DataSet
 # ============================================================================
 # 全局配置
 # ============================================================================
-INPUT_COLUMNS_PER_DATASET = 6      # 每组数据集的列数（1列标识 + 5列数据）
+INPUT_COLUMNS_PER_DATASET = 6      # 每个样品在文件中占的列数（1列标识 + 5列数据）
 INPUT_DATASET_FRACTION = 1 / INPUT_COLUMNS_PER_DATASET
 
 
@@ -20,11 +20,11 @@ class Dataloader:
     """
     结构化数据文件加载器。
 
-    从 Excel/CSV/文本文件中读取分组数据，解析为统一的 DataSet 对象。
+    从 Excel/CSV/文本文件中读取按样品排列的数据，解析为统一的 DataSet 对象。
 
     输入文件格式
     ------------
-    文件按固定列宽分组，每组 COLUMNS_PER_DATASET 列（默认 6 列）：
+    文件按固定列宽排列，每个样品占 COLUMNS_PER_DATASET 列（默认 6 列）：
 
         | 标识列 | 数据列1 | 数据列2 | 数据列3 | 数据列4 | 数据列5 | 标识列 | ... |
         |--------|---------|---------|---------|---------|---------|--------|-----|
@@ -37,18 +37,18 @@ class Dataloader:
 
         属性              类型              说明
         ─────────────────────────────────────────────────────────────────
-        names             list[str]         各列对应的组名（重复展开）
+        names             list[str]         各列对应的样品名（重复展开）
         units             list[str]         各列的单位
         data              np.ndarray        数值矩阵 (n_rows, n_cols)
-        num_datagroups    int               数据组数量
-        groups_idx        list[int]         各列所属的组索引
-        group_local_idx   list[int]         各列在组内的局部索引
+        num_samples       int               样品数
+        sample_idx        list[int]         各列所属的样品号
+        channel_idx       list[int]         各列在样品内的通道号
 
     使用示例
     --------
     >>> dataset = Dataloader().load_data()
-    >>> dataset.data[:, 0:5]      # 第一组的数据
-    >>> dataset.names[0:5]        # 第一组的列名
+    >>> dataset.data[:, 0:5]      # 第一个样品的数据
+    >>> dataset.names[0:5]        # 第一个样品的列名
     """
 
     def __init__(self,
@@ -60,9 +60,9 @@ class Dataloader:
         Parameters
         ----------
         DATASET_FRACTION : float, optional
-            组数计算系数，默认 1/6。
+            样品数计算系数，默认 1/6。
         COLUMNS_PER_DATASET : int, optional
-            每组的列数，默认 6。
+            每个样品的列数，默认 6。
         """
         self.file_path: str | None = None
         self.dataset: pd.DataFrame | None = None
@@ -116,15 +116,15 @@ class Dataloader:
             data : np.ndarray, shape (n_rows, n_cols)
                 数值矩阵，每列对应一个数据序列。
             names : list[str]
-                各列的组名（同组内各列名称相同）。
+                各列的样品名（同一样品的各列名称相同）。
             units : list[str]
                 各列的单位。
-            num_datagroups : int
-                数据组的数量。
-            groups_idx : list[int]
-                各列所属的组索引（0, 0, ..., 1, 1, ...）。
-            group_local_idx : list[int]
-                各列在组内的局部索引（0, 1, 2, 3, 4, 0, 1, ...）。
+            num_samples : int
+                样品数。
+            sample_idx : list[int]
+                各列所属的样品号（0, 0, ..., 1, 1, ...）。
+            channel_idx : list[int]
+                各列在样品内的通道号（0, 1, 2, 3, 4, 0, 1, ...）。
             local_idx : list[int]
                 各列的全局索引（0, 1, 2, ...）。
             father_idx : list[int]
@@ -165,21 +165,21 @@ class Dataloader:
         if total_cols % self.COLUMNS_PER_DATASET != 0:
             raise ValueError("Column count must be a multiple of COLUMNS_PER_DATASET.")
 
-        self.num_datagroups = int(len(self.dataset.columns) * self.DATASET_FRACTION)
+        self.num_samples = int(len(self.dataset.columns) * self.DATASET_FRACTION)
 
-        # 提取组名（每列重复对应的组标识）
+        # 提取样品名（每列重复对应样品的标识）
         self.names = [self.dataset.iloc[0, i * self.COLUMNS_PER_DATASET]
-                      for i in range(self.num_datagroups)
+                      for i in range(self.num_samples)
                       for _ in range(self.COLUMNS_PER_DATASET - 1)]
 
-        # 记录每列所属的组索引
-        self.groups_idx = [i
-                           for i in range(self.num_datagroups)
+        # 记录每列所属的样品号
+        self.sample_idx = [i
+                           for i in range(self.num_samples)
                            for _ in range(self.COLUMNS_PER_DATASET - 1)]
 
         # 提取单位
         self.units = [unit
-                      for i in range(self.num_datagroups)
+                      for i in range(self.num_samples)
                       for unit in self.dataset.iloc[0, i * self.COLUMNS_PER_DATASET + 1:(i + 1) * self.COLUMNS_PER_DATASET].tolist()]
 
         # 提取数值数据（跳过标识列和标题行）
@@ -187,33 +187,33 @@ class Dataloader:
             self.dataset.iloc[1:, i * self.COLUMNS_PER_DATASET + 1:(i + 1) * self.COLUMNS_PER_DATASET]
             .apply(pd.to_numeric, errors='coerce')
             .to_numpy(dtype=np.float64, na_value=np.nan)
-            for i in range(self.num_datagroups)
+            for i in range(self.num_samples)
         ]
 
         # 水平拼接所有数据块
         self.data = np.hstack(data_parts)
         
         # 数据一致性校验
-        expected_cols = self.num_datagroups * (self.COLUMNS_PER_DATASET - 1)
+        expected_cols = self.num_samples * (self.COLUMNS_PER_DATASET - 1)
         if not (self.data.shape[1] == len(self.names) == len(self.units)
-                == len(self.groups_idx) == expected_cols):
+                == len(self.sample_idx) == expected_cols):
             raise RuntimeError("数据解析错误：数据维度与元数据不匹配。")
 
         # 初始化索引
         self.local_idx = list(range(self.data.shape[1]))
         self.initial_idx = list(self.local_idx)
         self.father_idx = list(self.local_idx)
-        self._get_group_local_idx()
+        self._get_channel_idx()
 
         return self._formatter()
 
-    def _get_group_local_idx(self) -> Dataloader:
-        """计算每列在其所属组内的局部索引。"""
+    def _get_channel_idx(self) -> Dataloader:
+        """计算每列在其所属样品内的通道号。"""
         counter: dict[int, int] = {}
-        self.group_local_idx = []
-        for g in self.groups_idx:
+        self.channel_idx = []
+        for g in self.sample_idx:
             counter[g] = counter.get(g, 0)
-            self.group_local_idx.append(counter[g])
+            self.channel_idx.append(counter[g])
             counter[g] += 1
         return self
 
@@ -223,14 +223,14 @@ class Dataloader:
         dataset.names = self.names
         dataset.units = self.units
         dataset.data = self.data  # type: ignore
-        dataset.num_datagroups = self.num_datagroups  # type: ignore
-        dataset.groups_idx = self.groups_idx  # type: ignore
-        dataset.group_local_idx = self.group_local_idx  # type: ignore
+        dataset.num_samples = self.num_samples  # type: ignore
+        dataset.sample_idx = self.sample_idx  # type: ignore
+        dataset.channel_idx = self.channel_idx  # type: ignore
         dataset.local_idx = self.local_idx  # type: ignore
         dataset.father_idx = self.father_idx  # type: ignore
         dataset.initial_idx = self.initial_idx  # type: ignore
         dataset.status = 'loaded'
-        dataset._group_local_indices_unify_check()
+        dataset._channel_units_unify_check()
         return dataset
 
 

@@ -15,19 +15,19 @@ data = Dataloader(
 Group = [0,2,1,8,7]
 Group2 = [3,4,5,6,9]
 
-selected_data = DPL(dataset=data).select('Group1',Group,'Group2',Group2).by("Zs'(ohm)","Zs''(ohm)")
+selected_data = DPL(dataset=data).select('samples',Group,'samples',Group2).by("Zs'(ohm)","Zs''(ohm)")
 impendence = DataSet()
 
-for dataslice in selected_data.Selected_data.iter('groups'):
+for dataslice in selected_data.Selected_data.iter('samples'):
     impendence_slice = DT(dataslice).Norm(extended=False)
     impendence.expandata(impendence_slice)
 
 print(selected_data.Selected_data.names)
 print(selected_data.Selected_data.units)
-print(selected_data.Selected_data.groups_idx)
-print(selected_data.Selected_data.group_local_idx)
+print(selected_data.Selected_data.sample_idx)
+print(selected_data.Selected_data.channel_idx)
 print(selected_data.Selected_data.father_idx)
 print(selected_data.Selected_data.initial_idx)
 print(selected_data.Selected_data.column[-1])
-print(impendence.groups_idx)
+print(impendence.sample_idx)
 # print(impendence.column[-1])

@@ -49,6 +49,18 @@ def test_plot_data_and_repeated_calls(eis_dataset):
     assert all(a is b for a, b in zip(plot.plot_artists, _traces(_asset(plot))))
 
 
+def test_sparse_sample_ids_colors(sparse_dataset):
+    """
+    样品号 0、5、9：与 matplotlib 用同一套色带位置 0、1/3、2/3（见 test_plot_common.py）。
+    回归：曾把样品号当作颜色列表的下标，画到样品 5 时 IndexError。
+    """
+    import plotly.colors as plyc
+
+    fig = _asset(InteractivePlotter(None, sparse_dataset).plot_plotly_object())
+    expected = plyc.sample_colorscale(plyc.get_colorscale('Plasma'), [0, 1/3, 2/3])
+    assert [trace.line.color for trace in _traces(fig)] == expected
+
+
 def test_template_hides_minor_log_labels(eis_dataset):
     """对数轴 10^n 之间默认显示小号 2、5 标签，大小不一致，模板默认关闭。"""
     fig = _asset(InteractivePlotter(None, eis_dataset).plot_plotly_object())

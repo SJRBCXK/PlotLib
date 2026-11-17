@@ -12,6 +12,7 @@ from .formatters import (
     make_lines_formatter,
 )
 from .group import Group
+from .plot_common import color_positions
 
 if TYPE_CHECKING:
     # 仅供类型检查和编辑器补全；运行时由下面的 __getattr__ 按需导入。

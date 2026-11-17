@@ -58,7 +58,7 @@ def cal_EB(data):
 
 Selected_data = DPL(data).select("应变","应力(MPa)").Selected_data
 EB_data = DataSet()
-for dataslice in Selected_data.iter('groups'):
+for dataslice in Selected_data.iter('samples'):
     EB_slice = DT(dataslice).apply(func = cal_EB)
     EB_data.expandata(EB_slice)
 print(EB_data.data)

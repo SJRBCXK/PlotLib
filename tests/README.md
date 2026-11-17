@@ -3,9 +3,9 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**206 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**242 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
 
-> 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各组都相同的单位，
+> 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各样品都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
 > 所以断言要能**区分对错**：查具体数值、列顺序、原始位置，并且数据要设计得让「选错」显现出来。
 
@@ -40,10 +40,11 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `conftest.py` | — | 共享的测试数据与环境（见下节），不含测试 |
 | `test_dataloader.py` | `src/plotlib/dataloader.py` | 数据文件能正确读成 DataSet |
 | `test_dataset.py` | `src/plotlib/dataset.py` | DataSet 的创建、拼接、列视图、遍历、重排 |
-| `test_processor.py` | `src/plotlib/processor.py` 的 `DataProcessLayer` | `select` / `by` 按组、名字、单位、索引选列 |
+| `test_processor.py` | `src/plotlib/processor.py` 的 `DataProcessLayer` | `select` / `by` 按样品号、名字、单位、索引选列 |
 | `test_transformer.py` | `src/plotlib/processor.py` 的 `DataTransformer` | `apply` / `Norm` 的计算结果与自动命名 |
-| `test_group.py` | `src/plotlib/group.py` 的 `resolve_num` | 分组配置里的 `num` 能正确解析，写错能报出是哪组 |
-| `test_group_apply.py` | `src/plotlib/group.py` 的 `Group` | 组间计算结果、命名、分组编号正确 |
+| `test_group.py` | `src/plotlib/group.py` 的 `Group` | `num` 各种写法的格式化；创建时校验、读接口返回副本、增删改先校验再修改 |
+| `test_group_apply.py` | `src/plotlib/group.py` 的 `Group` | 组间计算结果、命名、结果样品号正确 |
+| `test_plot_common.py` | `src/plotlib/plot_common.py` | 两个绘图器共用的函数：样品号 → 色带位置 |
 | `test_plotter.py` | `src/plotlib/plotter.py` | 四种绘图方法画出的线、标签、样式正确 |
 | `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
 | `test_interactive.py` | `src/plotlib/interactive.py` | Plotly 曲线的数据与标签、滑块档位（single / cumulative）与默认外观、报错 |
@@ -58,7 +59,8 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 
 | 名称 | 类型 | 提供什么 |
 |---|---|---|
-| `eis_dataset` | fixture | 3 组 × 3 行 EIS 数据（见下表）；**S1 = S0×2，S2 = S0×3**，期望结果可心算 |
+| `eis_dataset` | fixture | 3 个样品 × 3 行 EIS 数据（见下表）；**S1 = S0×2，S2 = S0×3**，期望结果可心算 |
+| `sparse_dataset` | fixture | 样品号不连续（0、5、9）的数据集，每个样品 2 个通道；测试配色用 |
 | `make_dataset(units, groups, fmt)` | fixture（工厂） | 按需造任意列数、任意格式（`csv`/`xlsx`/`txt`）的数据集 |
 | `write_grouped_file` / `load_file` | 普通函数 | 写文件 / 读文件，需要单独控制文件时用 |
 | `close_figures` | 自动 fixture | 每个测试后关闭所有图窗 |
@@ -68,7 +70,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 
 | 列号 | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |---|---|---|---|---|---|---|---|---|---|
-| 组 | S0 | S0 | S0 | S1 | S1 | S1 | S2 | S2 | S2 |
+| 样品 | S0 | S0 | S0 | S1 | S1 | S1 | S2 | S2 | S2 |
 | 单位 | Freq | Zs' | Zs'' | Freq | Zs' | Zs'' | Freq | Zs' | Zs'' |
 
 频率都是 1 / 10 / 100；S0 的 Zs' = 10 / 20 / 30，Zs'' = −1 / −2 / −3。
@@ -76,93 +78,118 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 ## 测试清单（测试保证的行为）
 
 ### 数据加载 — `test_dataloader.py`
-- 每列的组名、单位、组号、组内序号按「组 × 列」正确展开；标识列和单位行不进入数值矩阵
-- 每组 6 / 8 / 10 列（piezo / eis_nyquist / eis_bode）都能读
+- 每列的样品名、单位、样品号、通道号按「样品 × 通道」正确展开；标识列和单位行不进入数值矩阵
+- 每个样品 6 / 8 / 10 列（piezo / eis_nyquist / eis_bode）都能读
 - **csv、xlsx、txt 三种格式读出完全相同的结果**
 - 空单元格读成 NaN，不影响其他数值
 - txt 中多个空格、制表符混用都当作一个分隔符（pandas 3 兼容的回归测试）
-- 列数不是每组列数的整数倍 → `ValueError`；不支持的扩展名 → `RuntimeError`
+- 列数不是每个样品列数的整数倍 → `ValueError`；不支持的扩展名 → `RuntimeError`
 - 不给文件路径时走「选择文件」对话框（测试中用 `monkeypatch` 替换掉弹窗）
 
 ### 数据容器 — `test_dataset.py`
-- `form_array`：自动补全组号、组内序号、father/initial 索引；标量和一维数组转成二维
-- 未指定组号（None）的列共用一个新组（已有最大组号 + 1），组数与组内序号与之一致
+- `form_array`：自动补全样品号、通道号、father/initial 索引；标量和一维数组转成二维
+- 未指定样品号（None）的列共用一个新样品（已有最大样品号 + 1），样品数与通道号与之一致
 - 元数据长度与数据列数不一致 → `RuntimeError`
 - `expandata`：横向拼接列和元数据；行数不同时短的一方补 NaN
-- 同一组内位置在不同组里单位不同 → `RuntimeError`
+- 同一通道在不同样品里单位不同 → `RuntimeError`
 - `column[i]` 是视图：改名字、单位、数据都直接写回 DataSet；`to_dict()` 是副本
-- 通过 `column[i].group_idx` 改组号：组数、组内序号随之更新；破坏单位约束时报错并回滚
+- 通过 `column[i].sample_idx` 改样品号：样品数、通道号随之更新；破坏单位约束时报错并回滚
 - 字典式访问 `col['unit']`；未知键、只读键 → `KeyError`
 - `column` 支持负索引、切片、迭代；越界 → `IndexError`
-- `iter('groups' / 'units')` 按组 / 按单位产出子数据集；不支持的方式 → `ValueError`
+- `iter('samples' / 'units')` 按样品 / 按单位产出子数据集；不支持的方式 → `ValueError`
 - `columns_to_dataset`：`extended=False` 生成新数据集并记住原位置，`True` 追加到自身
-- `_rearrange_columns` 按「组号 → 组内序号」排序
+- `_rearrange_columns` 按「样品号 → 通道号」排序
 
 ### 选列 — `test_processor.py`
 - `select('all')` 选全部列；`by('all')` 时 `initial_idx` 仍指向原始数据
-- `select('group', [1, 2])` 按组选；`'Group1'`、`'groups'` 等写法都认（大小写不敏感）
+- `select('samples', [1, 2])` 按样品号选；关键字必须完全一致，`'Samples'`、`'group'` 等其他写法按名字查找，找不到报错
 - 名字/单位找不到 → `ValueError`（指出是哪个）；不支持的条件类型（如 float）→ `TypeError`
-- 按组名、按单位、按单个索引 / 索引列表 / 多个索引选列
+- 按样品名、按单位、按单个索引 / 索引列表 / 多个索引选列
 - 多个条件依次累加；`extended=False` 只保留最后一个条件
 - 元组表示嵌套条件
 - 选出的数据是副本，修改不影响原数据
 - `initial_idx` 记住在原始数据中的位置
 - `by()` 在已选结果上再筛：`father_idx` 指上一层位置，`initial_idx` 仍指原始位置
-- `'group'` 后不是整数列表 → `ValueError`；跨组选出单位错位的列 → `RuntimeError`
+- `'samples'` 后不是整数列表 → `ValueError`；跨样品选出单位错位的列 → `RuntimeError`
 - 未先 `select` 就 `by` → `RuntimeError`；`getdata` 参数不全 → `ValueError`
 
 ### 变换 — `test_transformer.py`
 - `apply`：结果数值正确；可传 `indicies`（int / list，支持负索引）、`column`，或都不传（全部列）
 - func 即使原地修改收到的数组（`data *= 0`），原始数据也不变
-- 跨组、单位不同的多列结果归为同一组，不报单位冲突
+- 跨样品、单位不同的多列结果归为同一样品，不报单位冲突
 - 自动命名：一列 → 沿用原名；多列同名 → `Results_i_of_<名>`；否则名字拼接
 - 自动单位：输入单位相同 → 沿用，否则 `unitless_i`
 - `input_name` / `input_unit` / `naming_func` 可覆盖自动值（`naming_func` 返回 None 的字段保持自动）；`input_name` 传字符串时按列数重复
 - 同一个 `DataTransformer` 多次调用：`extended=True` 累加，`False` 只留最后一次
 - 不修改原始数据
-- `Norm`：L1、L2 范数数值正确；可指定单位、组号
-- `New_group=True`：新组号 = 已有最大组号 + 1，再次分配继续 + 1；组号不连续（如 `[0, 3]`）也不撞号
+- `Norm`：L1、L2 范数数值正确；可指定单位、样品号
+- `new_sample=True`：新样品号 = 已有最大样品号 + 1，再次分配继续 + 1；样品号不连续（如 `[0, 3]`）也不撞号
 
-### 分组配置解析 — `test_group.py`
-- `num` 写成 list / tuple / int / range / numpy 整数 / ndarray 都统一成 `list[int]`，元素是 Python `int`
-- 组号 `0` 是合法值（不会被当成「空」跳过）
+### 分组 — `test_group.py`
+全部通过 `Group` 测试；校验与格式化的内部函数 `_check_group` / `_resolve_num` 不直接测。
+
+**`num` 的写法与格式化**
+- `num` 写成 list / tuple / int / range / numpy 整数 / ndarray 都格式化为 `list[int]`，元素是 Python `int`
+- 样品号 `0` 是合法值（不会被当成「空」跳过）
 - 缺 `num` 或 `num` 为空 → `ValueError`；类型不对（str、None、float…）→ `TypeError`
 - 容器里的元素不是整数（`[1.9]`、`['2']`、浮点 ndarray）→ `TypeError`，不会被悄悄截断
-- 报错信息里带出错的组名
-- 不修改传入的配置字典
+- 原地格式化只改 `num`，其余字段原样保留
+
+**`Group` 的校验与接口**
+- 只接受完整写法 `{分组名: {'num': [...], 其余字段}}`；简写 `{'A': [0, 1]}` → `TypeError`，提示正确写法
+- 样品号重复 → `ValueError`；样品号不在数据集里 → `ValueError`，信息含分组名、全部不存在的样品号、已有样品号
+- 各种配置错误（缺 num、为空、类型、简写、重复、样品不存在）的报错信息都带出错的分组名
+- 读接口：`names` / `for name in group` 保持书写顺序；`sample_ids(name)` 保持书写顺序；`options(name)` 是 `num` 以外的全部字段；
+  都返回副本，改返回值不影响 `Group`；`to_config()` 返回当前配置的新字典；查询不存在的分组 → `ValueError`
+- 传入的配置：每个分组的 `num` 被原地格式化为 `list[int]`（设计决定）；增删改不往原字典里加、删分组
+- `add` 只新增（已存在报错）、`set` 整体替换已有分组且位置不变（不存在报错）、`delete` 删除（不存在报错）；都返回 `self`
+- 修改先校验全部再生效：任何一个分组不合法，`Group` 保持原样
 
 ### 组间计算 — `test_group_apply.py`
-- 两组相减、相除结果正确
-- 配置里有几项，结果就有几组，组号从 0 依次编号
-- 未提供 `naming` 时自动命名为 `函数名_组名_组名`；提供时使用自定义名字和单位（含频率透传列、结果列多于输入列）
+- 两个样品相减、相除结果正确
+- 配置里有几个分组，结果就有几个样品，样品号从 0 依次编号
+- 未提供 `naming` 时自动命名为 `函数名_样品名_样品名`；提供时使用自定义名字和单位（含频率透传列、结果列多于输入列）
 - callback 返回一维数组 / 标量时自动转成列 / 1×1
 - 不修改原始数据集
-- 配置引用了不存在的组号 → 报错（`无匹配列`）；各组列数不同 → 报错（`列数不一致`）
-- `resolve_group_indices` 按组名取组号；组名不存在 → `ValueError`
+- 配置引用了不存在的样品号 → 创建 `Group` 时就报错（不等到 `apply`）；各样品列数不同 → 报错（`列数不一致`）
+
+### 绘图公共函数 — `test_plot_common.py`
+- `color_positions`：去重、排序后，位置 = 排名 ÷ 样品数。`[0, 5, 9]` 与 `[0, 1, 2]` 得到相同的 0、1/3、2/3；
+  乱序、重复不影响结果；单个样品为 0；空输入得到空字典
+- 样品号连续时与旧公式「样品号 ÷ 样品数」结果相同，已有图的颜色不变
 
 ### 绘图 — `test_plotter.py`
 **`plot_objects`**
-- 每个数据组一条线，全部在一张图上，线上数值等于数据集对应列
-- X/Y 轴标题是单位，图例是组名
+- 每个样品一条线，全部在一张图上，线上数值等于数据集对应列
+- X/Y 轴标题是单位，图例是样品名
 - `plotrange` 限制绘制点数
 - `NegLogScale_x` / `NegLogScale_y`：数据取绝对值，刻度文字带负号；两轴同时启用时各保留自己的格式
 - `plot_kind` 为 line / scatter / bar 时生成对应类型的对象，且点 / 柱的数据正确；不支持的类型报错
-- 列索引超出每组列数 → `RuntimeError`
+- 通道号超出每个样品的通道数 → `RuntimeError`
 - `axes_formatter` / `lines_formatter` / `legend_formatter` 都会被调用，拿到正确的对象
 - `lines_formatter` 改线型后，图例同步更新
 
+**分组参数 `groups`**
+- 只接受 `Group` 对象：传字典 → `TypeError`，提示先用 `Group(dataset, config)` 创建
+- `Group` 必须建在绘图器的同一个数据集上（`is` 判断），否则 → `ValueError`
+- 不传时是空 `Group`
+- 配置校验在创建 `Group` 时完成（见 `test_group.py`），绘图器里不再解析配置，也就不会因配置有误留下残缺图窗
+
 **`group_plotter`**
-- 分离模式：每个配置组一张图，`artists` 以数据组号为键
-- `apply_group_linestyle=True` 用组配置的线型，否则保持默认实线
-- 合并模式：只有一张图；被多个组共用的数据组只画一次，沿用第一个组的线型和颜色；同组统一颜色
-- 不修改 `groups_config`
-- 配置有误时**先报错再画图**，不留下残缺图窗
-- 没有分组配置时退回 `plot_objects`
+- 分离模式：每个分组一张图，`artists` 以样品号为键
+- `apply_group_linestyle=True` 用分组选项里的线型，否则保持默认实线
+- 合并模式：只有一张图；被多个组共用的样品只画一次，沿用第一个组的线型和颜色；同组统一颜色
+- 绘图不修改分组：画图前后 `groups.to_config()` 不变
+- 没有分组时退回 `plot_objects`
+
+**配色（样品号不连续）**
+- 样品号 0、5、9：`plot_objects` 的三条线依次取 plasma 色带 0、1/3、2/3 处的颜色（回归：5、9 曾被截断成同一个末端色）
+- `group_plotter`：排名基于整个数据集；分离模式各样品各自取色，合并模式统一为组首样品的颜色
 
 **`subplotter_yy` / `subplotter_xyy`**
-- 每个数据组一张图，以组号为键
+- 每个样品一张图，以样品号为键
 - yy：X/Y 数据与轴标题对应所选两列（如 Nyquist 图）
-- xyy：左右两侧各用自己的 X、Y 列；左轴红、右轴蓝，两轴共享 X 轴，`twinx` 不新开图窗；`custom_formatter` 每组调用一次
+- xyy：左右两侧各用自己的 X、Y 列；左轴红、右轴蓝，两轴共享 X 轴，`twinx` 不新开图窗；`custom_formatter` 每个样品调用一次
 
 ### 格式化器 — `test_formatters.py`
 **matplotlib（默认 backend）**
@@ -180,10 +207,11 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - `combine_formatters`：按传入顺序调用，跳过 `None`
 
 ### 交互绘图 — `test_interactive.py`
-- 每个数据组一条曲线，X/Y 数据等于数据集对应列，曲线名是组名，坐标轴标题是单位
+- 每个样品一条曲线，X/Y 数据等于数据集对应列，曲线名是样品名，坐标轴标题是单位
+- 样品号 0、5、9：曲线颜色取 Plasma 色带 0、1/3、2/3 处，与 matplotlib 同一套位置（回归：曾在样品 5 处 `IndexError`）
 - 重复调用 `plot_plotly_object` 生成新的 Figure，`plot_artists` 与 Figure 中的 trace 一一对应
 - 模板默认关闭对数轴 10ⁿ 之间的小号数字标签（`minorloglabels="none"`）
-- 滑块：`single` 每档只显示当前曲线，`cumulative` 显示第一条到当前一条；初始可见性与第 0 档一致；档位标签和标题都是组名；重复添加只保留一个滑块
+- 滑块：`single` 每档只显示当前曲线，`cumulative` 显示第一条到当前一条；初始可见性与第 0 档一致；档位标签和标题都是样品名；重复添加只保留一个滑块
 - 滑块默认外观：初始标题为第 0 档的名字；短标签可见，名称太长（如 33 条 `Mg10-back-1mm-relax-i`）时隐藏刻度标签、保留当前值文字；`slider_formatter` 可覆盖默认值
 - 报错：未绘图就加滑块、图中没有曲线 → `RuntimeError`；`mode` 写错 → `ValueError`，且不改动已有的图；空数据集 → 明确的 `RuntimeError`
 
@@ -205,13 +233,13 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `processor.select('all')` | 必定报「数据选择未执行」 | 改走 `getdata`，与其他条件同一路径 |
 | `processor.select` 名字拼错 | 静默忽略；跟在有效条件后会把上一结果再追加一遍 | 找不到报 `ValueError`，不支持的类型报 `TypeError` |
 | `DataTransformer` 取列 | func 原地修改会改掉原始数据；`indicies=-1` 得到空列 | int 也走花式索引（副本、支持负数），全部列时 `.copy()` |
-| `DataTransformer` 新组号 | 按「组数 + 1」算，组号不连续时撞号 | 「已有最大组号 + 1」，每次分配后 + 1 |
+| `DataTransformer` 新样品号 | 按「样品数 + 1」算，样品号不连续时撞号 | 「已有最大样品号 + 1」，每次分配后 + 1 |
 | `DataTransformer` `input_name` | 字符串被拆成单个字符 | 字符串按列数重复，与 `input_unit` 一致 |
-| `DataSet.update_attributes` | `None` 组号先统计后补全，元数据自相矛盾 | 先补全再统计；同一批 `None` 共用一个新组 |
-| `Column.group_idx` 赋值 | 组数、组内序号不更新 | 赋值后重算并校验，失败则回滚 |
+| `DataSet.update_attributes` | `None` 样品号先统计后补全，元数据自相矛盾 | 先补全再统计；同一批 `None` 共用一个新样品 |
+| `Column.sample_idx` 赋值 | 样品数、通道号不更新 | 赋值后重算并校验，失败则回滚 |
 | `Group.apply` | 结果列多于输入列时，提供 `naming` 仍 `IndexError` | 提供 `naming` 时不再调用自动命名 |
 | `plotter` 负对数 | 两轴同时启用时 X 轴用了 Y 轴格式（闭包晚绑定） | 两轴用各自的变量 |
-| `resolve_num` | `[1.9]` 被截成 `[1]` | 元素必须是整数，否则 `TypeError` |
+| 分组 `num` 解析（原 `resolve_num`，现为 `Group` 的创建时校验） | `[1.9]` 被截成 `[1]` | 元素必须是整数，否则 `TypeError` |
 | `make_lines_formatter` | 不传 marker 就崩（`set_marker(None)`） | 只在指定 marker 时设置 |
 | `make_legend_formatter` | 一调用就崩（`set_fontsize`、`set_frameon` 都不存在） | 逐个设置图例文字字号；改用 `set_frame_on` |
 
@@ -219,8 +247,8 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 （`match` 语法需 3.10+；类内不加引号的自引用类型标注在 3.14 之前导入即报错）。
 
 仍**待确认**（行为可能是有意的，未改）：
-- `num=True` 被当成组号 1（`bool` 是 `int` 的子类）。
-- `column[i].unit = ...` 改单位时不校验「同位置同单位」约束（组号的 setter 会校验）。
+- `num=True` 被当成样品号 1（`bool` 是 `int` 的子类）。
+- `column[i].unit = ...` 改单位时不校验「同通道同单位」约束（样品号的 setter 会校验）。
 - `formatters.py` 模块文档示例写 `lambda ax: ...`，代码实际以 `(ax, fig)` 调用 `custom_formation`；
   `by()` 文档说「不能连续使用」，代码并未禁止。
 

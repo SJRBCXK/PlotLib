@@ -11,20 +11,22 @@ DataPlotter 把画出的东西都存在 self.axesset 里，测试就从这里取
 
 后端在 conftest.py 里切到了 Agg（不弹窗），每个测试结束自动 plt.close('all')。
 
-数据来自 eis_dataset：每组 3 列 [Frequency(Hz), Zs'(ohm), Zs''(ohm)]，
+数据来自 eis_dataset：每个样品 3 列 [Frequency(Hz), Zs'(ohm), Zs''(ohm)]，
 S1 = S0 × 2，S2 = S0 × 3。
 """
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 from matplotlib.collections import PathCollection
+from matplotlib.colors import to_rgba
 from matplotlib.container import BarContainer
 from matplotlib.lines import Line2D
 from numpy.typing import NDArray
 
+from plotlib.group import Group
 from plotlib.plotter import DataPlotter
 
-FREQ, ZS_RE, ZS_IM = 0, 1, 2      # 组内列索引
+FREQ, ZS_RE, ZS_IM = 0, 1, 2      # 通道号
 
 
 def legend_texts(ax):
@@ -32,9 +34,9 @@ def legend_texts(ax):
 
 
 # ══════════════════════════════════════════════
-# plot_objects：所有数据组画在同一张图
+# plot_objects：所有样品画在同一张图
 # ══════════════════════════════════════════════
-def test_plot_objects_one_line_per_group(eis_dataset):
+def test_plot_objects_one_line_per_sample(eis_dataset):
     plotter = DataPlotter(eis_dataset, plotdataRowNum_x=FREQ, plotdataRowNum_y=ZS_RE)
     plotter.plot_objects()
 
@@ -44,17 +46,17 @@ def test_plot_objects_one_line_per_group(eis_dataset):
 
 
 def test_plot_objects_line_data(eis_dataset):
-    """每条线的 x/y 就是对应组的那两列。"""
+    """每条线的 x/y 就是对应样品的那两列。"""
     plotter = DataPlotter(eis_dataset, plotdataRowNum_x=FREQ, plotdataRowNum_y=ZS_RE).plot_objects()
     lines = plotter.axesset['main']['artists']
 
-    for k, line in enumerate(lines):          # 第 k 组 = S0 × (k+1)
+    for k, line in enumerate(lines):          # 样品 k = S0 × (k+1)
         np.testing.assert_array_equal(line.get_xdata(), [1, 10, 100])
         np.testing.assert_array_equal(line.get_ydata(), np.array([10, 20, 30]) * (k + 1))
 
 
 def test_plot_objects_labels(eis_dataset):
-    """坐标轴标题取单位，图例取组名。"""
+    """坐标轴标题取单位，图例取样品名。"""
     ax = DataPlotter(eis_dataset, plotdataRowNum_x=FREQ, plotdataRowNum_y=ZS_RE) \
         .plot_objects().axesset['main']['ax']
 
@@ -164,19 +166,44 @@ def test_legend_follows_lines_formatter(eis_dataset):
 
 
 # ══════════════════════════════════════════════
-# group_plotter：按 groups_config 分组
+# 分组参数：只接受建在同一数据集上的 Group
+# （分组配置本身的校验在 test_group.py，这里只测绘图器怎么接收和使用 Group）
 # ══════════════════════════════════════════════
-GROUPS = {
-    'A': {'num': [0, 1], 'linestyle': '--'},
-    'B': {'num': [1, 2], 'linestyle': ':'},     # 数据组 1 被 A、B 共用
-}
+def make_groups(dataset):
+    """每次新建：Group 会原地格式化传入的配置，不能让测试共用同一个字典。"""
+    return Group(dataset, {
+        'A': {'num': [0, 1], 'linestyle': '--'},
+        'B': {'num': [1, 2], 'linestyle': ':'},     # 样品 1 被 A、B 共用
+    })
 
 
+def test_groups_must_be_group_object(eis_dataset):
+    """传字典 → TypeError，提示先用 Group 包装（类型标注只在编辑器里提醒，运行时要自己检查）。"""
+    with pytest.raises(TypeError, match="Group"):
+        DataPlotter(eis_dataset, groups={'A': {'num': [0, 1]}})  # pyright: ignore[reportArgumentType]  故意传错类型
+
+
+def test_groups_from_other_dataset_raises(eis_dataset, sparse_dataset):
+    """一个绘图器只对应一个数据集：Group 必须建在绘图器的数据集上。"""
+    with pytest.raises(ValueError):
+        DataPlotter(eis_dataset, groups=Group(sparse_dataset, {'A': {'num': [0, 5]}}))
+
+
+def test_default_groups_is_empty_group(eis_dataset):
+    """不传分组时是空 Group：后续代码总是面对一个 Group，不用判断 None。"""
+    plotter = DataPlotter(eis_dataset)
+    assert isinstance(plotter.groups, Group)
+    assert plotter.groups.names == []
+
+
+# ══════════════════════════════════════════════
+# group_plotter：按 Group 分组绘图
+# ══════════════════════════════════════════════
 def test_group_separate_mode_one_figure_per_group(eis_dataset):
-    plotter = DataPlotter(eis_dataset, plot_data_groups=GROUPS).group_plotter()
+    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter()
 
     assert list(plotter.axesset) == ['A', 'B']
-    assert list(plotter.axesset['A']['artists']) == [0, 1]   # artists 以数据组索引为键
+    assert list(plotter.axesset['A']['artists']) == [0, 1]   # artists 以样品号为键
     assert list(plotter.axesset['B']['artists']) == [1, 2]
     assert len(plt.get_fignums()) == 2
 
@@ -186,7 +213,7 @@ def test_group_separate_mode_one_figure_per_group(eis_dataset):
     (False, {'A': '-',  'B': '-'}),    # 不应用时保留默认 plot_style
 ], ids=['apply', 'default'])
 def test_group_separate_mode_linestyle(eis_dataset, apply, expected):
-    plotter = DataPlotter(eis_dataset, plot_data_groups=GROUPS) \
+    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)) \
         .group_plotter(apply_group_linestyle=apply)
     for name, style in expected.items():
         assert all(a.get_linestyle() == style for a in plotter.axesset[name]['artists'].values())
@@ -194,10 +221,10 @@ def test_group_separate_mode_linestyle(eis_dataset, apply, expected):
 
 def test_group_merge_mode(eis_dataset):
     """
-    合并模式：一张图；被多个组共用的数据组只画一次，沿用第一个组（A）的样式；
+    合并模式：一张图；被多个组共用的样品只画一次，沿用第一个组（A）的样式；
     同组线条统一为组线型 + 组首色。
     """
-    plotter = DataPlotter(eis_dataset, plot_data_groups=GROUPS).group_plotter(merge_groups=True)
+    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter(merge_groups=True)
     m = plotter.axesset['main']
     artists = m['artists']
 
@@ -208,19 +235,13 @@ def test_group_merge_mode(eis_dataset):
     assert artists[1].get_color() != artists[2].get_color()
 
 
-def test_group_config_is_not_modified(eis_dataset):
-    """groups_config 只读：range 不会被改成 list，也不会被加键。"""
-    config = {'A': {'num': range(0, 2), 'linestyle': '--'}}
-    DataPlotter(eis_dataset, plot_data_groups=config).group_plotter(merge_groups=True)
-    assert config == {'A': {'num': range(0, 2), 'linestyle': '--'}}
-
-
-def test_group_bad_config_raises_before_any_figure(eis_dataset):
-    """配置有误时先报错，不留下画了一半的图窗。"""
-    config = {'A': {'num': [0, 1]}, 'B': {'num': []}}      # B 为空
-    with pytest.raises(ValueError, match="'B'"):
-        DataPlotter(eis_dataset, plot_data_groups=config).group_plotter()
-    assert plt.get_fignums() == []
+@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
+def test_group_plotter_does_not_modify_group(eis_dataset, merge):
+    """绘图只读分组：画图前后 group.to_config() 不变。"""
+    groups = make_groups(eis_dataset)
+    before = groups.to_config()
+    DataPlotter(eis_dataset, groups=groups).group_plotter(merge_groups=merge)
+    assert groups.to_config() == before
 
 
 def test_group_without_config_falls_back_to_plot_objects(eis_dataset):
@@ -230,13 +251,13 @@ def test_group_without_config_falls_back_to_plot_objects(eis_dataset):
 
 
 # ══════════════════════════════════════════════
-# subplotter_yy：每组一张 Y-Y 图（如 Nyquist：Zs' vs Zs''）
+# subplotter_yy：每个样品一张 Y-Y 图（如 Nyquist：Zs' vs Zs''）
 # ══════════════════════════════════════════════
 def test_subplotter_yy(eis_dataset):
     plotter = DataPlotter(eis_dataset).subplotter_yy(
         plotdataRowNum_Y1=ZS_RE, plotdataRowNum_Y2=ZS_IM)
 
-    assert list(plotter.axesset) == [0, 1, 2]           # 以数据组索引为键
+    assert list(plotter.axesset) == [0, 1, 2]           # 以样品号为键
     s1 = plotter.axesset[1]
     np.testing.assert_array_equal(s1['artist'].get_xdata(), [20, 40, 60])
     np.testing.assert_array_equal(s1['artist'].get_ydata(), [-2, -4, -6])
@@ -245,7 +266,7 @@ def test_subplotter_yy(eis_dataset):
 
 
 # ══════════════════════════════════════════════
-# subplotter_xyy：每组一张双 Y 轴图
+# subplotter_xyy：每个样品一张双 Y 轴图
 # ══════════════════════════════════════════════
 def test_subplotter_xyy(eis_dataset):
     # 两侧故意用不同的 X 列：用同一列的话，右轴错用左轴的 X 也看不出来
@@ -270,14 +291,47 @@ def test_subplotter_xyy_custom_formatter(eis_dataset):
     DataPlotter(eis_dataset).subplotter_xyy(
         plotdataRowNum_X2=FREQ, plotdataRowNum_Y2=ZS_IM,
         custom_formatter=lambda ax1, ax2, fig: received.append((ax1, ax2, fig)))
-    assert len(received) == 3                                           # 每组调用一次
+    assert len(received) == 3                                           # 每个样品调用一次
+
+
+# ══════════════════════════════════════════════
+# 配色：样品号不连续（sparse_dataset 的样品号是 0、5、9）
+# 位置 = 排名 ÷ 样品数，见 test_plot_common.py
+# ══════════════════════════════════════════════
+PLASMA = plt.get_cmap('plasma')       # DataPlotter 默认色带
+
+
+def test_sparse_sample_ids_colors(sparse_dataset):
+    """
+    三条线依次取色带 0、1/3、2/3 处的颜色。
+    回归：曾用「样品号 ÷ 样品数」，5/3、9/3 都超过 1 被截断，样品 5 和 9 同色且不报错。
+    """
+    lines = DataPlotter(sparse_dataset).plot_objects().axesset['main']['artists']
+    np.testing.assert_allclose([to_rgba(line.get_color()) for line in lines],
+                               [PLASMA(p) for p in (0, 1/3, 2/3)])
+
+
+@pytest.mark.parametrize("merge, expected", [
+    (False, {5: 1/3, 9: 2/3}),       # 分离模式：各样品各自的颜色
+    (True,  {5: 1/3, 9: 1/3}),       # 合并模式：统一为组首（样品 5）的颜色
+], ids=['separate', 'merge'])
+def test_sparse_sample_ids_group_colors(sparse_dataset, merge, expected):
+    """
+    分组绘图同样按排名取色；排名基于整个数据集（0、5、9），不是只看分组里的样品。
+    回归：组首色曾取 cmap(5/3)，被截断成色带末端。
+    """
+    groups = Group(sparse_dataset, {'A': {'num': [5, 9]}})
+    plotter = DataPlotter(sparse_dataset, groups=groups).group_plotter(merge_groups=merge)
+    artists = plotter.axesset['main' if merge else 'A']['artists']
+    for sample, position in expected.items():
+        np.testing.assert_allclose(to_rgba(artists[sample].get_color()), PLASMA(position))
 
 
 # ══════════════════════════════════════════════
 # 边界情况
 # ══════════════════════════════════════════════
 def test_column_index_out_of_range_raises(eis_dataset):
-    """每组只有 3 列，要第 5 列 → 报错，而不是画出空图。"""
+    """每个样品只有 3 个通道，要通道 5 → 报错，而不是画出空图。"""
     with pytest.raises(RuntimeError, match="未找到对应的列数据"):
         DataPlotter(eis_dataset, plotdataRowNum_y=5).plot_objects()
 

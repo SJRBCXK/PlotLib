@@ -26,18 +26,18 @@ def test_subtract_two_groups(eis_dataset):
 
     np.testing.assert_allclose(result.data, S0_ZS)
     assert result.units == list(ZS)
-    assert result.names == ['subtract_S0_S1'] * 2   # 自动命名：函数名_组名_组名
+    assert result.names == ['subtract_S0_S1'] * 2   # 自动命名：函数名_样品名_样品名
 
 
-def test_each_config_entry_becomes_one_result_group(eis_dataset):
-    """config 里有几项，结果里就有几组，组号从 0 依次编号。"""
+def test_each_config_entry_becomes_one_result_sample(eis_dataset):
+    """config 里有几个分组，结果里就有几个样品，样品号从 0 依次编号。"""
     config = {
         'S1/S0': {'num': [0, 1]},
         'S2/S0': {'num': [0, 2]},
     }
     result = Group(eis_dataset, config).apply(ratio, select=ZS)
 
-    assert result.groups_idx == [0, 0, 1, 1]
+    assert result.sample_idx == [0, 0, 1, 1]
     np.testing.assert_allclose(result.data[:, :2], 2)   # S1/S0
     np.testing.assert_allclose(result.data[:, 2:], 3)   # S2/S0
 
@@ -85,10 +85,13 @@ def test_input_dataset_is_not_modified(eis_dataset):
     np.testing.assert_array_equal(eis_dataset.data, before)
 
 
-def test_group_index_out_of_range_raises(eis_dataset):
-    """数据只有 0~2 组，配置里写了 5 → 报错，而不是静默算出错误结果。"""
-    with pytest.raises(ValueError, match="group_idx=5 无匹配列"):
-        Group(eis_dataset, {'bad': {'num': [0, 5]}}).apply(subtract, select=ZS)
+def test_sample_index_out_of_range_raises(eis_dataset):
+    """
+    数据只有样品 0~2，配置里写了 5 → 创建 Group 时就报错，不等到 apply。
+    （曾在 apply 中才报「无匹配列」；全部样品都不存在时报的是看不出分组的选列错误）
+    """
+    with pytest.raises(ValueError, match="'bad'"):
+        Group(eis_dataset, {'bad': {'num': [0, 5]}})
 
 
 # ──────────────────────────────────────────────
@@ -104,19 +107,10 @@ def test_callback_result_is_reshaped_to_2d(eis_dataset, callback, shape):
 
 
 def test_slices_with_different_column_counts_raise():
-    """组 0 有 2 列、组 1 只有 1 列 → 无法逐列对齐，报错。"""
+    """样品 0 有 2 列、样品 1 只有 1 列 → 无法逐列对齐，报错。"""
     from plotlib.dataset import DataSet
     ds = DataSet().form_array(np.ones((2, 2)), ['A', 'A'], ['x', 'y'], 0, repeat_times=2)
     ds.expandata(DataSet().form_array(np.ones(2), ['B'], ['x'], 1))
     with pytest.raises(ValueError, match="列数不一致"):
         Group(ds, {'g': {'num': [0, 1]}}).apply(subtract)
 
-
-# ──────────────────────────────────────────────
-# resolve_group_indices：按组名取配置
-# ──────────────────────────────────────────────
-def test_resolve_group_indices(eis_dataset):
-    group = Group(eis_dataset, {'A': {'num': range(1, 3)}})
-    assert group.resolve_group_indices('A') == [1, 2]
-    with pytest.raises(ValueError, match="缺少 'B' 组"):
-        group.resolve_group_indices('B')

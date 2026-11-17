@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from plotlib.dataloader import Dataloader
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
+from plotlib.group import Group
 
 plt.close('all')
 
@@ -63,6 +64,7 @@ data = Dataloader(
     DATASET_FRACTION = INPUT_DATASET_FRACTION,
     COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
 ).load_data()
+groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图都用它
 
 # ============================================================
 # 绘图部分
@@ -114,7 +116,7 @@ FV_pltliner_log = DataPlotter(
 # --- 分组绘图 (Group Plots) ---
 DV_pltGliner2 = DataPlotter(
     input_dataset=data,
-    plot_data_groups=data_groups,
+    groups=groups,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit3,
     plotdataRowNum_y = dataRowNum_unit5
@@ -122,7 +124,7 @@ DV_pltGliner2 = DataPlotter(
 
 DV_pltGliner2_merged = DataPlotter(
     input_dataset=data,
-    plot_data_groups=data_groups,
+    groups=groups,
     plotrange=299,
     plotdataRowNum_x = dataRowNum_unit2,
     plotdataRowNum_y = dataRowNum_unit5

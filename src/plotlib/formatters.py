@@ -28,7 +28,7 @@
 
 注意事项:
     - 刻度格式、线条与图例参数默认为 None，表示保持原样；只修改明确传入的设置，
-      因此不会覆盖绘图器按组分配的颜色，也不会覆盖自动刻度格式。
+      因此不会覆盖绘图器按样品分配的颜色，也不会覆盖自动刻度格式。
       坐标轴的尺度（默认 'linear'）、刻度线宽和 hide_spines 仍总会应用。
     - matplotlib 回调：轴 (ax, fig)、线条 (lines)、图例 (legends)。
       Plotly 回调：三者都接收 Figure，可组合后交给 figure_formatter。
@@ -234,7 +234,7 @@ class LinesFormatterFactory:
 
         参数:
             linewidth: 线宽。
-            linecolor: 颜色；会覆盖所有曲线的按组配色，通常只在单条曲线时使用。
+            linecolor: 颜色；会覆盖所有曲线的按样品配色，通常只在单条曲线时使用。
             linestyle: '-'、'--'、':'、'-.'。
             linemarker: 标记，如 'o'、's'、'^'、'v'、'D'、'+'、'x'。
             linemarkersize: 标记大小。

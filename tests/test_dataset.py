@@ -2,8 +2,8 @@
 测试对象：src/plotlib/dataset.py —— DataSet（数据容器）、Column / ColumnList（列视图）
 
 DataSet 的核心约定（各测试围绕它们展开）：
-  1. 元数据长度一致：data 的列数 == len(names) == len(units) == len(groups_idx) ...
-  2. 同一「组内位置」在各组中单位相同（第 0 列都是频率、第 1 列都是 Zs' ...）
+  1. 元数据长度一致：data 的列数 == len(names) == len(units) == len(sample_idx) ...
+  2. 同一通道在各样品中单位相同（通道 0 都是频率、通道 1 都是 Zs' ...）
   3. column[i] 是视图：改它就是改 DataSet 本身
 """
 import numpy as np
@@ -12,11 +12,11 @@ import pytest
 from plotlib.dataset import DataSet
 
 
-def make(data, names, units, group_idx=0):
-    """手工造一个单组 DataSet（不经过文件）。"""
+def make(data, names, units, sample_idx=0):
+    """手工造一个单样品 DataSet（不经过文件）。"""
     data = np.asarray(data, dtype=float)
     n_cols = 1 if data.ndim < 2 else data.shape[1]
-    return DataSet().form_array(data, list(names), list(units), group_idx, repeat_times=n_cols)
+    return DataSet().form_array(data, list(names), list(units), sample_idx, repeat_times=n_cols)
 
 
 # ══════════════════════════════════════════════
@@ -30,15 +30,15 @@ def test_empty_dataset():
 
 
 def test_form_array_fills_metadata():
-    ds = make([[1, 2], [3, 4]], ['a', 'b'], ['x', 'y'], group_idx=5)
+    ds = make([[1, 2], [3, 4]], ['a', 'b'], ['x', 'y'], sample_idx=5)
 
     assert ds.status == 'written'
-    assert ds.groups_idx == [5, 5]
-    assert ds.group_local_idx == [0, 1]
+    assert ds.sample_idx == [5, 5]
+    assert ds.channel_idx == [0, 1]
     assert ds.local_idx == [0, 1]
     assert ds.father_idx == [0, 1]       # None 被补成自身位置
     assert ds.initial_idx == [0, 1]
-    assert ds.num_datagroups == 1
+    assert ds.num_samples == 1
 
 
 @pytest.mark.parametrize("data, shape", [
@@ -56,43 +56,43 @@ def test_metadata_length_mismatch_raises():
         DataSet().form_array(np.ones((3, 2)), ['a'], ['x', 'y'], 0, repeat_times=2)
 
 
-def test_none_group_idx_gives_consistent_metadata():
+def test_none_sample_idx_gives_consistent_metadata():
     """
-    未指定组号（None）的列共用一个新组，组数和组内序号与之一致。
-    回归：曾经先按 None 统计组数/序号、后补组号，得到 groups=[0,1,2] 但 num_datagroups=1。
+    未指定样品号（None）的列共用一个新样品，样品数和通道号与之一致。
+    回归：曾经先按 None 统计样品数/通道号、后补样品号，得到 sample_idx=[0,1,2] 但 num_samples=1。
     """
     ds = DataSet().form_array(np.ones((2, 3)), ['a', 'b', 'c'], ['u'] * 3, None, repeat_times=3)
-    assert ds.groups_idx == [0, 0, 0]
-    assert ds.num_datagroups == 1
-    assert ds.group_local_idx == [0, 1, 2]
+    assert ds.sample_idx == [0, 0, 0]
+    assert ds.num_samples == 1
+    assert ds.channel_idx == [0, 1, 2]
 
 
-def test_none_group_idx_after_existing_groups():
-    """已有组号时，None 列的新组号 = 已有最大组号 + 1。"""
+def test_none_sample_idx_after_existing_samples():
+    """已有样品号时，None 列的新样品号 = 已有最大样品号 + 1。"""
     ds = make([1, 2], ['a'], ['u'], 4)
-    ds.groups_idx.append(None)
+    ds.sample_idx.append(None)
     ds.names.append('b')
     ds.units.append('u')
     ds.father_idx.append(None)
     ds.initial_idx.append(None)
     ds.data = np.column_stack([ds.data, [3, 4]])
     ds.update_attributes()
-    assert ds.groups_idx == [4, 5]
-    assert ds.num_datagroups == 2
+    assert ds.sample_idx == [4, 5]
+    assert ds.num_samples == 2
 
 
 # ══════════════════════════════════════════════
 # expandata：横向拼接
 # ══════════════════════════════════════════════
-def test_expandata_appends_columns_and_groups():
+def test_expandata_appends_columns_and_samples():
     ds = DataSet()
     ds.expandata(make([1, 2], ['a'], ['u'], 0)).expandata(make([3, 4], ['b'], ['u'], 1))
 
     np.testing.assert_array_equal(ds.data, [[1, 3], [2, 4]])
     assert ds.names == ['a', 'b']
-    assert ds.groups_idx == [0, 1]
-    assert ds.num_datagroups == 2
-    assert ds.group_local_idx == [0, 0]
+    assert ds.sample_idx == [0, 1]
+    assert ds.num_samples == 2
+    assert ds.channel_idx == [0, 0]
 
 
 @pytest.mark.parametrize("left, right, nan_col", [
@@ -107,8 +107,8 @@ def test_expandata_pads_shorter_with_nan(left, right, nan_col):
     assert np.isnan(ds.data[1:, nan_col]).all()
 
 
-def test_unit_mismatch_between_groups_raises():
-    """组 1 的第 1 列单位和组 0 不同 → 约定 2 被破坏。"""
+def test_unit_mismatch_between_samples_raises():
+    """样品 1 的通道 1 单位和样品 0 不同 → 约定 2 被破坏。"""
     g0 = make([[1, 2]], ['a', 'b'], ['x', 'y'], 0)
     g1 = make([[1, 2]], ['c', 'd'], ['x', 'z'], 1)
     with pytest.raises(RuntimeError, match="Unit mismatch"):
@@ -120,7 +120,7 @@ def test_unit_mismatch_between_groups_raises():
 # ══════════════════════════════════════════════
 def test_column_reads_metadata(eis_dataset):
     col = eis_dataset.column[4]          # S1 的 Zs'
-    assert (col.name, col.unit, col.group_idx, col.group_local_idx) == ('S1', "Zs'(ohm)", 1, 1)
+    assert (col.name, col.unit, col.sample_idx, col.channel_idx) == ('S1', "Zs'(ohm)", 1, 1)
     np.testing.assert_array_equal(col.data, [20, 40, 60])
 
 
@@ -139,29 +139,29 @@ def test_column_is_a_view(eis_dataset):
     np.testing.assert_array_equal(eis_dataset.data[:, 1], [5, 6, 7])
 
 
-def test_column_group_change_updates_derived_metadata():
+def test_column_sample_change_updates_derived_metadata():
     """
-    改组号后，组数和组内序号随之更新。
-    回归：setter 曾只写回 groups_idx，num_datagroups、group_local_idx 保持旧值。
+    改样品号后，样品数和通道号随之更新。
+    回归：setter 曾只写回 sample_idx，num_samples、channel_idx 保持旧值。
     （用单位全相同的数据：移动任何一列都不会破坏「同位置同单位」约束）
     """
-    ds = make([[1, 2, 3]], ['a', 'b', 'c'], ['u'] * 3, group_idx=0)
-    ds.column[2].group_idx = 5
-    assert ds.groups_idx == [0, 0, 5]
-    assert ds.num_datagroups == 2
-    assert ds.group_local_idx == [0, 1, 0]
+    ds = make([[1, 2, 3]], ['a', 'b', 'c'], ['u'] * 3, sample_idx=0)
+    ds.column[2].sample_idx = 5
+    assert ds.sample_idx == [0, 0, 5]
+    assert ds.num_samples == 2
+    assert ds.channel_idx == [0, 1, 0]
 
 
-def test_column_group_change_breaking_units_raises_and_rolls_back(eis_dataset):
+def test_column_sample_change_breaking_units_raises_and_rolls_back(eis_dataset):
     """
     把 S0 的频率列移走后，S0 的第 0 列变成 Zs'，而 S1/S2 的第 0 列仍是频率 → 违反约束 2。
     要报错，且回滚到原状态，不能留下半改的数据集。
     """
     with pytest.raises(RuntimeError, match="Unit mismatch"):
-        eis_dataset.column[0].group_idx = 7
-    assert eis_dataset.groups_idx[0] == 0
-    assert eis_dataset.num_datagroups == 3
-    assert eis_dataset.group_local_idx == [0, 1, 2] * 3
+        eis_dataset.column[0].sample_idx = 7
+    assert eis_dataset.sample_idx[0] == 0
+    assert eis_dataset.num_samples == 3
+    assert eis_dataset.channel_idx == [0, 1, 2] * 3
 
 
 def test_column_dict_access(eis_dataset):
@@ -204,13 +204,13 @@ def test_column_list_indexing(eis_dataset):
 # ══════════════════════════════════════════════
 # 遍历与重组
 # ══════════════════════════════════════════════
-def test_iter_by_groups(eis_dataset):
-    parts = list(eis_dataset.iter('groups'))
+def test_iter_by_samples(eis_dataset):
+    parts = list(eis_dataset.iter('samples'))
     assert [p.names for p in parts] == [['S0'] * 3, ['S1'] * 3, ['S2'] * 3]
 
 
 def test_iter_by_units(eis_dataset):
-    """按单位遍历：每次产出所有组中该单位的列。"""
+    """按单位遍历：每次产出所有样品中该单位的列。"""
     parts = list(eis_dataset.iter('units'))
     assert [p.units[0] for p in parts] == ["Frequency(Hz)", "Zs'(ohm)", "Zs''(ohm)"]
     assert all(p.names == ['S0', 'S1', 'S2'] for p in parts)
@@ -238,13 +238,13 @@ def test_columns_appended_to_self(eis_dataset):
     assert len(eis_dataset.names) == 10
 
 
-def test_rearrange_columns_sorts_by_group_then_position():
+def test_rearrange_columns_sorts_by_sample_then_channel():
     ds = make([[1, 2, 3, 4]], ['a', 'b', 'c', 'd'], ['x', 'x', 'y', 'y'])
-    ds.groups_idx = [1, 0, 1, 0]
+    ds.sample_idx = [1, 0, 1, 0]
     ds.update_attributes()
     ds._rearrange_columns()
 
     assert ds.names == ['b', 'd', 'a', 'c']
-    assert ds.groups_idx == [0, 0, 1, 1]
-    assert ds.group_local_idx == [0, 1, 0, 1]
+    assert ds.sample_idx == [0, 0, 1, 1]
+    assert ds.channel_idx == [0, 1, 0, 1]
     np.testing.assert_array_equal(ds.data, [[2, 4, 1, 3]])

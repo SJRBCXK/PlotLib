@@ -13,6 +13,7 @@ from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
+from plotlib.group import Group
 
 plt.close('all')
 
@@ -111,6 +112,7 @@ data = Dataloader(
     DATASET_FRACTION = INPUT_DATASET_FRACTION,
     COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
 ).load_data()
+groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图和计算都用它
 
 # ============================================================
 # 绘图部分
@@ -128,7 +130,7 @@ Test_pltliner1 = DataPlotter(
 # --- Nyquist 图（分组绘制）---
 Test_pltGliner2 = DataPlotter(
     input_dataset=data,
-    plot_data_groups=data_groups,
+    groups=groups,
     plotdataRowNum_x = dataRowNum_unit6,
     plotdataRowNum_y = dataRowNum_unit7
 ).group_plotter(
@@ -183,7 +185,7 @@ Test_pltsubsxyy = DataPlotter(
 # )
 Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data
 Impendence = DataSet()
-for dataslice in Selected_data.iter('groups'):
+for dataslice in Selected_data.iter('samples'):
     impendence_slice = DT(dataslice).Norm(extended=False,norm_unit='|Z|(ohm)')
     Impendence.expandata(impendence_slice)
 data = data.expandata(Impendence)._rearrange_columns()
@@ -202,7 +204,6 @@ Impendence_pltliner1 = DataPlotter(
 # ============================================================
 # 使用 Group.apply() 重构的组间计算
 # ============================================================
-from plotlib.group import Group
 
 def rev_camp(*slices):
     camp = slices[1].data[:,:2] - slices[0].data[:,:2]
@@ -211,7 +212,7 @@ def rev_camp(*slices):
     return camp_with_freq
 
 
-RevCampdata_v2 = Group(data, data_groups).apply(
+RevCampdata_v2 = groups.apply(
     rev_camp,
     select=("Zs'(ohm)", "Zs''(ohm)", "Frequency(Hz)")
 )

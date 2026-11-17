@@ -6,6 +6,7 @@ import numpy as np
 import plotly.graph_objects as go
 from .group import Group
 from .dataset import DataSet
+from .plot_common import color_positions
 import plotly.colors as plyc
 
 # 滑块模式：single 每档只显示一条曲线；cumulative 每档累加显示到当前曲线。
@@ -29,16 +30,13 @@ class InteractivePlotter:
         plotdataRowNum_y: int = 1,
         cmap: str | None = None,
         plot_data_groups: dict | None = None,
-        num_datagroups: int | None = None,
     ):
         """初始化数据侧状态，不创建图形、不配置样式。
 
         plot_data_group 保留旧脚本参数；plot_data_groups 对应 DataPlotter
         的绘图分组字典。两者目前仅保存，不在这里执行组间计算或绘图。
-        plotrange 为 None 时使用全部行；X/Y 索引均为组内列索引。
+        plotrange 为 None 时使用全部行；X/Y 索引均为通道号（样品内的列序号）。
         """
-        if num_datagroups is None:
-            num_datagroups = input_dataset.num_datagroups
         if plot_data_groups is None:
             plot_data_groups = {}
 
@@ -50,9 +48,10 @@ class InteractivePlotter:
         self.dataset: DataSet = input_dataset
         self.groups_config = plot_data_groups  # 只读，不写回
         self.data = self.dataset.data
-        self.groups_idx = self.dataset.groups_idx
+        self.sample_idx = self.dataset.sample_idx
         self.column = self.dataset.column
-        self.num_datagroups = num_datagroups
+        # 与 DataPlotter 共用同一套「样品号 → 色带位置」，两个后端的配色一致
+        self.color_positions = color_positions(self.sample_idx)
         self.plotrange = plotrange
         self.plotdataRowNum_x = plotdataRowNum_x
         self.plotdataRowNum_y = plotdataRowNum_y
@@ -72,9 +71,9 @@ class InteractivePlotter:
     
     def _get_data(
         self,
-        group_idx: int,
-        local_idx_x: int,
-        local_idx_y: int,
+        sample_idx: int,
+        channel_x: int,
+        channel_y: int,
         neglog_x: bool = False,
         neglog_y: bool = False,
     ):
@@ -84,10 +83,10 @@ class InteractivePlotter:
         坐标尺度和刻度文字属于后续格式化，不在这里处理。
         """
         row_x, x_label, x_unit = self._get_column_data(
-            group_idx, local_idx_x, self.plotrange,
+            sample_idx, channel_x, self.plotrange,
         )
         row_y, y_label, y_unit = self._get_column_data(
-            group_idx, local_idx_y, self.plotrange,
+            sample_idx, channel_y, self.plotrange,
         )
         if neglog_x:
             row_x = np.abs(row_x)
@@ -97,23 +96,23 @@ class InteractivePlotter:
 
     def _get_column_data(
         self,
-        group_idx: int,
-        group_local_idx: int,
+        sample_idx: int,
+        channel_idx: int,
         plotrange: int | None,
     ):
-        """按实际组号和组内索引取列，返回 (data, name, unit)。"""
+        """按样品号和通道号取列，返回 (data, name, unit)。"""
         for column in self.column:
             if (
-                column.group_idx == group_idx
-                and column.group_local_idx == group_local_idx
+                column.sample_idx == sample_idx
+                and column.channel_idx == channel_idx
             ):
                 return column.data[:plotrange], column.name, column.unit
         raise RuntimeError("未找到对应的列数据")
 
 
-    def _get_color(self, num_datagroups: int, idx: int):
-        """根据索引返回对应的颜色。"""
-        return plyc.sample_colorscale(self.cmap, np.arange(0, num_datagroups)/num_datagroups)[idx]
+    def _get_color(self, sample: int):
+        """返回样品在色带上对应位置的颜色（只取这一个位置）。"""
+        return plyc.sample_colorscale(self.cmap, [self.color_positions[sample]])[0]
 
     
 
@@ -193,7 +192,7 @@ class InteractivePlotter:
             ),
             data=dict(
                 # 列表中的一项是一套默认样式，不是图中的第一条曲线。
-                # 不指定颜色，让不同数据组保留各自的配色。
+                # 不指定颜色，让不同样品保留各自的配色。
                 scatter=[
                     go.Scatter(
                         line_width=3,
@@ -316,7 +315,7 @@ class InteractivePlotter:
         self,
         figure_formatter: Callable[[go.Figure], object] | None = None,
     ) -> Self:
-        """把数据集中每个实际组绘制为一条曲线，全部可见。
+        """把数据集中每个样品绘制为一条曲线，全部可见。
 
         Args:
             figure_formatter: 可选格式回调，接收 Figure 并原地修改；在默认格式之后执行，可覆盖默认值。例如 make_axes_formatter(backend="plotly", xscale_type="log")。
@@ -331,27 +330,27 @@ class InteractivePlotter:
         # 流程：
         # ① 检查数据。
         # ② 用 _create_template() 的模板创建 Figure。
-        # ③ 遍历实际组号，用 _get_data() 取 X/Y 和标签、单位。
+        # ③ 遍历样品号，用 _get_data() 取 X/Y 和标签、单位。
         # ④ 用 _plot_data_plotly() 添加曲线，同时传入 name 等身份信息。
-        # ⑤ 用 _apply_layout() 设置本次图；各组轴单位应一致。
+        # ⑤ 用 _apply_layout() 设置本次图；各样品的轴单位应一致。
         # ⑥ 应用可选的用户格式回调，保存到 self.asset 并返回 self。不在这里 show()。
         self._ensure_ready()
-        group_ids = sorted(set(self.groups_idx))
-        if not group_ids or self.data.size == 0:
+        sample_ids = sorted(set(self.sample_idx))
+        if not sample_ids or self.data.size == 0:
             raise RuntimeError("数据集为空，无法绘图")
         fig = go.Figure(
             layout = dict(template=self._create_template())
         )
         artists = []
 
-        for i in group_ids:
+        for i in sample_ids:
             Row_x, Row_y, _, y_label, x_unit, y_unit = self._get_data(
-                    group_idx=i,
-                    local_idx_x=self.plotdataRowNum_x,
-                    local_idx_y=self.plotdataRowNum_y,
+                    sample_idx=i,
+                    channel_x=self.plotdataRowNum_x,
+                    channel_y=self.plotdataRowNum_y,
                 )
 
-            color  = self._get_color(self.num_datagroups, i)
+            color = self._get_color(i)
             
             artist = self._plot_data_plotly(
                 fig, Row_x, Row_y, name=y_label, line=dict(color=color))

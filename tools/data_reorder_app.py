@@ -827,34 +827,35 @@ class DataReorderGUI:
         return "\n".join(code_lines)
 
     def _get_ordinal_name(self, index):
-        """根据索引自动生成序数词组名"""
-        # 特殊情况处理
-        if 10 <= index % 100 <= 20:
+        """根据索引（从 0 开始）自动生成序数词组名：0 → '1st'，1 → '2nd'"""
+        number = index + 1  # 后缀要按从 1 开始的序号算
+        # 特殊情况处理：11 ~ 13 是 eleventh / twelfth / thirteenth
+        if 10 <= number % 100 <= 20:
             suffix = 'th'
         else:
             suffix_map = {1: 'st', 2: 'nd', 3: 'rd'}
-            suffix = suffix_map.get(index % 10, 'th')
+            suffix = suffix_map.get(number % 10, 'th')
 
-        return f'{index + 1}{suffix}'
+        return f'{number}{suffix}'
 
     def _get_linestyle_for_group(self, group_index):
-        """根据组序号自动生成 linestyle"""
+        """根据组序号自动生成 linestyle（标准写法，见 src/plotlib/style.py）"""
         # 基础样式循环
-        basic_styles = ["-", "--", "-.", ":"]
+        basic_styles = ["solid", "dash", "dashdot", "dot"]
 
         if group_index < 4:
             # 前4个使用基础样式
-            return f'"{basic_styles[group_index]}"'
+            return repr(basic_styles[group_index])
         else:
             # 之后的使用自定义虚线样式
-            # 生成不同的 (offset, (on, off)) 模式
+            # 生成不同的 (on, off) 模式：实线段、空白段，单位是线宽
             pattern_index = group_index - 4
 
             # 创建多样化的虚线模式
             on = 3 + (pattern_index % 3) * 2  # 3, 5, 7 循环
             off = 5 + (pattern_index % 4) * 2  # 5, 7, 9, 11 循环
 
-            return f'(0, ({on}, {off}))'
+            return f'({on}, {off})'
 
     def _show_code_window(self, code):
         """显示代码窗口,允许复制"""

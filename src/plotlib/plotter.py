@@ -5,6 +5,7 @@ import numpy as np
 from .dataset import DataSet
 from .group import Group
 from .plot_common import color_positions
+from .style import translate_color, translate_linestyle, translate_marker
 
 # ============================================================================
 # 默认列索引常量
@@ -62,7 +63,7 @@ class DataPlotter:
         font_weight: str = 'bold',
         plot_lw: int = 3,
         axis_lw: int = 3,
-        plot_style: str = '-',
+        plot_style: str | tuple = 'solid',
         plotrange: int | None = None,
         plotdataRowNum_x: int = dataRowNum_unit1,
         plotdataRowNum_y: int = dataRowNum_unit2,
@@ -91,8 +92,9 @@ class DataPlotter:
             坐标轴线宽。
         plot_lw : int
             绘图线宽。
-        plot_style : str
-            线条样式。
+        plot_style : str or tuple
+            默认线型，标准写法（style.py）：'solid'、'dash'、'dot'、'dashdot'，
+            或自定义虚线 (实线长, 空白长, ...)。分组没写 linestyle 时也用它。
         plotrange : int, optional
             绘制的数据点数，None 表示全部。
         plotdataRowNum_x : int
@@ -129,7 +131,7 @@ class DataPlotter:
             'axes.labelweight': font_weight,
             'axes.labelsize': font_size,
             'lines.linewidth': plot_lw,
-            'lines.linestyle': plot_style,
+            'lines.linestyle': translate_linestyle(plot_style, 'matplotlib'),   # 非标准写法在构造时报错
             'legend.fontsize': legend_fontsize,
             'legend.frameon': False,
             'xtick.major.width': ticker_width,
@@ -202,11 +204,11 @@ class DataPlotter:
     # ========================================================================
 
     def _default_plot_formatter(self, ax, fig, plot_kind='line', group_name=None, artists=None,
-                                apply_linestyle=False, x_axislabel=None, y_axislabel=None):
+                                x_axislabel=None, y_axislabel=None):
         """应用默认绘图格式。"""
         # 先配置线条再建图例：图例句柄保存的是创建时的线条样式
         if plot_kind == 'line':
-            self._configure_lines(ax, group_name, artists, apply_linestyle)
+            self._configure_lines(ax, group_name, artists)
         self._set_plot_legends(ax)
         self._configure_xaxis(ax, x_axislabel)
         self._configure_yaxis(ax, y_axislabel)
@@ -231,13 +233,13 @@ class DataPlotter:
         ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.2f}"))
         ax.tick_params(axis='y', which='both', width=self.rc_params['ytick.major.width'], direction='out')
 
-    def _configure_lines(self, ax, group_name=None, artists=None, apply_linestyle=False):
+    def _configure_lines(self, ax, group_name=None, artists=None):
         """
-        配置线条样式。
+        配置线条的默认线宽。
 
         group_name 为 None 时处理 ax 上的全部线条；
-        否则按 self.groups 中该分组的样品号和选项处理本组线条，artists 为 {样品号: artist}。
-        apply_linestyle 为 True 时应用分组选项中的 linestyle。
+        否则只处理该分组的线条，artists 为 {样品号: artist}。
+        （分组的线型、标记、颜色在 group_plotter 画线后由 _apply_group_style 设置。）
         """
         default_lw = self.rc_params.get('lines.linewidth', 3)
         if group_name is None:
@@ -246,12 +248,22 @@ class DataPlotter:
         elif group_name in self.groups.names:
             if artists is None:
                 raise ValueError("按组配置线条时必须传入 artists")
-            options = self.groups.options(group_name)    # 每个分组取一次，循环里重复用
             for sample in self.groups.sample_ids(group_name):
-                artist = artists[sample]
-                artist.set_linewidth(default_lw)
-                if apply_linestyle and 'linestyle' in options:  # 未配置时保留 rc 中的 plot_style
-                    artist.set_linestyle(options['linestyle'])
+                artists[sample].set_linewidth(default_lw)
+
+    def _group_style(self, group_name) -> dict:
+        """
+        该分组写了的样式，翻译成 matplotlib 原生值：{'linestyle': '--', 'marker': 'o', 'color': ...}。
+        没写的不出现在字典里。Group 创建时已校验，这里的翻译不会因写法报错。
+        """
+        native = {}
+        if (linestyle := self.groups.linestyle(group_name)) is not None:
+            native['linestyle'] = translate_linestyle(linestyle, 'matplotlib')
+        if (marker := self.groups.marker(group_name)) is not None:
+            native['marker'] = translate_marker(marker, 'matplotlib')
+        if (color := self.groups.color(group_name)) is not None:
+            native['color'] = translate_color(color, 'matplotlib')
+        return native
 
     def _configure_figures(self, fig):
         """配置图形布局。"""
@@ -399,7 +411,6 @@ class DataPlotter:
                       legend_formatter=None,
                       merge_groups: bool = False,
                       plot_kind: str = 'line',
-                      apply_group_linestyle: bool = False
                       ) -> DataPlotter:
         """
         分组绘图。
@@ -423,9 +434,12 @@ class DataPlotter:
             合并模式下，被多个组引用的样品只画一次，使用第一个包含它的组的样式。
         plot_kind : str
             绘图类型：'line' / 'scatter' / 'bar'。
-        apply_group_linestyle : bool
-            分离模式下是否应用各分组选项中的 linestyle（仅 plot_kind='line'）。
-            合并模式始终应用组线型以区分各组，不受此参数影响。
+
+        分组样式
+        --------
+        分组配置里写了 linestyle / marker / color 就应用（两种模式一样，仅 plot_kind='line'）；
+        color 写了时这组所有样品都用它。没写时：线型用 plot_style；颜色在分离模式按样品配色，
+        合并模式统一为组首色。优先级：默认样式 < 分组样式 < lines_formatter。
 
         Returns
         -------
@@ -461,7 +475,7 @@ class DataPlotter:
         with plt.rc_context(self.rc_params):
             for group_name in self.groups:
                 sample_ids = self.groups.sample_ids(group_name)
-                options = self.groups.options(group_name)
+                style = self._group_style(group_name)    # 每个分组翻译一次，循环里重复用
                 artists = {}  # {样品号: artist}
 
                 if not merge_groups:
@@ -489,12 +503,14 @@ class DataPlotter:
                         label=y_label
                     )
 
-                    # 合并模式：同组统一为组首色 + 组线型（bar 无对应方法，保留各自颜色）
-                    if merge_groups:
-                        if hasattr(artist, 'set_linestyle'):
-                            artist.set_linestyle(options.get('linestyle', '-'))  # type: ignore[union-attr]
-                        if hasattr(artist, 'set_color'):
-                            artist.set_color(self.cmap(self.color_positions[sample_ids[0]]))  # type: ignore[union-attr]
+                    # 合并模式：同组统一为组首色（bar 无对应方法，保留各自颜色）
+                    if merge_groups and hasattr(artist, 'set_color'):
+                        artist.set_color(self.cmap(self.color_positions[sample_ids[0]]))  # type: ignore[union-attr]
+
+                    # 分组样式：写了就应用，两种模式一样，覆盖上面的默认颜色和 plot_style
+                    # （scatter / bar 暂不支持，见 STRUCTURE_REVIEW 4.3 的遗留问题）
+                    if plot_kind == 'line' and style:
+                        artist.set(**style)  # type: ignore[union-attr]
 
                     artists[sample] = artist
 
@@ -504,7 +520,6 @@ class DataPlotter:
                 if not merge_groups and fig is not None:
                     self._default_plot_formatter(ax, fig, plot_kind=plot_kind,
                                                  group_name=group_name, artists=artists,
-                                                 apply_linestyle=apply_group_linestyle,
                                                  x_axislabel=x_unit, y_axislabel=y_unit)
                     self._apply_optional_formatters(
                         ax=ax, fig=fig, lines=list(artists.values()), legends=[ax.get_legend()],

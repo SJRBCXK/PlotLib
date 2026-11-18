@@ -8,7 +8,7 @@
         xlim_left=0, xlim_right=10,
         custom_formation=[lambda ax, fig: ax.grid(True)],
     )
-    lines_fmt = make_lines_formatter(linewidth=2, linestyle='--')
+    lines_fmt = make_lines_formatter(linewidth=2, linestyle='dash')
     legend_fmt = make_legend_formatter(legend_fontsize=12)
 
     plotter.plot_objects(
@@ -19,7 +19,7 @@
 
 使用方式（Plotly）:
     axes_fmt = make_axes_formatter(backend="plotly", xscale_type="log")
-    lines_fmt = make_lines_formatter(backend="plotly", linestyle="--")
+    lines_fmt = make_lines_formatter(backend="plotly", linestyle="dash")
     legend_fmt = make_legend_formatter(backend="plotly", legend_fontsize=18)
 
     interactive_plot.plot_plotly_object(
@@ -32,6 +32,8 @@
       坐标轴的尺度（默认 'linear'）、刻度线宽和 hide_spines 仍总会应用。
     - matplotlib 回调：轴 (ax, fig)、线条 (lines)、图例 (legends)。
       Plotly 回调：三者都接收 Figure，可组合后交给 figure_formatter。
+    - 线条的 linestyle / linemarker / linecolor 只收 style.py 的标准写法（如 'dash'、'circle'、'red'），
+      由工厂翻译成各 backend 的原生值；后端写法（如 '--'、'o'）在创建 formatter 时就报错。
     - 自定义回调使用各 backend 的原生对象，不自动翻译：
       轴为 (ax, fig) 或 (fig)，线为 Line2D 或 Scatter，图例为 Legend 或 layout.Legend。
     - Plotly 刻度格式支持 {x:.Nf}、{x:.Ne}、{x:.Ng}、{x:.N%}；
@@ -54,7 +56,7 @@ if TYPE_CHECKING:
     from matplotlib.legend import Legend
     from matplotlib.lines import Line2D
 
-type Backend = Literal["matplotlib", "plotly"]
+from .style import Backend, check_backend, translate_color, translate_linestyle, translate_marker
 
 # 各 backend 返回的回调类型；入口函数用 overload 按 backend 选择其一。
 type MplAxesFormatter = Callable[[Axes, Figure], None]
@@ -63,9 +65,7 @@ type MplLegendFormatter = Callable[[Iterable[Legend]], None]
 type PlotlyFormatter = Callable[[go.Figure], None]
 
 
-def _check_backend(backend: Backend) -> None:
-    if backend not in ("matplotlib", "plotly"):
-        raise ValueError(f"不支持的 backend: {backend!r}")
+_check_backend = check_backend     # backend 校验与样式词汇共用 style.py 的一份
 
 
 class AxesFormatterFactory:
@@ -234,17 +234,25 @@ class LinesFormatterFactory:
 
         参数:
             linewidth: 线宽。
-            linecolor: 颜色；会覆盖所有曲线的按样品配色，通常只在单条曲线时使用。
-            linestyle: '-'、'--'、':'、'-.'。
-            linemarker: 标记，如 'o'、's'、'^'、'v'、'D'、'+'、'x'。
+            linecolor: 颜色：CSS 颜色名、'#rrggbb' 或 RGB 元组 (0~255)；
+                会覆盖所有曲线的按样品配色，通常只在单条曲线时使用。
+            linestyle: 'solid'、'dash'、'dot'、'dashdot'，或自定义虚线 (实线长, 空白长, ...)。
+            linemarker: 'circle'、'square'、'triangle-up'、'triangle-down'、'diamond'、'cross'、'x'。
             linemarkersize: 标记大小。
             custom_formations: 自定义回调列表，以单条 Line2D 或 Scatter 调用。
             backend: 'matplotlib' 或 'plotly'，只能以关键字传入。
+            （线型、标记、颜色的标准写法见 style.py）
 
         返回:
             matplotlib: formatter(lines)；Plotly: formatter(fig)，只修改 Scatter。
         """
         _check_backend(backend)
+
+        # 在创建 formatter 时就翻译：非标准写法立刻报错，不等到画图
+        # （Plotly 的自定义虚线按 linewidth 换算像素，未给时用 Plotly 默认线宽）
+        native_style = None if linestyle is None else translate_linestyle(linestyle, backend, linewidth)
+        native_marker = None if linemarker is None else translate_marker(linemarker, backend)
+        native_color = None if linecolor is None else translate_color(linecolor, backend)
 
         if backend == "matplotlib":
             def formatter(lines, *_args, **_kwargs):
@@ -253,13 +261,13 @@ class LinesFormatterFactory:
                 for line in lines:
                     if linewidth is not None:
                         line.set_linewidth(linewidth)
-                    if linecolor is not None:
-                        line.set_color(linecolor)
-                    if linestyle is not None:
-                        line.set_linestyle(linestyle)
+                    if native_color is not None:
+                        line.set_color(native_color)
+                    if native_style is not None:
+                        line.set_linestyle(native_style)
                     # 未指定 marker 时不动它：set_marker(None) 在 matplotlib 3.10 会报错
-                    if linemarker is not None:
-                        line.set_marker(linemarker)
+                    if native_marker is not None:
+                        line.set_marker(native_marker)
                     if linemarkersize is not None:
                         line.set_markersize(linemarkersize)
                     for func in custom_formations or ():
@@ -270,25 +278,17 @@ class LinesFormatterFactory:
         # ── Plotly ──
         import plotly.graph_objects as go
 
-        dashes = {"-": "solid", "--": "dash", ":": "dot", "-.": "dashdot"}
-        markers = {"o": "circle", "s": "square", "^": "triangle-up",
-                   "v": "triangle-down", "D": "diamond", "+": "cross", "x": "x"}
-        if linestyle is not None and linestyle not in dashes:
-            raise ValueError(f"Plotly 暂不支持此公共线型: {linestyle!r}")
-        if linemarker is not None and linemarker not in markers:
-            raise ValueError(f"Plotly 暂不支持此公共标记: {linemarker!r}")
-
         line_options = {}
         if linewidth is not None:
             line_options["width"] = linewidth
-        if linecolor is not None:
-            line_options["color"] = linecolor
-        if linestyle is not None:
-            line_options["dash"] = dashes[linestyle]
+        if native_color is not None:
+            line_options["color"] = native_color
+        if native_style is not None:
+            line_options["dash"] = native_style
 
         marker_options = {}
-        if linemarker is not None:
-            marker_options["symbol"] = markers[linemarker]
+        if native_marker is not None:
+            marker_options["symbol"] = native_marker
         if linemarkersize is not None:
             marker_options["size"] = linemarkersize
 

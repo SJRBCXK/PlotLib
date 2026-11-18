@@ -6,6 +6,7 @@ lines_formatter / legend_formatter 参数使用。测试直接在一张空图上
 """
 import matplotlib.pyplot as plt
 import pytest
+from matplotlib.colors import to_rgba
 from matplotlib.ticker import ScalarFormatter
 
 from plotlib.formatters import (
@@ -94,22 +95,60 @@ def test_axes_formatter_works_with_plotter(eis_dataset):
 # lines formatter
 # ══════════════════════════════════════════════
 def test_lines_style(fig_ax):
+    """线型、标记、颜色用标准写法（style.py），由工厂翻译成 matplotlib 的原生值。"""
     _, ax = fig_ax
     line = ax.get_lines()[0]
-    make_lines_formatter(linewidth=5, linecolor='red', linestyle='--',
-                         linemarker='o', linemarkersize=9)([line])
+    make_lines_formatter(linewidth=5, linecolor='#ff0000', linestyle='dash',
+                         linemarker='circle', linemarkersize=9)([line])
 
     assert line.get_linewidth() == 5
-    assert line.get_color() == 'red'
+    assert line.get_color() == '#ff0000'
     assert line.get_linestyle() == '--'
     assert (line.get_marker(), line.get_markersize()) == ('o', 9)
+
+
+def test_lines_rgb_color(fig_ax):
+    """RGB 写法 0~255，翻译成 matplotlib 的 0~1。"""
+    _, ax = fig_ax
+    line = ax.get_lines()[0]
+    make_lines_formatter(linecolor=(255, 0, 0))([line])
+    assert to_rgba(line.get_color()) == (1.0, 0.0, 0.0, 1.0)
+
+
+@pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
+@pytest.mark.parametrize("kwargs", [
+    dict(linestyle='--'),
+    dict(linemarker='o'),
+    dict(linecolor='tab:red'),
+], ids=['mpl_linestyle', 'mpl_marker', 'mpl_color'])
+def test_lines_rejects_non_standard(backend, kwargs):
+    """后端写法不是标准写法：创建 formatter 时就报错（两个后端一样），不等到画图。"""
+    if backend == "plotly":
+        pytest.importorskip("plotly.graph_objects")
+    with pytest.raises(ValueError):
+        make_lines_formatter(backend=backend, **kwargs)
+
+
+def test_plotly_lines_style():
+    """Plotly：标准写法翻译成 Plotly 的原生值；自定义虚线按线宽换算成像素。"""
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
+    make_lines_formatter(backend="plotly", linestyle='dashdot', linemarker='triangle-up',
+                         linecolor=(255, 0, 0))(fig)
+    trace = fig.data[0]
+    assert trace.line.dash == 'dashdot'
+    assert trace.marker.symbol == 'triangle-up'
+    assert trace.line.color == 'rgb(255,0,0)'
+
+    make_lines_formatter(backend="plotly", linewidth=3, linestyle=(3, 5))(fig)
+    assert fig.data[0].line.dash == '9px,15px'
 
 
 def test_lines_custom_formations(fig_ax):
     _, ax = fig_ax
     line = ax.get_lines()[0]
     # 显式给 marker：不给时会触发下面 test_lines_without_marker 记录的 bug
-    make_lines_formatter(linemarker='o',
+    make_lines_formatter(linemarker='circle',
                          custom_formations=[lambda ln: ln.set_alpha(0.3)])([line])
     assert line.get_alpha() == 0.3
 

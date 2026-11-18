@@ -10,6 +10,8 @@ from plotlib.group import Group
 
 ZS = ("Zs'(ohm)", "Zs''(ohm)")
 S0_ZS = np.array([[10, -1], [20, -2], [30, -3]], dtype=float)
+S1_ZS = S0_ZS * 2
+S2_ZS = S0_ZS * 3
 
 
 def subtract(*slices):
@@ -23,11 +25,17 @@ def ratio(*slices):
 def test_subtract_two_groups(eis_dataset):
     """S1 - S0 = S0 × 2 - S0 = S0。"""
     result = Group(eis_dataset, {'diff': {'num': [0, 1]}}).apply(subtract, select=ZS)
-
     np.testing.assert_allclose(result.data, S0_ZS)
     assert result.units == list(ZS)
-    assert result.names == ['subtract_S0_S1'] * 2   # 自动命名：函数名_样品名_样品名
+    assert result.names == ['diff_subtract'] * 2   # 自动命名：组名_函数名
 
+def test_multigroups_ratio(eis_dataset):
+    """S1 / S0 = 2，S2 / S0 = 3。"""
+    result = Group(eis_dataset, {'S1/S0': {'num': [0, 1]}, 'S2/S0': {'num': [0, 2]}}).apply(ratio, select=ZS)
+    np.testing.assert_allclose(result.data[:, :2], 2)   # S1/S0
+    np.testing.assert_allclose(result.data[:, 2:], 3)   # S2/S0
+    assert result.units == list(ZS) * 2
+    assert result.names == ['S1/S0_ratio'] * 2 + ['S2/S0_ratio'] * 2
 
 def test_each_config_entry_becomes_one_result_sample(eis_dataset):
     """config 里有几个分组，结果里就有几个样品，样品号从 0 依次编号。"""
@@ -113,4 +121,5 @@ def test_slices_with_different_column_counts_raise():
     ds.expandata(DataSet().form_array(np.ones(2), ['B'], ['x'], 1))
     with pytest.raises(ValueError, match="列数不一致"):
         Group(ds, {'g': {'num': [0, 1]}}).apply(subtract)
+
 

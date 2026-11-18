@@ -1,7 +1,7 @@
 """
 EIS 介电谱 Bode 图脚本
 用途：绘制损耗角正切 tan δ 随频率变化的 Bode 图（全部组 / 分组），
-      计算组间电导率比与电导率模 |C| 并绘图，以及提取各组 tan δ 损耗峰及其对应频率
+      计算各组内的电导率比与电导率模 |C| 并绘图，以及提取各组 tan δ 损耗峰及其对应频率
 """
 
 
@@ -39,19 +39,20 @@ dataRowNum_unit8 = 7  # Tan Delta
 dataRowNum_unit9 = 8  # Tan Phi
 
 # 数据分组配置（用于 group_plotter）
+# 样式用标准写法（style.py）：线型 'solid' / 'dash' / 'dot' / 'dashdot'，或自定义虚线 (实线长, 空白长)
 data_groups = {
-    '1th': {'num': [0, 1], 'linestyle': "-"},
-    '2st': {'num': [2, 3], 'linestyle': "--"},
-    '3nd': {'num': [4, 5], 'linestyle': "-."},
-    '4rd': {'num': [6, 7], 'linestyle': ":"},
-    '5th': {'num': [8, 9], 'linestyle': (0, (3, 5))},
-    '6th': {'num': [10, 11], 'linestyle': (0, (5, 7))},
-    '7th': {'num': [12, 13], 'linestyle': (0, (7, 9))},
-    '8th': {'num': [14, 15], 'linestyle': (0, (3, 11))},
-    '9th': {'num': [16, 17], 'linestyle': (0, (5, 5))},
-    # '10th': {'num': [18, 19], 'linestyle': (0, (7, 7))},
-    # '11th': {'num': [20, 21], 'linestyle': (0, (3, 9))},
-    # '12th': {'num': [22, 23], 'linestyle': (0, (5, 11))}
+    '1st': {'num': [0, 1], 'linestyle': 'solid'},
+    '2nd': {'num': [2, 3], 'linestyle': 'dash'},
+    '3rd': {'num': [4, 5], 'linestyle': 'dashdot'},
+    '4th': {'num': [6, 7], 'linestyle': 'dot'},
+    '5th': {'num': [8, 9], 'linestyle': (3, 5)},
+    '6th': {'num': [10, 11], 'linestyle': (5, 7)},
+    '7th': {'num': [12, 13], 'linestyle': (7, 9)},
+    '8th': {'num': [14, 15], 'linestyle': (3, 11)},
+    '9th': {'num': [16, 17], 'linestyle': (5, 5)},
+    # '10th': {'num': [18, 19], 'linestyle': (7, 7)},
+    # '11th': {'num': [20, 21], 'linestyle': (3, 9)},
+    # '12th': {'num': [22, 23], 'linestyle': (5, 11)}
 }
 
 # ============================================================
@@ -127,7 +128,7 @@ Bode_Plotter_TanDelta_group = DataPlotter(
 
 
 # ============================================================
-# 使用 Group.apply() 重构的组间计算
+# 使用 Group.apply() 重构的分组计算
 # ============================================================
 
 

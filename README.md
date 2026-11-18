@@ -122,8 +122,8 @@ from plotlib.group import Group
 
 # 定义分组配置：{分组名: {'num': [样品号, ...], 其余字段...}}
 data_groups = {
-    'Group A': {'num': [0, 1, 2], 'linestyle': '-'},
-    'Group B': {'num': [3, 4, 5], 'linestyle': '--'},
+    'Group A': {'num': [0, 1, 2], 'linestyle': 'solid'},
+    'Group B': {'num': [3, 4, 5], 'linestyle': 'dash', 'marker': 'circle', 'color': 'red'},
 }
 groups = Group(data, data_groups)   # 与绘图器使用同一个数据集
 
@@ -137,6 +137,20 @@ DataPlotter(
     lines_formatter=my_lines_formatter
 )
 ```
+
+分组的 `linestyle` / `marker` / `color` 写了就应用（两种模式一样，目前仅 `plot_kind='line'`），
+`color` 写了时这组所有样品都用它；优先级：默认样式 < 分组样式 < `lines_formatter`。
+
+#### 样式的标准写法
+
+分组配置、`make_lines_formatter` 和 `DataPlotter(plot_style=...)` 只接受一套与后端无关的标准写法
+（`src/plotlib/style.py`），由 matplotlib / Plotly 各自翻译；`'--'`、`'o'` 这类后端写法会直接报错。
+
+| 字段 | 标准写法 |
+|---|---|
+| 线型 | `'solid'`、`'dash'`、`'dot'`、`'dashdot'`；或自定义虚线 `(实线长, 空白长, ...)`，单位是线宽的倍数 |
+| 标记 | `'circle'`、`'square'`、`'triangle-up'`、`'triangle-down'`、`'diamond'`、`'cross'`、`'x'` |
+| 颜色 | CSS 颜色名（W3C 标准 148 个，如 `'red'`；注意 `'green'` 是深绿，纯绿叫 `'lime'`）、`'#rrggbb'`、RGB 三个 0~255 的整数 |
 
 #### subplotter_yy() - Y-Y 关系图
 
@@ -219,9 +233,9 @@ from plotlib.formatters import make_lines_formatter
 
 formatter = make_lines_formatter(
     linewidth=2,
-    linecolor='red',
-    linestyle='--',
-    linemarker='o',
+    linecolor='red',          # 标准写法，见上面「样式的标准写法」
+    linestyle='dash',
+    linemarker='circle',
     custom_formations=[
         lambda line: line.set_alpha(0.7)
     ]
@@ -322,8 +336,8 @@ DataPlotter(
 
 # 分组绘制
 data_groups = {
-    'Low freq': {'num': [0, 1], 'linestyle': '-'},
-    'High freq': {'num': [2, 3], 'linestyle': '--'},
+    'Low freq': {'num': [0, 1], 'linestyle': 'solid'},
+    'High freq': {'num': [2, 3], 'linestyle': 'dash'},
 }
 
 DataPlotter(
@@ -395,7 +409,7 @@ PlotLib/
 │       ├── dataset.py          # 数据集容器
 │       ├── dataloader.py       # 数据加载器
 │       ├── processor.py        # 数据选择与变换
-│       ├── group.py            # 分组配置解析与组间计算
+│       ├── group.py            # 分组配置解析与分组计算
 │       ├── plotter.py          # matplotlib 绘图器
 │       ├── interactive.py      # Plotly 交互绘图器（滑块）
 │       ├── formatters.py       # 格式化器工厂（matplotlib / Plotly）

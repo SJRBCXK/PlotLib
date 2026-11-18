@@ -3,7 +3,7 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**242 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**355 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
 
 > 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各样品都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
@@ -43,14 +43,16 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `test_processor.py` | `src/plotlib/processor.py` 的 `DataProcessLayer` | `select` / `by` 按样品号、名字、单位、索引选列 |
 | `test_transformer.py` | `src/plotlib/processor.py` 的 `DataTransformer` | `apply` / `Norm` 的计算结果与自动命名 |
 | `test_group.py` | `src/plotlib/group.py` 的 `Group` | `num` 各种写法的格式化；创建时校验、读接口返回副本、增删改先校验再修改 |
-| `test_group_apply.py` | `src/plotlib/group.py` 的 `Group` | 组间计算结果、命名、结果样品号正确 |
+| `test_group_apply.py` | `src/plotlib/group.py` 的 `Group` | 分组计算结果、命名、结果样品号正确 |
 | `test_plot_common.py` | `src/plotlib/plot_common.py` | 两个绘图器共用的函数：样品号 → 色带位置 |
+| `test_style.py` | `src/plotlib/style.py` | 样式标准写法（线型、标记、颜色）的校验，以及到 matplotlib / Plotly 的翻译 |
 | `test_plotter.py` | `src/plotlib/plotter.py` | 四种绘图方法画出的线、标签、样式正确 |
 | `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
 | `test_interactive.py` | `src/plotlib/interactive.py` | Plotly 曲线的数据与标签、滑块档位（single / cumulative）与默认外观、报错 |
 | `test_html_export.py` | `src/plotlib/html_export.py` | 导出页面的画框尺寸、侧边面板位置、占位符全部填写、不修改 Figure |
 | `test_data_reorder_app.py` | `tools/data_reorder_app.py`（Tk 版） | 直接改序号插入并保留勾选、非法输入不移动、取消与失焦；没有显示环境时跳过 |
 | `test_data_reorder_qt.py` | `tools/data_reorder_qt.py`（Qt 版） | 插入与勾选保留、中点吸附、改序号、鼠标拖动；没装 PySide6 时跳过 |
+| `test_groups_code.py` | 两个重排工具生成的 groups 代码 | 生成的代码能执行且被 `Group` 接受；线型是标准写法（前 4 组 solid / dash / dashdot / dot，之后自定义虚线）；两个工具的序数词组名一致（1st、2nd、11th、21st…） |
 
 ## 测试数据与环境（conftest.py）
 
@@ -133,22 +135,27 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 样品号 `0` 是合法值（不会被当成「空」跳过）
 - 缺 `num` 或 `num` 为空 → `ValueError`；类型不对（str、None、float…）→ `TypeError`
 - 容器里的元素不是整数（`[1.9]`、`['2']`、浮点 ndarray）→ `TypeError`，不会被悄悄截断
-- 原地格式化只改 `num`，其余字段原样保留
+- 原地格式化只改 `num`，其余字段原样保留（样式字段只校验、不改写，RGB 元组不会被改成色号）
+
+**样式字段（`linestyle` / `marker` / `color`）**
+- 只收标准写法（见 `test_style.py`）：后端写法 `'--'`、`'o'`、`'tab:red'`、matplotlib 原生元组 `(0, (3, 5))` 等在创建时就报错，信息含分组名和写错的值
+- `linestyle(name)` / `marker(name)` / `color(name)` 按原样返回写的值，没写返回 `None`；`options(name)` 仍包含这三项
+- 自定义虚线 `(3, 5)` 原样保存；`set` 时样式不合法也是先校验、不改动
 
 **`Group` 的校验与接口**
 - 只接受完整写法 `{分组名: {'num': [...], 其余字段}}`；简写 `{'A': [0, 1]}` → `TypeError`，提示正确写法
 - 样品号重复 → `ValueError`；样品号不在数据集里 → `ValueError`，信息含分组名、全部不存在的样品号、已有样品号
-- 各种配置错误（缺 num、为空、类型、简写、重复、样品不存在）的报错信息都带出错的分组名
+- 各种配置错误（缺 num、为空、类型、简写、重复、样品不存在、样式不是标准写法）的报错信息都带出错的分组名
 - 读接口：`names` / `for name in group` 保持书写顺序；`sample_ids(name)` 保持书写顺序；`options(name)` 是 `num` 以外的全部字段；
   都返回副本，改返回值不影响 `Group`；`to_config()` 返回当前配置的新字典；查询不存在的分组 → `ValueError`
 - 传入的配置：每个分组的 `num` 被原地格式化为 `list[int]`（设计决定）；增删改不往原字典里加、删分组
 - `add` 只新增（已存在报错）、`set` 整体替换已有分组且位置不变（不存在报错）、`delete` 删除（不存在报错）；都返回 `self`
 - 修改先校验全部再生效：任何一个分组不合法，`Group` 保持原样
 
-### 组间计算 — `test_group_apply.py`
+### 分组计算 — `test_group_apply.py`
 - 两个样品相减、相除结果正确
 - 配置里有几个分组，结果就有几个样品，样品号从 0 依次编号
-- 未提供 `naming` 时自动命名为 `函数名_样品名_样品名`；提供时使用自定义名字和单位（含频率透传列、结果列多于输入列）
+- 未提供 `naming` 时自动命名为 `组名_函数名`（如 `'diff_subtract'`，多个分组各用自己的组名）；提供时使用自定义名字和单位（含频率透传列、结果列多于输入列）
 - callback 返回一维数组 / 标量时自动转成列 / 1×1
 - 不修改原始数据集
 - 配置引用了不存在的样品号 → 创建 `Group` 时就报错（不等到 `apply`）；各样品列数不同 → 报错（`列数不一致`）
@@ -157,6 +164,16 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - `color_positions`：去重、排序后，位置 = 排名 ÷ 样品数。`[0, 5, 9]` 与 `[0, 1, 2]` 得到相同的 0、1/3、2/3；
   乱序、重复不影响结果；单个样品为 0；空输入得到空字典
 - 样品号连续时与旧公式「样品号 ÷ 样品数」结果相同，已有图的颜色不变
+
+### 样式标准写法 — `test_style.py`
+- 合法：线型 `'solid'` / `'dash'` / `'dot'` / `'dashdot'` 与自定义虚线 `(3, 5)`、`[3, 5]`；7 个标记名；
+  颜色为 CSS 颜色名（不区分大小写）、`'#rrggbb'`（大小写都行）、RGB 三个 0~255 的整数
+- 非法：后端写法（`'--'`、`'dashed'`、`'o'`、`'tab:red'`、`'r'`、`'C0'`）、未知名字、三位色号 → `ValueError`；
+  类型不对、自定义虚线元素不是数字（含旧写法 `(0, (3, 5))`）、RGB 元素不是整数 → `TypeError`；
+  虚线段数为奇数或为空、段长 ≤ 0、RGB 不是三个或超出 0~255 → `ValueError`。线型的报错信息列出可用的标准词
+- 翻译：四种线型、七种标记到两个后端的原生值；自定义虚线到 matplotlib 补偏移量 `(0, (3, 5))`、到 Plotly 按线宽换算像素 `'9px,15px'`；
+  颜色名和色号原样，RGB 到 matplotlib 为 0~1、到 Plotly 为 `'rgb(255,0,0)'`
+- 翻译前先校验（非标准写法不能绕过）；未知 backend → `ValueError`
 
 ### 绘图 — `test_plotter.py`
 **`plot_objects`**
@@ -177,7 +194,11 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 
 **`group_plotter`**
 - 分离模式：每个分组一张图，`artists` 以样品号为键
-- `apply_group_linestyle=True` 用分组选项里的线型，否则保持默认实线
+- 分组写了线型就应用（`apply_group_linestyle` 开关已删除），`'dash'` / `'dot'` 翻译成 `'--'` / `':'`
+- 分组没写线型时用 `plot_style`（两种模式都是；合并模式以前写死 `'-'`）；`plot_style` 默认 `'solid'`，只收标准写法
+- 分组写了 marker 就应用（`'circle'` → `'o'`），没写的分组不加标记
+- 分组写了 color（RGB 或色号）时这组所有样品都用它；没写时分离模式按样品配色、合并模式用组首色
+- 优先级：`lines_formatter` 最后执行，能覆盖分组线型
 - 合并模式：只有一张图；被多个组共用的样品只画一次，沿用第一个组的线型和颜色；同组统一颜色
 - 绘图不修改分组：画图前后 `groups.to_config()` 不变
 - 没有分组时退回 `plot_objects`
@@ -196,7 +217,8 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - axes：默认线性刻度、隐藏上/右边框；不传 `x_format` / `y_format` 时保留 matplotlib 默认的刻度格式器
 - axes：可设对数刻度、坐标范围、刻度格式与换算倍数（`xscaler`）；只给 `xscaler` 不给格式时按 `{x:g}` 显示换算后的值
 - axes：`custom_formation` 里的函数以 `(ax, fig)` 调用；可直接交给 `DataPlotter` 使用
-- lines：线宽、颜色、线型、marker 与大小；不传 marker 时保持无标记；`custom_formations` 逐条线调用
+- lines：线宽、颜色、线型、marker 与大小（标准写法，翻译成 matplotlib 原生值；RGB 换成 0~1）；不传 marker 时保持无标记；`custom_formations` 逐条线调用
+- lines：后端写法（`'--'`、`'o'`、`'tab:red'`）在创建 formatter 时就报错，两个 backend 一样
 - legend：字号、边框、可拖拽、位置；可直接交给 `DataPlotter` 使用
 
 **Plotly（`backend="plotly"`）**
@@ -204,6 +226,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 坐标轴边界：两侧都给时固定 `range`；只给一侧时用 `autorangeoptions.minallowed` / `maxallowed`，另一侧自动；对数轴边界取 log10；只影响设置了边界的那根轴
 - 渲染测试（标记 `render`）：用 kaleido 调真实的 Plotly.js，断言实际画出的坐标范围。
   回归：只给一侧边界时曾用 `autorange="min"/"max"`，模板开了 automargin，扩边重绘后被重置成完全自动，边界失效
+- lines：标准写法翻译成 Plotly 的 `line.dash` / `marker.symbol` / `line.color`；自定义虚线按 `linewidth` 换算像素
 - `combine_formatters`：按传入顺序调用，跳过 `None`
 
 ### 交互绘图 — `test_interactive.py`

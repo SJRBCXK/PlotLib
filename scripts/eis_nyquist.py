@@ -33,16 +33,17 @@ dataRowNum_unit6 = 5  # Real Z' (for Nyquist)
 dataRowNum_unit7 = 6  # Imaginary Z'' (for Nyquist)
 
 # 数据分组配置（用于 group_plotter）
+# 样式用标准写法（style.py）：线型 'solid' / 'dash' / 'dot' / 'dashdot'，或自定义虚线 (实线长, 空白长)
 data_groups = {
-    '1th': {'num': [0, 1], 'linestyle': "-"},
-    '2st': {'num': [2, 3], 'linestyle': "--"},
-    '3nd': {'num': [4, 5], 'linestyle': "-."},
-    '4rd': {'num': [6, 7], 'linestyle': ":"},
-    '5th': {'num': [8, 9], 'linestyle': (0, (3, 5))},
-    '6th': {'num': [10, 11], 'linestyle': (0, (5, 7))},
-    '7th': {'num': [12, 13], 'linestyle': (0, (7, 9))},
-    '8th': {'num': [14, 15], 'linestyle': (0, (3, 11))},
-    '9th': {'num': [16, 17], 'linestyle': (0, (5, 5))}
+    '1st': {'num': [0, 1], 'linestyle': 'solid'},
+    '2nd': {'num': [2, 3], 'linestyle': 'dash'},
+    '3rd': {'num': [4, 5], 'linestyle': 'dashdot'},
+    '4th': {'num': [6, 7], 'linestyle': 'dot'},
+    '5th': {'num': [8, 9], 'linestyle': (3, 5)},
+    '6th': {'num': [10, 11], 'linestyle': (5, 7)},
+    '7th': {'num': [12, 13], 'linestyle': (7, 9)},
+    '8th': {'num': [14, 15], 'linestyle': (3, 11)},
+    '9th': {'num': [16, 17], 'linestyle': (5, 5)}
 }
 
 # ============================================================
@@ -202,7 +203,7 @@ Impendence_pltliner1 = DataPlotter(
 
 
 # ============================================================
-# 使用 Group.apply() 重构的组间计算
+# 使用 Group.apply() 重构的分组计算
 # ============================================================
 
 def rev_camp(*slices):

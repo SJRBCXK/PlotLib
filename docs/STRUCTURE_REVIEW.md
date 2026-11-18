@@ -4,9 +4,9 @@
 > 评估范围：`src/`、`scripts/` 逐行阅读；`tools/`、`gui/`、`tests/`、配置与文档看了结构和接口。
 > 本文分三部分：A 评估结论与问题清单（背景）；**B 分步开发指南（当前要做的）**；C 整理工作的记录（已完成）。
 > **状态**：C 部分已全部完成并提交（`92bbde6`，206 passed）。接下来由执行者（Opus 5.5）按 B 部分**指导用户**一步步做，先读 B.0。
-> **进度（2026-11-18 收工）**：B 部分步骤 1、2、3、4.1、4.2 已完成（未提交，用户打算之后一起提交；242 passed）。**下一步是步骤 4.3「样式约定」**，
-> 先读 4.3 小节末尾「从 4.1、4.2 带过来的现状与待办」；4.4 与之独立，可接着做。
-> 步骤 5 开始时注意 4.2 推迟过来的 `InteractivePlotter` 改动（见 4.2 执行记录第 5 条）。新文件 `docs/GLOSSARY.md`、`src/plotlib/plot_common.py`、`tests/test_plot_common.py` 提交时需要 `git add`。
+> **进度（2026-11-18）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已完成（未提交；355 passed）。**下一步是步骤 4.5「结果配新 Group」**。
+> 4.3 引入了标准样式写法（`src/plotlib/style.py`，见 4.3 执行记录）。步骤 5 开始时注意 4.2 推迟过来的 `InteractivePlotter` 改动（见 4.2 执行记录第 5 条）。
+> 新文件 `src/plotlib/style.py`、`tests/test_style.py` 提交时需要 `git add`。
 > A 部分描述的是基线提交时的状态，文件路径按当时的 `src/xxx.py` 书写，这些文件现在位于 `src/plotlib/xxx.py`；
 > 其中的行号、以及 A.2、A.3、A.5 里已经解决的条目，不代表现状。
 
@@ -88,7 +88,7 @@
 
 `{'num': [0, 1], 'linestyle': (0, (3, 5))}` 中，`num` 是与后端无关的数据选择，
 `linestyle` 的元组写法是 matplotlib 专有的，Plotly 无法翻译。
-另外 `resolve_num` 定义在 `group.py`（组间计算模块），`plotter.py` 为了解析配置去导入计算模块。
+另外 `resolve_num` 定义在 `group.py`（分组计算模块），`plotter.py` 为了解析配置去导入计算模块。
 这个约定需要在 `BACKEND_PLAN.md` 第 3 步（交互图补分组模式）**之前**定下来，否则会被原样复制进第二个后端。
 
 **4. `formatters.py` 两个后端写在同一个函数体里**
@@ -159,7 +159,7 @@ matplotlib 坐标轴回调把刻度线宽写死为 3（`formatters.py:134`、`14
 - 标注「机械」的小节不需要七个动作，讲清结果、给用户看 diff 即可。
 - 不跨步骤，不顺手修本文没列出的问题；发现了就记下来告诉用户。
 - 本文的行号对应提交 `92bbde6`，改动后会漂移，**以函数名为准**。本文与代码不一致时以代码为准，并告诉用户。
-- 测试数量只增不减（经用户同意删除的除外）。基线是 242 passed（步骤 4.2 之后；此前依次为 206 → 209 → 218 → 236）。
+- 测试数量只增不减（经用户同意删除的除外）。基线是 355 passed（步骤 4.4 之后；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354）。
 - 本文给出的名字、签名都是建议。「定」这个动作里用户改了主意，就按用户的来，并把决定写回本文对应小节。
 - 修改代码用编辑工具逐处修改，让用户能看到 diff。注释和文档保持中文。
 
@@ -338,7 +338,7 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 
 | # | 要定的事                     | 建议                                                                                                                                                                               |
 | - | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 | 接受哪些写法                 | 两种都收：简写 `{'A': [0, 1]}`；完整 `{'A': {'num': [0, 1], 'linestyle': '--'}}`。重排工具生成的是后一种（`tools/data_reorder_qt.py` 的 `generate_groups_code`），不能废弃 |
+| 1 | 接受哪些写法                 | 两种都收：简写 `{'A': [0, 1]}`；完整 `{'A': {'num': [0, 1], 'linestyle': 'dash'}}`。重排工具生成的是后一种（`tools/data_reorder_qt.py` 的 `generate_groups_code`），不能废弃 |
 | 2 | 对外提供什么                 | 分组名列表（保持书写顺序）；按名字取样品号列表（保持书写顺序，顺序就是角色）；按名字取样式字典（`num` 以外的键）；遍历                                                           |
 | 3 | 创建时校验什么               | `num` 的类型（已有）；样品号是否存在于数据集。现在样品号写错要到绘图时才报「未找到对应的列数据」，看不出是哪个分组                                                               |
 | 4 | 同一分组里样品号重复算不算错 | 报错                                                                                                                                                                               |
@@ -425,15 +425,69 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 - `InteractivePlotter` 还没有分组参数（推迟到步骤 5），所以这一步只能先测翻译函数本身。
 - `Group` 的配置是原地格式化的（用户决定）；如果这一步要翻译或校验线型，注意它是否也要原地改写，按同一原则由用户定。
 
-#### 4.4 组间计算的结果带上分组名
+**执行记录（2026-11-18，已完成，350 passed；与上表不同处）：**
+
+讨论中方向变了两次：先考虑过把样式移出 `Group`（绘图器参数按分组顺序轮换），用户决定仍放在分组配置里；
+再从「以 matplotlib 写法为公共写法」改为**一套与后端无关的标准词汇**——程序入口只收标准写法，后端各自翻译（用户：「这个标准化就是我们的特点和约定」）。
+
+- **新模块 `src/plotlib/style.py`**（执行者编写，用户更想练习偏逻辑的部分）：
+  `check_linestyle / check_marker / check_color` 只校验（类型错 `TypeError`，值错 `ValueError`，信息带写错的值）；
+  `translate_linestyle / translate_marker / translate_color(value, backend)` 先校验再翻译。`Backend` 类型与 backend 校验也挪到这里，`formatters.py` 从这里导入。
+- **标准写法**（后端写法如 `'--'`、`'o'`、`'tab:red'` 一律报错，不设别名，也不替用户改写）：
+  - 线型 `'solid' / 'dash' / 'dot' / 'dashdot'`（Plotly / Origin 的叫法）；自定义虚线 `(实线长, 空白长, ...)`，单位是线宽的倍数，
+    matplotlib 翻译为 `(0, (…))`，Plotly 翻译为 `'9px,15px'`（段长 × 线宽，未给线宽用 Plotly 默认 2；偏移量不支持，丢弃）。
+  - 标记 `'circle' / 'square' / 'triangle-up' / 'triangle-down' / 'diamond' / 'cross' / 'x'`。
+  - 颜色：CSS 颜色名（W3C 148 个，不区分大小写；用 `matplotlib.colors.CSS4_COLORS` 校验，已核对与 Plotly 的颜色名完全相同，所以颜色名、色号两边原样使用）、
+    `'#rrggbb'`、RGB 三个 0~255 的整数（matplotlib 翻译为 0~1，Plotly 为 `'rgb(r,g,b)'`）。注意 CSS 的 `'green'` 是 #008000，纯绿叫 `'lime'`。
+- **`Group`**：`_check_group` 校验三个样式字段（错误信息补上分组名和字段名）；新增读接口 `linestyle(name) / marker(name) / color(name)`，没写返回 `None`（不打印）；
+  `options(name)` 不变，仍返回 `num` 以外全部字段（用户：写错的字段纵向对比一眼能看出来，拼写不检查）。样式字段**不改写**，翻译只在后端渲染时做、不写回。
+- **`DataPlotter`**：删掉 `apply_group_linestyle`——写了就应用，两种模式一样；`color` 写了时整组同色。没写时线型用 `plot_style`（合并模式以前写死 `'-'`）。
+  优先级：默认样式 < 分组样式 < `lines_formatter`。`plot_style` 默认改为 `'solid'`，也只收标准写法。新增 `_group_style(name)`，`_configure_lines` 只管线宽。
+- **formatter 工厂**：`make_lines_formatter` 的 `linestyle / linemarker / linecolor` 走同一套词汇，创建时就翻译（非标准写法立刻报错）；删掉工厂里的局部翻译表。
+- 三个脚本、README 改为标准写法；EIS 的 `(0, (3, 5))` 改为 `(3, 5)`。原生回调里的 `ax.grid(linestyle='-')` 不翻译（原则 4）。
+- 测试：新增 `tests/test_style.py`（75 个），`test_group.py`、`test_plotter.py`、`test_formatters.py` 改写法并补用例；没有删除测试。
+- **重排工具**（用户追加）：`tools/data_reorder_qt.py` 的 `generate_groups_code` 与 `tools/data_reorder_app.py` 的 `_get_linestyle_for_group` 改为生成标准写法
+  （顺序不变：`'solid' / 'dash' / 'dashdot' / 'dot'`，之后 `(on, off)`，以前是 `(0, (on, off))`）。新增 `tests/test_groups_code.py`（3 个）：执行生成的代码，用 `Group` 校验。
+  同时修了 Tk 版 `_get_ordinal_name`：原来用从 0 开始的序号算后缀，生成 `'1th' / '2st' / '3nd'`；现在按 `index + 1` 算，与 Qt 版一致（补 1 个测试，含 11~13、21~23、111 等特例）。354 passed。
+  三个脚本和 `docs/GLOSSARY.md` 里旧工具生成的组名 `'1th' / '2st' / '3nd' / '4rd'` 改为 `'1st' / '2nd' / '3rd' / '4th'`（用户要求；步骤 4.4 起组名会进图例）。
+- **遗留（未做）**：① 分组样式目前只对 `plot_kind='line'` 生效，scatter / bar 写了也不应用；② 数据点很密时（EIS）标记会糊成一片，以后可能需要 `markevery` 类参数；
+  ③ 其余字段（如 `label`、`linewidth`）暂不处理，留给以后的 `group_style_applyer`（组内精调也由它做）。
+
+#### 4.4 分组计算的结果带上分组名
 
 **读。** `group.py` 的 `_auto_naming`，以及 `tests/test_group_apply.py` 里断言名字的那一行（现在的期望是 `'subtract_S0_S1'`：函数名加样品名）。
 
-**讲。** 分组名（如 `'1th'`）现在只出现在报错信息里，算完就丢了。`DataSet.names` 存的是样品名，
-而组间计算的每个结果在后续绘图里就是一个新的样品，它最自然的名字就是分组名。这样图例直接显示用户起的名字。
+**讲。** 分组名（如 `'1st'`）现在只出现在报错信息里，算完就丢了。`DataSet.names` 存的是样品名，
+而分组计算的每个结果在后续绘图里就是一个新的样品，它最自然的名字就是分组名。这样图例直接显示用户起的名字。
 
 **定。** 不传 `naming` 时，结果的名字用什么。建议：直接用分组名。传了 `naming` 的行为不变。
 这会改变一条已有测试的期望值，新的期望值由用户写。
+
+**已定（2026-11-18）：**
+- 范围只改命名：不传 `naming` 时，结果每一列都叫「组名_函数名」（如 `'diff_subtract'`），去掉原来的样品名；`units` 不变。
+  保留函数名是用户的决定：图例一眼看出算的是什么，不用每次手改图例（执行者原建议只用组名）。
+- `_auto_naming` 增加 `group_name` 参数，`callback` 参数保留（取函数名）。
+- 结果仍是新的 `DataSet`，不并回原数据集（会改动输入、样品号要续编、已建绘图器的配色过期、结果单位可能与原数据不同）。
+- 给结果配一个新 `Group`（带上组名与样式）放到步骤 4.5。
+- 用词：`Group.apply` 是「先分组挑好参与计算的样品，再对每组内部计算」，文档统一叫「分组计算」（原来叫「组间计算」，已全部改名，见 `GLOSSARY.md`）。真正的组与组之间的计算目前没有需求，不做。
+- 分工：测试期望与 `group.py` 的修改由用户写；执行者验证、更新文档。
+
+**执行记录（2026-11-18，已完成，355 passed）：** 用户改了 `test_subtract_two_groups` 的期望（`'diff_subtract'`），新增 `test_multigroups_ratio`（多个分组各用自己的组名）；
+两条测试先失败（旧名 `'subtract_S0_S1'`），用户改 `_auto_naming` 与调用处后通过。执行者更新 `apply` 的 docstring 与 `tests/README.md`。
+两个 EIS 脚本没传 `naming`，结果图例从「`rev_camp_样品A_样品B`」变为「`1st_rev_camp`」等。
+
+#### 4.5 分组计算的结果配上新 Group
+
+**讲。** 4.4 之后，结果的第 i 个样品就是第 i 个分组的结果，名字是分组名。再给结果配一个 `Group`
+（配置为 `{分组名: {'num': [i], 原来的样式…}}`），结果就能直接交给 `group_plotter`，线型、颜色与原始数据的图一致（如 EIS 比值图里 `1st` 实线、`2nd` 虚线）。
+
+**定。**
+
+| # | 要定的事                         | 建议                                                                                              |
+| - | -------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 1 | 改 `apply` 的返回值，还是新增方法 | 新增方法（如 `apply_as_group`，返回 `Group`，其 `.dataset` 就是结果）；`apply` 返回值不变，两个 EIS 脚本不用改 |
+| 2 | 带过去哪些字段                   | 样式字段 `linestyle / marker / color` 带过去；其余字段（如 `label`）待定                           |
+| 3 | 传了 `naming` 时组名还对不对得上 | 组名与配置一致，样品名由 `naming` 决定，两者可以不同                                               |
 
 **步骤 4 整体验收。** 分组配置只在 `group.py` 里被解析（`git grep -n "resolve_num" src/` 只剩 `group.py`）；
 `scripts/eis_bode.py`、`eis_nyquist.py`、`piezo.py` 不改也能用；用户能说清楚 `Group` 对外回答哪几个问题。
@@ -453,15 +507,18 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 3. 测试仿照 `test_plotter.py` 的 `test_groups_must_be_group_object`、`test_groups_from_other_dataset_raises`、`test_default_groups_is_empty_group` 各写一份；
    更新 12 处 `InteractivePlotter(None, ...)`、`scripts/piezo_interactive.py`、README。
 
-分组绘图要用到的现成接口：`for name in self.groups`、`self.groups.sample_ids(name)`（顺序即书写顺序）、`self.groups.options(name)`（线型等）；
-配色查 `self.color_positions[样品号]`，组首色用 `sample_ids(name)[0]`。线型在 Plotly 里怎么写取决于步骤 4.3 的约定。
+分组绘图要用到的现成接口：`for name in self.groups`、`self.groups.sample_ids(name)`（顺序即书写顺序）、
+`self.groups.linestyle(name) / marker(name) / color(name)`（标准写法，没写为 `None`）；
+配色查 `self.color_positions[样品号]`，组首色用 `sample_ids(name)[0]`。
+样式按步骤 4.3 的约定用 `style.translate_*(value, 'plotly')` 翻译（自定义虚线要传线宽）；`DataPlotter._group_style` 是 matplotlib 一侧的对照。
 
 **读 + 用户练习。** 读 `plotter.py` 的 `group_plotter`，让用户用自己的话把规则逐条写下来，再对照下面的清单补漏：
 
 1. 没有分组时（空 `Group`，`names == []`），退回普通多线图。
 2. 建图之前先校验所有分组（已由 `Group` 在创建时保证，绘图器里不再校验）。
-3. 分离模式：每个分组一张图；颜色按样品；只有 `apply_group_linestyle=True` 时才用分组线型。
-4. 合并模式：所有分组一张图；被多个分组引用的样品只画一次，用第一个包含它的分组的样式；同一分组的线统一为组首色加分组线型；柱状图没有线型，保留各自颜色。
+3. 分离模式：每个分组一张图；颜色按样品。
+4. 合并模式：所有分组一张图；被多个分组引用的样品只画一次，用第一个包含它的分组的样式；同一分组的线统一为组首色；柱状图保留各自颜色。
+4'. 两种模式共同（步骤 4.3 起）：分组写了 linestyle / marker / color 就应用（仅折线），color 覆盖上面的默认颜色；没写线型用 `plot_style`；`lines_formatter` 最后执行、优先级最高。
 5. 结果按「分组名 → {样品号: 曲线}」保存，合并模式的键是 `'main'`。
 
 **定。**
@@ -584,8 +641,9 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 | 3 稀疏样品号配色           | 完成   | 2026-11-17 | 全按建议。`color_positions` 由用户编写；`plotlib/__init__.py` 中导出了它（建议删除，用户暂留）。基线 218 |
 | 4.1 `Group` 规范化与校验 | 完成   | 2026-11-18 | 只收完整写法；`options` 代替 `style`；新增 `add` / `set` / `delete` / `to_config`；传入配置原地格式化（见步骤 4.1 执行记录）。基线 236 |
 | 4.2 绘图器只认 `Group`   | 完成   | 2026-11-18 | 只接受 `Group` 对象（不收字典）；必须同一数据集；`InteractivePlotter` 推迟到步骤 5；`resolve_num` 并入 `_check_group`（见执行记录）。基线 242 |
-| 4.3 样式约定               | 未开始 |          |                                |
-| 4.4 结果带分组名           | 未开始 |          |                                |
+| 4.3 样式约定               | 完成   | 2026-11-18 | 新增 `style.py`：一套与后端无关的标准写法（线型 / 标记 / 颜色），后端各自翻译；`Group` 校验并提供 `linestyle / marker / color` 读接口；删除 `apply_group_linestyle`；formatter 与 `plot_style` 同用标准写法；两个重排工具也生成标准写法，并修了 Tk 版序数词后缀（见执行记录）。基线 354 |
+| 4.4 结果带分组名           | 完成   | 2026-11-18 | 不传 `naming` 时结果名为「组名_函数名」；「组间计算」改名为「分组计算」（见执行记录）。基线 355 |
+| 4.5 结果配新 Group         | 未开始 |          |                                |
 | 5 交互图分组模式           | 未开始 |          |                                |
 | 6 公共层与绘图计划         | 未开始 |          |                                |
 | 7.1 `Dataloader` 接口    | 未开始 |          |                                |

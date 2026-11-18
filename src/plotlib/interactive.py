@@ -34,7 +34,7 @@ class InteractivePlotter:
         """初始化数据侧状态，不创建图形、不配置样式。
 
         plot_data_group 保留旧脚本参数；plot_data_groups 对应 DataPlotter
-        的绘图分组字典。两者目前仅保存，不在这里执行组间计算或绘图。
+        的绘图分组字典。两者目前仅保存，不在这里执行分组计算或绘图。
         plotrange 为 None 时使用全部行；X/Y 索引均为通道号（样品内的列序号）。
         """
         if plot_data_groups is None:

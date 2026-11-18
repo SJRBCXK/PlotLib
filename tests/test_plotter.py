@@ -172,8 +172,8 @@ def test_legend_follows_lines_formatter(eis_dataset):
 def make_groups(dataset):
     """每次新建：Group 会原地格式化传入的配置，不能让测试共用同一个字典。"""
     return Group(dataset, {
-        'A': {'num': [0, 1], 'linestyle': '--'},
-        'B': {'num': [1, 2], 'linestyle': ':'},     # 样品 1 被 A、B 共用
+        'A': {'num': [0, 1], 'linestyle': 'dash'},
+        'B': {'num': [1, 2], 'linestyle': 'dot'},   # 样品 1 被 A、B 共用
     })
 
 
@@ -208,15 +208,92 @@ def test_group_separate_mode_one_figure_per_group(eis_dataset):
     assert len(plt.get_fignums()) == 2
 
 
-@pytest.mark.parametrize("apply, expected", [
-    (True,  {'A': '--', 'B': ':'}),
-    (False, {'A': '-',  'B': '-'}),    # 不应用时保留默认 plot_style
-], ids=['apply', 'default'])
-def test_group_separate_mode_linestyle(eis_dataset, apply, expected):
-    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)) \
-        .group_plotter(apply_group_linestyle=apply)
-    for name, style in expected.items():
+def test_group_separate_mode_linestyle(eis_dataset):
+    """
+    分离模式：分组写了线型就应用（apply_group_linestyle 开关已删除），
+    标准写法 'dash' / 'dot' 翻译成 matplotlib 的 '--' / ':'。
+    """
+    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter()
+    for name, style in {'A': '--', 'B': ':'}.items():
         assert all(a.get_linestyle() == style for a in plotter.axesset[name]['artists'].values())
+
+
+@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
+@pytest.mark.parametrize("plot_style, expected", [
+    ('solid', '-'),
+    ('dot',   ':'),
+])
+def test_group_without_linestyle_uses_plot_style(eis_dataset, merge, plot_style, expected):
+    """分组没写线型时用绘图器的 plot_style（合并模式以前写死为 '-'）。"""
+    groups = Group(eis_dataset, {'A': {'num': [0, 1]}})
+    plotter = DataPlotter(eis_dataset, groups=groups, plot_style=plot_style) \
+        .group_plotter(merge_groups=merge)
+    key = 'main' if merge else 'A'
+    assert all(a.get_linestyle() == expected for a in plotter.axesset[key]['artists'].values())
+
+
+def test_plot_style_default_and_standard_words(eis_dataset):
+    """plot_style 也是线型入口：默认 'solid'，接受标准词，后端写法 '-' 不再接受。"""
+    lines = DataPlotter(eis_dataset).plot_objects().axesset['main']['artists']
+    assert all(line.get_linestyle() == '-' for line in lines)
+
+    lines = DataPlotter(eis_dataset, plot_style='dash').plot_objects().axesset['main']['artists']
+    assert all(line.get_linestyle() == '--' for line in lines)
+
+    with pytest.raises(ValueError):
+        DataPlotter(eis_dataset, plot_style='-')
+
+
+@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
+def test_group_marker(eis_dataset, merge):
+    """分组写了 marker 就应用并翻译（'circle' → 'o'）；没写的分组不加标记。"""
+    groups = Group(eis_dataset, {'A': {'num': [0, 1], 'marker': 'circle'}, 'B': {'num': [2]}})
+    plotter = DataPlotter(eis_dataset, groups=groups).group_plotter(merge_groups=merge)
+    if merge:
+        artists = plotter.axesset['main']['artists']
+        a_lines, b_lines = [artists[0], artists[1]], [artists[2]]
+    else:
+        a_lines = list(plotter.axesset['A']['artists'].values())
+        b_lines = list(plotter.axesset['B']['artists'].values())
+    assert all(line.get_marker() == 'o' for line in a_lines)
+    assert all(line.get_marker() == 'None' for line in b_lines)
+
+
+@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
+@pytest.mark.parametrize("color, rgba", [
+    ((255, 0, 0), (1.0, 0.0, 0.0, 1.0)),
+    ('#00ff00',   (0.0, 1.0, 0.0, 1.0)),
+], ids=['rgb', 'hex'])
+def test_group_color(eis_dataset, merge, color, rgba):
+    """
+    分组写了 color：这组所有样品都用它（两种模式一样），覆盖按样品配色。
+    没写 color 的分组保持原样：分离模式按样品配色，合并模式用组首色。
+    """
+    groups = Group(eis_dataset, {'A': {'num': [0, 1], 'color': color}, 'B': {'num': [1, 2]}})
+    plotter = DataPlotter(eis_dataset, groups=groups).group_plotter(merge_groups=merge)
+
+    if merge:
+        artists = plotter.axesset['main']['artists']
+        assert to_rgba(artists[0].get_color()) == rgba
+        assert to_rgba(artists[1].get_color()) == rgba
+        # B 只画了样品 2（样品 1 已由 A 画过），颜色是 B 的组首色：样品 1 的按样品配色
+        assert to_rgba(artists[2].get_color()) == to_rgba(plotter.cmap(plotter.color_positions[1]))
+    else:
+        a_artists = plotter.axesset['A']['artists']
+        assert all(to_rgba(a.get_color()) == rgba for a in a_artists.values())
+        b_artists = plotter.axesset['B']['artists']
+        for sample, artist in b_artists.items():
+            assert to_rgba(artist.get_color()) == to_rgba(plotter.cmap(plotter.color_positions[sample]))
+
+
+@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
+def test_lines_formatter_overrides_group_style(eis_dataset, merge):
+    """优先级：默认样式 < 分组样式 < 用户 formatter（formatter 最后执行）。"""
+    from plotlib.formatters import make_lines_formatter
+    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter(
+        merge_groups=merge, lines_formatter=make_lines_formatter(linestyle='dashdot'))
+    for entry in plotter.axesset.values():
+        assert all(a.get_linestyle() == '-.' for a in entry['artists'].values())
 
 
 def test_group_merge_mode(eis_dataset):

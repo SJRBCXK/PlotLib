@@ -26,8 +26,8 @@ dataRowNum_unit5 = 4  # Voltage
 
 # 数据分组配置（用于 group_plotter）
 data_groups = {
-    '1th': {'num': [0, 1, 2], 'linestyle': "-"},
-    '2st': {'num': [7, 8, 9], 'linestyle': "--"}
+    '1st': {'num': [0, 1, 2], 'linestyle': 'solid'},
+    '2nd': {'num': [7, 8, 9], 'linestyle': 'dash'}
 }
 
 # ============================================================

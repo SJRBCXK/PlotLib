@@ -222,20 +222,24 @@ class ReorderLogic:
 
     @staticmethod
     def generate_groups_code(user_groups: list[list[int]]) -> str:
-        """根据用户分组生成 groups 字典代码。"""
-        basic_styles = ["-", "--", "-.", ":"]
+        """根据用户分组生成 groups 字典代码。
+
+        线型用标准写法（见 src/plotlib/style.py）：前 4 组依次为
+        'solid' / 'dash' / 'dashdot' / 'dot'，之后是自定义虚线 (实线段, 空白段)。
+        """
+        basic_styles = ["solid", "dash", "dashdot", "dot"]
         ordinals = lambda i: f"{i+1}{'th' if 10 <= (i+1) % 100 <= 20 else {1:'st',2:'nd',3:'rd'}.get((i+1)%10,'th')}"
 
         lines = ["groups = {"]
         for i, group_indices in enumerate(user_groups):
             name = ordinals(i)
             if i < 4:
-                ls = f'"{basic_styles[i]}"'
+                ls = repr(basic_styles[i])
             else:
                 p = i - 4
                 on = 3 + (p % 3) * 2
                 off = 5 + (p % 4) * 2
-                ls = f'(0, ({on}, {off}))'
+                ls = f'({on}, {off})'
             line = f"    '{name}': {{'num': {group_indices}, 'linestyle': {ls}}}"
             if i < len(user_groups) - 1:
                 line += ","

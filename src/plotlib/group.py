@@ -8,11 +8,16 @@ from collections import Counter
 import numpy as np
 from .dataset import DataSet
 from .processor import DataProcessLayer
+from .style import check_color, check_linestyle, check_marker
 
 
 # num 支持的写法：单个整数，或这几种容器
 # （data_reorder_app 生成的配置中，单元素组为 int，连续多元素组为 range）
 _NUM_CONTAINERS = (list, tuple, range, np.ndarray)
+
+# 有专门读接口的样式字段 → 校验函数。值只收 style.py 的标准写法，原样保存，翻译在后端渲染时做。
+# 其余字段（如 'label'）不检查，原样保存在 options 里。
+_STYLE_CHECKS = {'linestyle': check_linestyle, 'marker': check_marker, 'color': check_color}
 
 
 def _resolve_num(num) -> list[int]:
@@ -71,6 +76,15 @@ def _check_group(group_name, group_config, available: set[int]) -> dict:
             f"数据分组配置错误：'{group_name}' 的 'num' 包含不存在的样品号：{missing}，已有样品号：{sorted(available)}"
         )
 
+    # 样式字段：只校验，不改写（与 num 不同，标准写法本身就是统一格式）
+    for field, check in _STYLE_CHECKS.items():
+        if field in group_config:
+            try:
+                check(group_config[field])
+            except (TypeError, ValueError) as error:
+                # 保留原来的异常类型，在前面补上分组名和字段名
+                raise type(error)(f"数据分组配置错误：'{group_name}' 的 '{field}'：{error}") from error
+
     group_config['num'] = num
     
     return dict({group_name: group_config})
@@ -85,8 +99,11 @@ class Group():
     分组：若干样品组成的、有名字的集合，是分组配置的唯一主人。
 
     配置只接受完整写法：{分组名: {'num': [样品号, ...], 其余字段...}}。
+    样式字段 linestyle / marker / color 只收 style.py 的标准写法（如 'dash'、'circle'、'red'），
+    创建时校验，原样保存；其余字段不检查。
     创建时解析并校验全部分组；之后其他地方只向它要结果，不再自己解析配置。
-    - 读：names、for name in group、sample_ids(name)、options(name)、to_config()，都返回副本；
+    - 读：names、for name in group、sample_ids(name)、options(name)、
+          linestyle(name) / marker(name) / color(name)、to_config()，都返回副本；
     - 改：add / set / delete，先校验全部、再修改，任何一个分组不合法就一个都不改。
 
     传入的配置：每个分组的 'num' 会被原地格式化为 list[int]（用户的设计决定：
@@ -148,9 +165,24 @@ class Group():
         return list(self._require(group_name)['num'])
 
     def options(self, group_name: str) -> dict:
-        """该分组 'num' 以外的全部字段，如 {'linestyle': '--'}；没有则为 {}。"""
+        """该分组 'num' 以外的全部字段（包括下面三个样式字段），如 {'linestyle': 'dash'}；没有则为 {}。"""
         config = self._require(group_name)
         return {key: copy.deepcopy(value) for key, value in config.items() if key != 'num'}
+
+    # 三个常用样式字段的专门读接口：返回用户写的标准写法（style.py），没写时返回 None。
+    # 翻译成 matplotlib / Plotly 原生值是后端的事，Group 不关心。
+
+    def linestyle(self, group_name: str):
+        """线型：'solid' / 'dash' / 'dot' / 'dashdot'，或自定义虚线 (实线长, 空白长, ...)。"""
+        return copy.deepcopy(self._require(group_name).get('linestyle'))
+
+    def marker(self, group_name: str):
+        """标记：'circle'、'square' 等。"""
+        return copy.deepcopy(self._require(group_name).get('marker'))
+
+    def color(self, group_name: str):
+        """颜色：CSS 颜色名、'#rrggbb' 或 RGB 元组；写了就覆盖这组所有样品的按样品配色。"""
+        return copy.deepcopy(self._require(group_name).get('color'))
 
     def to_config(self) -> dict[str, dict]:
         """当前配置的新字典（num 为规范化后的列表），可以保存、打印或交给别处使用。"""
@@ -263,7 +295,9 @@ class Group():
                     units = [s0.units[freq_idx]] + [s0.units[i] for i in zs_idx]
                     return names, units
 
-            None 则由 _auto_naming 自动生成（仅适用于列顺序未改变的情况）。
+            None 则由 _auto_naming 自动生成（仅适用于列顺序未改变的情况）：
+            每一列都叫「组名_函数名」，如分组 'diff' 用 subtract 计算 → 'diff_subtract'；
+            单位取第一个 slice 同位置的单位。
 
         Returns
         -------
@@ -320,7 +354,7 @@ class Group():
             if naming is not None:
                 result_names, result_units = naming(slices, result_data)
             else:
-                result_names, result_units = self._auto_naming(slices, n_cols, callback)
+                result_names, result_units = self._auto_naming(slices, n_cols, group_name, callback)
 
 
 
@@ -339,17 +373,11 @@ class Group():
         return accumulated
 
 
-    def _auto_naming(self, slices, n_cols, callback):
+    def _auto_naming(self, slices, n_cols, group_name, callback):
         """自动生成结果列的 names 和 units。"""
         cb_name = getattr(callback, '__name__', 'calc')
 
-        names = []
-        for col_idx in range(n_cols):
-            slice_names = [
-                s.names[col_idx] for s in slices
-                if col_idx < len(s.names)
-            ]
-            names.append(f"{cb_name}_" + "_".join(slice_names))
+        names = [f"{group_name}_{cb_name}"] * n_cols
 
         # units 取第一个 slice（_channel_units_unify_check 保证同位置 unit 一致）
         units = [slices[0].units[col_idx] for col_idx in range(n_cols)]

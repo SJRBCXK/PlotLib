@@ -57,10 +57,10 @@ def test_elements_are_python_int(six_samples, num):
 
 
 def test_only_num_is_formatted(six_samples):
-    """原地格式化只改 num（range → list），其余字段原样保留。"""
-    config = {'num': range(0, 3), 'linestyle': '--'}
+    """原地格式化只改 num（range → list），样式字段只校验、原样保留（RGB 元组不会被改成色号）。"""
+    config = {'num': range(0, 3), 'linestyle': 'dash', 'color': (255, 0, 0)}
     Group(six_samples, {'A': config})
-    assert config == {'num': [0, 1, 2], 'linestyle': '--'}
+    assert config == {'num': [0, 1, 2], 'linestyle': 'dash', 'color': (255, 0, 0)}
 
 
 # ──────────────────────────────────────────────
@@ -71,7 +71,7 @@ def test_only_num_is_formatted(six_samples):
 def test_num_missing_raises_value_error(six_samples):
     """配置里没有 'num' 时，抛出 ValueError。"""
     with pytest.raises(ValueError):
-        Group(six_samples, {'A': {'linestyle': '--'}})
+        Group(six_samples, {'A': {'linestyle': 'dash'}})
 
 
 @pytest.mark.parametrize("num", [[], range(0), np.array([])],
@@ -102,13 +102,17 @@ def test_num_elements_must_be_integers(six_samples, num):
 
 
 @pytest.mark.parametrize("config", [
-    {'linestyle': '--'},   # 缺 num
-    {'num': []},           # num 为空
-    {'num': 'abc'},        # num 类型不对
-    [0, 1],                # 简写：配置不是字典
-    {'num': [0, 0]},       # 样品号重复
-    {'num': [9]},          # 样品号不存在
-], ids=['missing', 'empty', 'bad_type', 'not_dict', 'duplicate', 'unknown_sample'])
+    {'linestyle': 'dash'},              # 缺 num
+    {'num': []},                        # num 为空
+    {'num': 'abc'},                     # num 类型不对
+    [0, 1],                             # 简写：配置不是字典
+    {'num': [0, 0]},                    # 样品号重复
+    {'num': [9]},                       # 样品号不存在
+    {'num': [0], 'linestyle': '--'},    # 线型不是标准写法
+    {'num': [0], 'marker': 1},          # 标记类型不对
+    {'num': [0], 'color': 'tab:red'},   # 颜色不是标准写法
+], ids=['missing', 'empty', 'bad_type', 'not_dict', 'duplicate', 'unknown_sample',
+        'bad_linestyle', 'bad_marker', 'bad_color'])
 def test_error_message_names_the_group(six_samples, config):
     """报错信息要指出是哪个组写错了——配置里有十几组时，这是定位问题的唯一线索。"""
     # match 用正则在报错文字里搜索；组名带引号，避免误匹配到别的字符
@@ -121,7 +125,7 @@ def test_error_message_names_the_group(six_samples, config):
 # ══════════════════════════════════════════════
 def make_config():
     """每个测试拿一份新的配置，避免测试之间互相影响。"""
-    return {'B': {'num': [2, 0], 'linestyle': '--', 'label': '对照'},
+    return {'B': {'num': [2, 0], 'linestyle': 'dash', 'label': '对照'},
             'A': {'num': [1]}}
 
 
@@ -131,8 +135,48 @@ def test_group_read_interface(eis_dataset):
     assert group.names == ['B', 'A']
     assert list(group) == ['B', 'A']
     assert group.sample_ids('B') == [2, 0]
-    assert group.options('B') == {'linestyle': '--', 'label': '对照'}
+    assert group.options('B') == {'linestyle': 'dash', 'label': '对照'}
     assert group.options('A') == {}
+
+
+def test_group_style_interface(eis_dataset):
+    """
+    三个样式读接口按原样返回用户写的标准写法（翻译是后端的事）；没写时返回 None，不打印。
+    options 仍然返回 num 以外的全部字段，包括这三项。
+    """
+    group = Group(eis_dataset, {
+        'A': {'num': [0, 1], 'linestyle': 'dash', 'marker': 'circle', 'color': (255, 0, 0)},
+        'B': {'num': [2]},
+    })
+    assert group.linestyle('A') == 'dash'
+    assert group.marker('A') == 'circle'
+    assert group.color('A') == (255, 0, 0)
+    assert (group.linestyle('B'), group.marker('B'), group.color('B')) == (None, None, None)
+    assert group.options('A') == {'linestyle': 'dash', 'marker': 'circle', 'color': (255, 0, 0)}
+
+
+def test_group_custom_dash_is_kept(eis_dataset):
+    """自定义虚线 (实线长, 空白长) 也是标准写法，按原样保存（EIS 脚本在用）。"""
+    group = Group(eis_dataset, {'A': {'num': [0], 'linestyle': (3, 5)}})
+    assert group.linestyle('A') == (3, 5)
+
+
+@pytest.mark.parametrize("field, value, error", [
+    ('linestyle', '--',         ValueError),    # matplotlib 写法
+    ('linestyle', 'dashed',     ValueError),
+    ('linestyle', (0, (3, 5)),  TypeError),     # matplotlib 原生元组
+    ('linestyle', 5,            TypeError),
+    ('marker',    'o',          ValueError),
+    ('color',     'tab:red',    ValueError),    # matplotlib 特有写法
+    ('color',     (1.0, 0, 0),  TypeError),
+], ids=['ls_symbol', 'ls_word', 'ls_mpl_tuple', 'ls_int', 'marker_symbol', 'color_name', 'color_float'])
+def test_group_style_must_be_standard(eis_dataset, field, value, error):
+    """样式字段只收标准写法：创建时就报错（不等到画图），信息里有分组名和写错的值。"""
+    with pytest.raises(error) as excinfo:
+        Group(eis_dataset, {'A': {'num': [0], field: value}})
+    message = str(excinfo.value)
+    assert "'A'" in message
+    assert repr(value) in message
 
 
 def test_group_num_is_normalized(eis_dataset):
@@ -146,9 +190,9 @@ def test_group_read_returns_copies(eis_dataset):
     """读接口不能变成写的后门：改返回值不影响 Group。要修改请用 add / set / delete。"""
     group = Group(eis_dataset, make_config())
     group.sample_ids('B').append(9)
-    group.options('B')['linestyle'] = ':'
+    group.options('B')['linestyle'] = 'dot'
     assert group.sample_ids('B') == [2, 0]
-    assert group.options('B') == {'linestyle': '--', 'label': '对照'}
+    assert group.options('B') == {'linestyle': 'dash', 'label': '对照'}
 
 
 def test_group_source_config_is_normalized_but_not_regrouped(eis_dataset):
@@ -174,7 +218,7 @@ def test_group_shorthand_raises_type_error(eis_dataset):
 
 def test_group_missing_num_raises(eis_dataset):
     with pytest.raises(ValueError, match="'A'.*'num'"):
-        Group(eis_dataset, {'A': {'linestyle': '--'}})
+        Group(eis_dataset, {'A': {'linestyle': 'dash'}})
 
 
 def test_group_empty_num_raises(eis_dataset):
@@ -208,6 +252,9 @@ def test_group_unknown_name_raises(eis_dataset):
         group.sample_ids('C')
     with pytest.raises(ValueError, match="'C'"):
         group.options('C')
+    for read in (group.linestyle, group.marker, group.color):
+        with pytest.raises(ValueError, match="'C'"):
+            read('C')
 
 
 # ══════════════════════════════════════════════
@@ -216,9 +263,9 @@ def test_group_unknown_name_raises(eis_dataset):
 def test_group_set_replaces_whole_group_in_place(eis_dataset):
     """set 整体替换已有分组：旧字段（label）不保留，位置不变。"""
     group = Group(eis_dataset, make_config())
-    assert group.set({'B': {'num': [2, 0, 1], 'linestyle': ':'}}) is group
+    assert group.set({'B': {'num': [2, 0, 1], 'linestyle': 'dot'}}) is group
     assert group.sample_ids('B') == [2, 0, 1]
-    assert group.options('B') == {'linestyle': ':'}
+    assert group.options('B') == {'linestyle': 'dot'}
     assert group.names == ['B', 'A']
 
 
@@ -249,7 +296,8 @@ def test_group_modify_wrong_name_raises(eis_dataset, operation, name):
 @pytest.mark.parametrize("operation", [
     lambda g: g.set({'B': {'num': [5]}}),                         # 样品号不存在
     lambda g: g.add({'C': {'num': [1]}, 'D': {'num': [0, 0]}}),   # 第二个分组有重复
-], ids=['set_unknown_sample', 'add_partly_invalid'])
+    lambda g: g.set({'B': {'num': [2], 'linestyle': '--'}}),      # 线型不是标准写法
+], ids=['set_unknown_sample', 'add_partly_invalid', 'set_bad_linestyle'])
 def test_group_modify_validates_before_changing(eis_dataset, operation):
     """先校验全部、再修改：有任何一个分组不合法，就一个都不改。"""
     group = Group(eis_dataset, make_config())
@@ -261,9 +309,9 @@ def test_group_modify_validates_before_changing(eis_dataset, operation):
 
 def test_group_to_config_returns_new_dict(eis_dataset):
     """to_config 输出当前配置的新字典；num 是规范化后的列表；改它不影响 Group。"""
-    group = Group(eis_dataset, {'A': {'num': range(0, 2), 'linestyle': '--'}})
+    group = Group(eis_dataset, {'A': {'num': range(0, 2), 'linestyle': 'dash'}})
     group.add({'C': {'num': [2]}})
     config = group.to_config()
-    assert config == {'A': {'num': [0, 1], 'linestyle': '--'}, 'C': {'num': [2]}}
+    assert config == {'A': {'num': [0, 1], 'linestyle': 'dash'}, 'C': {'num': [2]}}
     config['A']['num'].append(2)
     assert group.sample_ids('A') == [0, 1]

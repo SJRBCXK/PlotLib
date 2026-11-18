@@ -149,7 +149,7 @@ matplotlib 的分组模式就是那份「具体实现」。因此第 3 步不再
 | 1 | `plot_plotly_object(figure_formatter=...)`、`add_slider(slider_formatter=...)` 两个回调入口 | ✅ |
 | 2 | 格式化器收进 `formatters.py` | ✅ 三个工厂支持 `backend="plotly"`，另有 `combine_formatters`；滑块 formatter 工厂暂未做 |
 | 3 | 交互绘图补分组模式：`InteractivePlotter` 接上 `Group`（STRUCTURE_REVIEW 5.1）；按与 matplotlib **同一份绘图计划**画分组（6.3），不另写分组规则；保存“样品号 → traces”映射，滑块按分组控制（6.4） | ⏳ |
-| 4 | 提取公共部分为绘图计划：共用取数（5.2，✅ `plot_common.get_xy_data`）→ **从分组模式开始**抽计划（6.1）→ matplotlib 按计划画（6.2）→ 其余模式与结果形状（6.5）；创建图、绘制、默认格式、原生回调交给 backend。分组部分先于第 3 步完成 | ⏳ |
+| 4 | 提取公共部分为绘图计划：共用取数（5.2，✅ `plot_common.get_xy_data`）→ **从分组模式开始**抽计划（6.1，✅ `plot_common.plan_figures`）→ matplotlib 按计划画（6.2）→ 其余模式与结果形状（6.5）；创建图、绘制、默认格式、原生回调交给 backend。分组部分先于第 3 步完成 | ⏳ |
 
 第 3 步验收：相同选列与分组配置下，两个 backend 得到相同的数据、标签和分组顺序（同一份计划交给两个 backend）。
 第 4 步验收：旧的 matplotlib 测试行为不变；切换 backend 后曲线数量、数据、标签、顺序一致。

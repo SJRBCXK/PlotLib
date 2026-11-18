@@ -4,7 +4,8 @@
 > 评估范围：`src/`、`scripts/` 逐行阅读；`tools/`、`gui/`、`tests/`、配置与文档看了结构和接口。
 > 本文分三部分：A 评估结论与问题清单（背景）；**B 分步开发指南（当前要做的）**；C 整理工作的记录（已完成）。
 > **状态**：C 部分已全部完成并提交（`92bbde6`，206 passed）。接下来由执行者（Opus 5.5）按 B 部分**指导用户**一步步做，先读 B.0。
-> **进度（2026-11-18）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已完成（未提交；355 passed）。**下一步是步骤 4.5「结果配新 Group」**。
+> **进度（2026-11-18）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已完成（5.1、5.2 未提交；364 passed）。**下一步是步骤 6.1「分组绘图计划」**。
+> **2026-11-18 路线调整**：步骤 5、6 按「先抽绘图计划、两个后端按同一份计划画」重排，不再先在 Plotly 里复制一份 `group_plotter`（理由见步骤 5 的「讲」）。
 > 4.3 引入了标准样式写法（`src/plotlib/style.py`，见 4.3 执行记录）。步骤 5 开始时注意 4.2 推迟过来的 `InteractivePlotter` 改动（见 4.2 执行记录第 5 条）。
 > 新文件 `src/plotlib/style.py`、`tests/test_style.py` 提交时需要 `git add`。
 > A 部分描述的是基线提交时的状态，文件路径按当时的 `src/xxx.py` 书写，这些文件现在位于 `src/plotlib/xxx.py`；
@@ -159,7 +160,7 @@ matplotlib 坐标轴回调把刻度线宽写死为 3（`formatters.py:134`、`14
 - 标注「机械」的小节不需要七个动作，讲清结果、给用户看 diff 即可。
 - 不跨步骤，不顺手修本文没列出的问题；发现了就记下来告诉用户。
 - 本文的行号对应提交 `92bbde6`，改动后会漂移，**以函数名为准**。本文与代码不一致时以代码为准，并告诉用户。
-- 测试数量只增不减（经用户同意删除的除外）。基线是 355 passed（步骤 4.4 之后；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354）。
+- 测试数量只增不减（经用户同意删除的除外）。基线是 364 passed（步骤 5.2 之后；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354 → 355 → 359）。
 - 本文给出的名字、签名都是建议。「定」这个动作里用户改了主意，就按用户的来，并把决定写回本文对应小节。
 - 修改代码用编辑工具逐处修改，让用户能看到 diff。注释和文档保持中文。
 
@@ -171,8 +172,8 @@ matplotlib 坐标轴回调把刻度线宽写死为 3（`formatters.py:134`、`14
 | 2    | 第一层改名：`group` → `sample`             | 机械                   | 1    |
 | 3    | 稀疏样品号配色：第一块公共代码                  | 逻辑，小               | 2    |
 | 4    | 让 `Group` 成为分组的唯一主人                 | 逻辑，中               | 2    |
-| 5    | 交互图补分组模式（`BACKEND_PLAN.md` 第 3 步） | 逻辑，中               | 3、4 |
-| 6    | 公共层与绘图计划（`BACKEND_PLAN.md` 第 4 步） | 架构，大               | 5    |
+| 5    | 交互图接上 `Group`，两个绘图器共用取数        | 机械 + 逻辑，小        | 3、4 |
+| 6    | 绘图计划，从分组模式开始（`BACKEND_PLAN.md` 第 3、4 步） | 架构，大      | 5    |
 | 7    | 补接口缺口：`Dataloader`、逐样品变换、列排序  | 逻辑，小，三项互相独立 | 2    |
 | 8    | 让脚本可复现                                    | 逻辑，小               | 7    |
 | 9    | 工具收敛（Tk / Qt）                             | 待定                   | —   |
@@ -468,7 +469,7 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
   保留函数名是用户的决定：图例一眼看出算的是什么，不用每次手改图例（执行者原建议只用组名）。
 - `_auto_naming` 增加 `group_name` 参数，`callback` 参数保留（取函数名）。
 - 结果仍是新的 `DataSet`，不并回原数据集（会改动输入、样品号要续编、已建绘图器的配色过期、结果单位可能与原数据不同）。
-- 给结果配一个新 `Group`（带上组名与样式）放到步骤 4.5。
+- 给结果配一个新 `Group`（带上组名与样式）放到步骤 4.5（后取消，见 4.5）。
 - 用词：`Group.apply` 是「先分组挑好参与计算的样品，再对每组内部计算」，文档统一叫「分组计算」（原来叫「组间计算」，已全部改名，见 `GLOSSARY.md`）。真正的组与组之间的计算目前没有需求，不做。
 - 分工：测试期望与 `group.py` 的修改由用户写；执行者验证、更新文档。
 
@@ -489,17 +490,38 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 | 2 | 带过去哪些字段                   | 样式字段 `linestyle / marker / color` 带过去；其余字段（如 `label`）待定                           |
 | 3 | 传了 `naming` 时组名还对不对得上 | 组名与配置一致，样品名由 `naming` 决定，两者可以不同                                               |
 
+**已取消（2026-11-18，用户决定）。** 曾按上表建议定下 `apply_as_group`，写测试前用户提出：`DataSet` 本来就不带样式，计算结果一般就是最终要画的东西，很少再分组。
+真需要让结果的线型与原始数据图一致时，不加代码也能做到——结果的第 i 个样品就是第 i 个分组的结果，手动套一个 `Group` 即可：
+
+```python
+result = groups.apply(rev_camp, select=...)
+styled = Group(result, {'1st': {'num': [0], 'linestyle': 'solid'}, '2nd': {'num': [1], 'linestyle': 'dash'}})
+DataPlotter(input_dataset=result, groups=styled).group_plotter(merge_groups=True)
+```
+
+「每条曲线各用各的样式」作为方向，归入步骤 6 的「作用在绘图计划上的样式调整」，不在 `Group` 上做。
+
 **步骤 4 整体验收。** 分组配置只在 `group.py` 里被解析（`git grep -n "resolve_num" src/` 只剩 `group.py`）；
 `scripts/eis_bode.py`、`eis_nyquist.py`、`piezo.py` 不改也能用；用户能说清楚 `Group` 对外回答哪几个问题。
 
+**验收记录（2026-11-18）：**
+- `_resolve_num`、`_check_group` 和对 `'num'` 的读取都只在 `group.py`；`InteractivePlotter` 的 `plot_data_groups` 只保存不解析（步骤 5.1 删除）。
+- 三个分组脚本：用 `ast` 取出 `data_groups`，按其样品号造小数据集建 `Group`，全部通过校验（组名 `1st`…，线型为标准写法）；6 个脚本的导入检查通过。脚本没有实际运行（会弹窗）。
+- 第三条（用户说清 `Group` 对外回答哪几个问题）在步骤 5 开始时由用户口述：分组名与顺序、每组的样品号（有序）、样式与其余字段、配置副本、增删改、分组计算。
+
 ---
 
-### 步骤 5：交互图补分组模式（`BACKEND_PLAN.md` 第 3 步）
+### 步骤 5：交互图接上 `Group`，两个绘图器共用取数
 
-**讲。** 到这里 `Group` 和配色都是公共的了，可以让 Plotly 一侧也支持分组。按「先具体、后合并」，这一步允许和 `group_plotter` 有重复，重复留给步骤 6 消除。
+**讲（2026-11-18 路线调整）。** 原计划是「先具体、后合并」：步骤 5 在 Plotly 里照 `group_plotter` 再写一份分组模式，步骤 6 再对比合并。
+规划时分组规则还没定，需要两份具体实现才看得出公共部分。现在情况变了：`Group`、标准样式写法（`style.py`）、配色（`color_positions`）都已公共，
+分组规则（去重、组首色、样式优先级）已定并有测试保护——matplotlib 的分组模式就是那份「具体实现」，Plotly 的普通模式也已存在。
+再在 Plotly 里抄一份分组规则，等于写一遍再在步骤 6 删掉，也违反 `BACKEND_PLAN.md` 原则 2「模式只实现一次」。
+所以改为：步骤 5 只做两个绘图器的公共准备（接上 `Group`、共用取数），分组规则在步骤 6 抽成绘图计划，两个后端按同一份计划画。
 
-**开始前先读（2026-11-18 更新）：** `Group` 的完整设计和绘图器约定在 `BACKEND_PLAN.md` 2.1 节，`DataPlotter` 已按它实现，这一步让 `InteractivePlotter` 照做。
-这一步的第一件事（步骤 4.2 推迟过来的，机械工作，先于下面的分组绘图）：
+**开始前：** 用户口述 `Group` 对外回答哪几个问题（步骤 4 验收第三条）。`Group` 的完整设计和绘图器约定在 `BACKEND_PLAN.md` 2.1 节。
+
+#### 5.1 `InteractivePlotter` 接上 `Group`（步骤 4.2 推迟过来的，机械为主）
 
 1. `InteractivePlotter.__init__` 删掉必填却未用的第一个参数 `plot_data_group`，`plot_data_groups: dict` 改为可选的 `groups: Group | None`，属性名 `self.groups`；
 2. 三种情况的检查（`None` → 空 `Group`；非 `Group` → `TypeError`；`groups.dataset is not input_dataset` → `ValueError`）从 `DataPlotter.__init__`
@@ -507,19 +529,84 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 3. 测试仿照 `test_plotter.py` 的 `test_groups_must_be_group_object`、`test_groups_from_other_dataset_raises`、`test_default_groups_is_empty_group` 各写一份；
    更新 12 处 `InteractivePlotter(None, ...)`、`scripts/piezo_interactive.py`、README。
 
-分组绘图要用到的现成接口：`for name in self.groups`、`self.groups.sample_ids(name)`（顺序即书写顺序）、
-`self.groups.linestyle(name) / marker(name) / color(name)`（标准写法，没写为 `None`）；
-配色查 `self.color_positions[样品号]`，组首色用 `sample_ids(name)[0]`。
-样式按步骤 4.3 的约定用 `style.translate_*(value, 'plotly')` 翻译（自定义虚线要传线宽）；`DataPlotter._group_style` 是 matplotlib 一侧的对照。
+这一步只接上，不画分组（分组绘图在 6.3）。
+
+**执行记录（2026-11-18，已完成，359 passed）：** 全按建议（函数名 `resolve_groups(groups, dataset)`；数据集成为第一个参数；旧参数不留别名）。
+- 测试先写、先失败：`test_interactive.py` 仿照 `test_plotter.py` 加 3 条（传字典 `TypeError`、别的数据集 `ValueError`、默认空 `Group` 且建在本数据集上），
+  `test_plot_common.py` 加 1 条（合法 `Group` 原样返回，不复制）。
+- 用户编写 `plot_common.resolve_groups`，并把 `DataPlotter.__init__` 的三段检查换成一行调用。
+- 执行者改 `InteractivePlotter.__init__`：删掉 `plot_data_group`、`plot_data_groups`、`self.group`、`self.groups_config`，新增 `groups` 参数与 `self.groups`；
+  更新测试中 12 处 `InteractivePlotter(None, ...)`、`scripts/piezo_interactive.py`（导入检查通过）、README、`tests/README.md`。
+
+#### 5.2 共用取数（原 6.1）
+
+**读。** 两个绘图器的 `_ensure_ready`、`_get_data`、`_get_column_data`：逐行比较，两边是副本（步骤 2 已把参数统一为 `_get_data(sample_idx, channel_x, channel_y, ...)`、
+`_get_column_data(sample_idx, channel_idx, plotrange)`）。顺带讲清一个细节：`_get_column_data` 每取一列都要从头扫描所有列。
+
+**定。** 移到 `plot_common.py` 后的函数签名：它们现在读 `self.column`、`self.plotrange`，变成模块级函数后要显式传入什么（建议传 `dataset` 和 `plotrange`）；
+`neglog` 取绝对值留在取数里还是交给计划（建议暂留取数里，行为不变）。
+
+**测 / 验。** 有现成测试保护：移动前后 `test_plotter.py`、`test_interactive.py` 全部通过，测试数不减；为新的公共函数各补一条直接测试。
+
+**执行记录（2026-11-18，已完成，364 passed）：** 全按建议，参数顺序按用户写法（`plotrange` 放在 `neglog_*` 之后，调用处用关键字传）。
+- 读的发现：`_ensure_ready` 的 `data is None or column is None` 永远不成立（`DataSet()` 的 `data` 是 `np.empty((0, 0))`，`column` 每次现造），
+  补全 `plotrange` 也多余（`[:None]` 就是全部行）。所以两边的 `_ensure_ready` 直接删除，不搬；`self.plotrange` 不再被改写成行数。
+- 用户编写 `plot_common.get_column_data(dataset, sample_idx, channel_idx, plotrange=None)` 与 `get_xy_data(dataset, sample_idx, channel_x, channel_y, neglog_x, neglog_y, plotrange)`。
+  第一版是原样搬过来的方法（仍以 `self` 为第一个参数）——测试暴露出来后改为显式传 `dataset`、`plotrange`。教学点：模块级函数的 `self` 只是普通参数名。
+- 测试 5 条（`test_plot_common.py`）：取列的数据 / 名字 / 单位、`plotrange`、样品号或通道号不存在报错（2 种）、`neglog_y` 只影响 Y。
+- 执行者删掉两个类的 `_ensure_ready`、`_get_data`、`_get_column_data`，替换 6 处调用（`plotter.py` 5、`interactive.py` 1），删去不再使用的 `numpy` 导入；更新 `GLOSSARY.md`、`tests/README.md`。
+- 记录未改：线性扫描（每取一列扫一遍所有列）留到 6.1 考虑；`DataPlotter` 遇到空数据集时不报错、画出空图（`InteractivePlotter` 会报错），两者不一致，属于行为变化，暂不改。
+
+---
+
+### 步骤 6：绘图计划，从分组模式开始（`BACKEND_PLAN.md` 第 3、4 步）
+
+**讲。** 「画几张图、每张图有哪些曲线、每条曲线用什么颜色和样式」这些决定与后端无关，现在写死在 `group_plotter` 的循环里，和 matplotlib 调用缠在一起。
+把它抽成一个**不碰任何绘图库的纯函数**，返回绘图计划；两个后端各写一个「按计划画」。分组规则只写一次，测试不用开图窗，Plotly 的分组模式也就几乎不用额外工作。
+
+**已经是公共的（2026-11-18）：** 分组 = `Group`（`BACKEND_PLAN.md` 2.1 节）；配色 = `plot_common.color_positions`；样式 = `style.py` 的标准写法（2.2 节）；
+步骤 5 之后还有 `resolve_groups` 和共用取数。绘图计划只读 `Group` 的接口，不读配置字典，也不用 `to_config()`。
+
+计划的大致形状（字段在 6.1 的「定」里由用户列出后确定）：
+
+```python
+FigureSpec(key='1st' 或 'main', curves=[...], x_unit, y_unit)
+CurveSpec(sample_idx, x, y, label, color_position, group_name,
+          style={'linestyle': 'dash', 'color': 'red'})   # 标准写法，翻译留给后端
+```
+
+#### 6.1 分组绘图计划（纯函数，用户编写）
 
 **读 + 用户练习。** 读 `plotter.py` 的 `group_plotter`，让用户用自己的话把规则逐条写下来，再对照下面的清单补漏：
 
-1. 没有分组时（空 `Group`，`names == []`），退回普通多线图。
-2. 建图之前先校验所有分组（已由 `Group` 在创建时保证，绘图器里不再校验）。
+1. 没有分组时（空 `Group`，`names == []`），退回普通多线图（一张图，所有样品，默认样式）。
+2. 建图之前先校验所有分组（已由 `Group` 在创建时保证，计划里不再校验）。
 3. 分离模式：每个分组一张图；颜色按样品。
 4. 合并模式：所有分组一张图；被多个分组引用的样品只画一次，用第一个包含它的分组的样式；同一分组的线统一为组首色；柱状图保留各自颜色。
 4'. 两种模式共同（步骤 4.3 起）：分组写了 linestyle / marker / color 就应用（仅折线），color 覆盖上面的默认颜色；没写线型用 `plot_style`；`lines_formatter` 最后执行、优先级最高。
 5. 结果按「分组名 → {样品号: 曲线}」保存，合并模式的键是 `'main'`。
+
+然后让用户列出：画一条线，matplotlib 和 Plotly 各自需要知道什么（参照 `group_plotter` 与 `plot_plotly_object`）。两边都需要的就是计划的字段。
+
+**定。**
+
+| # | 要定的事 | 建议 |
+| - | -------- | ---- |
+| 1 | 函数名、位置、签名 | `plot_common.plan_figures(dataset, groups, channel_x, channel_y, plotrange, merge_groups, ...)` |
+| 2 | 计划用什么结构 | `dataclass`（字段名在编辑器里有提示，比字典不易写错）；新字段用准确的名字：`sample_idx`、`channel_idx`，不叫 `RowNum`（A.4 第 5 条、`GLOSSARY.md`） |
+| 3 | 计划里放不放数据 | 放 X / Y（取数在 5.2 已公共），后端只管画 |
+| 4 | 颜色与样式在计划里是什么 | 颜色存色带位置（各后端用自己的色带取色），分组写了 `color` 时存标准写法；样式存标准写法，翻译留给后端 |
+| 5 | 「仅折线应用分组样式」这条规则归谁 | 计划照实给出样式，由后端决定能否应用；scatter / bar 的处理属于遗留问题，按原则 5 以后改为明确报错 |
+| 6 | 图例显示什么 | 现在是样品名，分组名不出现；计划里的曲线带着 `group_name`，这一步先保持样品名，是否改由用户定 |
+
+**测。** 纯函数测试，不开图窗：分离 / 合并各自的图数和曲线；重叠样品只出现一次且归第一个分组；组首色的色带位置；样式原样带入；空 `Group` 退回一张图。
+注意 `Group` 会原地格式化传入的配置，测试里每次新建配置字典（参考 `test_plotter.py` 的 `make_groups`）。
+
+#### 6.2 matplotlib 按计划画
+
+`group_plotter` 和 `plot_objects` 改为「生成计划 → 按计划画」。**旧测试一条不改，全部通过**才算完成——旧测试就是这次重构的安全网。
+
+#### 6.3 Plotly 按同一份计划画（原步骤 5 的目标）
 
 **定。**
 
@@ -527,38 +614,27 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 | - | -------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | 1 | 先做哪种模式               | 合并模式。它对应一个 Figure，和现有的 `self.asset` 吻合                                                            |
 | 2 | 分离模式在 Plotly 里是什么 | 两个选项：返回 `{分组名: Figure}`；或一张图加「按分组切换」的滑块。后者是 `BACKEND_PLAN.md` 里写的方向，建议采用 |
-| 3 | 曲线怎么登记               | 保存「样品号 → trace」；「分组名 → 样品号列表」直接向 `self.groups.sample_ids(name)` 要，不另存一份。滑块按分组控制显隐，不再按 trace 的位置 |
+
+样式用 `style.translate_*(value, 'plotly')` 翻译（自定义虚线要传线宽）；`DataPlotter._group_style` 是 matplotlib 一侧的对照。
 
 **测。** `BACKEND_PLAN.md` 第 3 步的验收：相同的选列和分组配置下，两个后端得到相同的数据、标签和分组顺序。
 写成一组对照测试，**同一个 `Group` 对象**分别交给两个绘图器（两者用同一个数据集），再比较。重叠样品只出现一次、组首色、线型各一条测试。
-注意 `Group` 会原地格式化传入的配置，测试里每次新建配置字典（参考 `test_plotter.py` 的 `make_groups`）。
 
-**验收。** 新测试通过；更新 `BACKEND_PLAN.md` 第 5 节第 3 步的状态。
+#### 6.4 滑块按分组控制
 
----
+曲线登记为「样品号 → trace」；「分组名 → 样品号列表」直接向 `self.groups.sample_ids(name)` 要，不另存一份。滑块按分组控制显隐，不再按 trace 的位置。
 
-### 步骤 6：公共层与绘图计划（`BACKEND_PLAN.md` 第 4 步）
+#### 6.5 之后
 
-这一步的细节现在不写死。公共部分应当从两份具体实现的对比里长出来，所以**进入这一步时，执行者先做一件事**：
-把 `plotter.py` 和 `interactive.py` 里「取数、分组组织、配色、创建图、绘制、格式化」逐项并排列成对照表，和用户一起标出哪些逐字相同、哪些只是 API 不同、哪些确实不同，再细化下面的小节。
-
-**已经是公共的（2026-11-18）：** 分组 = `Group`（`BACKEND_PLAN.md` 2.1 节）；配色 = `plot_common.color_positions`；
-步骤 5 之后还有 `plot_common.resolve_groups`。绘图计划的生成只读 `Group` 的接口，不读配置字典，也不用 `to_config()`。
-
-预计的顺序：
-
-- **6.1 共用取数。** `_ensure_ready`、`_get_data`、`_get_column_data` 两边是副本，移到 `plot_common.py`。有现成测试保护，最容易。
-  步骤 2 已把参数统一为 `_get_data(sample_idx, channel_x, channel_y, ...)`、`_get_column_data(sample_idx, channel_idx, plotrange)`，两边一致。
-  顺带讲清一个细节：`_get_column_data` 每取一列都要从头扫描所有列。
-- **6.2 `plot_objects` 一种模式的绘图计划。** 让用户先列出：画一条线，两个后端各自需要知道什么。两边都需要的就是计划的字段（预计有 X、Y、标签、样品号、色带位置、线型、左轴或右轴）。
-  然后 `DataPlotter` 只负责生成计划，matplotlib 和 Plotly 各写一个「按计划画」的函数。新字段用准确的名字（A.4 第 5 条、`GLOSSARY.md`）：
-  样品号叫 `sample_idx`、通道号叫 `channel`/`channel_idx`，列序号不叫 `RowNum`；分组曲线还要带分组名（来自 `for name in groups`）。
-- **6.3 逐个模式迁移。** 分组、Y-Y、双 Y 轴，一次一个，每次迁移后旧测试保持通过。
-- **6.4 统一结果的形状。** `axesset` 现在四种形状（A.4 第 2 条），需要用户定一种。这会改动读取 `axesset` 的测试。
+- **Y-Y、双 Y 轴迁移。** 一次一个模式，计划里加「左轴 / 右轴」字段；每次迁移后旧测试保持通过。
+- **统一结果的形状。** `axesset` 现在四种形状（A.4 第 2 条），需要用户定一种。这会改动读取 `axesset` 的测试。
   其中 `group_plotter` 的形状是 `{分组名或 'main': {'ax', 'fig', 'artists': {样品号: artist}}}`，`artists` 的键在步骤 2 已明确为样品号。
-- **6.5 建 `backends/`、拆 `formatters.py`。** 前面都稳定后再搬文件。
+- **建 `backends/`、拆 `formatters.py`。** 前面都稳定后再搬文件。
 
-验收见 `BACKEND_PLAN.md` 第 4 步：旧的 matplotlib 测试行为不变；切换后端后曲线数量、数据、标签、顺序一致。
+**方向（记录，不在本步骤做）：作用在计划上的样式调整。** 有了计划，就可以在「画之前」按标准写法改某条曲线的 `style`，两个后端都生效；
+现在的 `lines_formatter` 是后端原生回调，只对一个后端有效。以后的 `group_style_applyer`、组内精调、「计算结果各用各的样式」（4.5 取消时的需求）都可以做成这种形式。
+
+验收见 `BACKEND_PLAN.md` 第 3、4 步：旧的 matplotlib 测试行为不变；同一份计划交给两个后端，曲线数量、数据、标签、顺序一致。
 
 ---
 
@@ -630,7 +706,7 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 - `names`、`units` 改名（步骤 1 第 4 项）。
 - `plotdataRowNum_*`、`NegLogScale_*` 等旧参数改名：等步骤 6 的新接口用准确的名字，旧接口届时再决定去留。
 - 降低 `requires-python`。
-- 拆分 `formatters.py`：并入步骤 6.5。
+- 拆分 `formatters.py`：并入步骤 6.5 之后的「建 `backends/`」。
 
 ### B.10 进度
 
@@ -643,9 +719,9 @@ DataPlotter(ds).plot_objects()      # 样品 5 和 9 颜色相同，不报错
 | 4.2 绘图器只认 `Group`   | 完成   | 2026-11-18 | 只接受 `Group` 对象（不收字典）；必须同一数据集；`InteractivePlotter` 推迟到步骤 5；`resolve_num` 并入 `_check_group`（见执行记录）。基线 242 |
 | 4.3 样式约定               | 完成   | 2026-11-18 | 新增 `style.py`：一套与后端无关的标准写法（线型 / 标记 / 颜色），后端各自翻译；`Group` 校验并提供 `linestyle / marker / color` 读接口；删除 `apply_group_linestyle`；formatter 与 `plot_style` 同用标准写法；两个重排工具也生成标准写法，并修了 Tk 版序数词后缀（见执行记录）。基线 354 |
 | 4.4 结果带分组名           | 完成   | 2026-11-18 | 不传 `naming` 时结果名为「组名_函数名」；「组间计算」改名为「分组计算」（见执行记录）。基线 355 |
-| 4.5 结果配新 Group         | 未开始 |          |                                |
-| 5 交互图分组模式           | 未开始 |          |                                |
-| 6 公共层与绘图计划         | 未开始 |          |                                |
+| 4.5 结果配新 Group         | 取消   | 2026-11-18 | 计算结果很少再分组；需要时手动套 `Group`（见 4.5）。步骤 4 已验收 |
+| 5 交互图接上 Group、共用取数 | 完成   | 2026-11-18 | 路线调整：原步骤 5 的分组绘图移到 6.3。5.1、5.2 全按建议；`_ensure_ready` 删除不搬（见 5.2 执行记录）。基线 364 |
+| 6 绘图计划（从分组模式开始） | 未开始 |          |                                |
 | 7.1 `Dataloader` 接口    | 未开始 |          |                                |
 | 7.2 逐样品变换             | 未开始 |          |                                |
 | 7.3 公开的列排序           | 未开始 |          |                                |

@@ -239,7 +239,7 @@ def test_plotly_axis_bounds_after_render(eis_dataset, render, axis, kwargs, expe
     """
     from plotlib.interactive import InteractivePlotter
 
-    plot = InteractivePlotter(None, eis_dataset, plotdataRowNum_x=0, plotdataRowNum_y=1)
+    plot = InteractivePlotter(eis_dataset, plotdataRowNum_x=0, plotdataRowNum_y=1)
     fig = plot.plot_plotly_object(
         figure_formatter=make_axes_formatter(backend="plotly", **kwargs)).asset
     full_axis = render(fig).layout[axis]

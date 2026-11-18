@@ -3,7 +3,7 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**355 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**364 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
 
 > 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各样品都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
@@ -44,7 +44,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `test_transformer.py` | `src/plotlib/processor.py` 的 `DataTransformer` | `apply` / `Norm` 的计算结果与自动命名 |
 | `test_group.py` | `src/plotlib/group.py` 的 `Group` | `num` 各种写法的格式化；创建时校验、读接口返回副本、增删改先校验再修改 |
 | `test_group_apply.py` | `src/plotlib/group.py` 的 `Group` | 分组计算结果、命名、结果样品号正确 |
-| `test_plot_common.py` | `src/plotlib/plot_common.py` | 两个绘图器共用的函数：样品号 → 色带位置 |
+| `test_plot_common.py` | `src/plotlib/plot_common.py` | 两个绘图器共用的函数：样品号 → 色带位置；分组参数检查 `resolve_groups` |
 | `test_style.py` | `src/plotlib/style.py` | 样式标准写法（线型、标记、颜色）的校验，以及到 matplotlib / Plotly 的翻译 |
 | `test_plotter.py` | `src/plotlib/plotter.py` | 四种绘图方法画出的线、标签、样式正确 |
 | `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
@@ -164,6 +164,9 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - `color_positions`：去重、排序后，位置 = 排名 ÷ 样品数。`[0, 5, 9]` 与 `[0, 1, 2]` 得到相同的 0、1/3、2/3；
   乱序、重复不影响结果；单个样品为 0；空输入得到空字典
 - 样品号连续时与旧公式「样品号 ÷ 样品数」结果相同，已有图的颜色不变
+- `resolve_groups`：合法的 `Group` 原样返回，不复制（三种情况的报错由两个绘图器各自的测试覆盖）
+- `get_column_data`：按样品号 + 通道号取一列，返回数据、列名（样品名）、单位；`plotrange` 只取前几行；样品号或通道号不存在 → `RuntimeError`（`未找到对应的列数据`）
+- `get_xy_data`：`neglog_y` 只对 Y 取绝对值，X 不变；返回 X、Y 各自的列名和单位
 
 ### 样式标准写法 — `test_style.py`
 - 合法：线型 `'solid'` / `'dash'` / `'dot'` / `'dashdot'` 与自定义虚线 `(3, 5)`、`[3, 5]`；7 个标记名；
@@ -230,6 +233,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - `combine_formatters`：按传入顺序调用，跳过 `None`
 
 ### 交互绘图 — `test_interactive.py`
+- 分组参数与 `DataPlotter` 相同：传字典 → `TypeError`（提示用 `Group`）；基于别的数据集的 `Group` → `ValueError`；不传时是建在本数据集上的空 `Group`
 - 每个样品一条曲线，X/Y 数据等于数据集对应列，曲线名是样品名，坐标轴标题是单位
 - 样品号 0、5、9：曲线颜色取 Plasma 色带 0、1/3、2/3 处，与 matplotlib 同一套位置（回归：曾在样品 5 处 `IndexError`）
 - 重复调用 `plot_plotly_object` 生成新的 Figure，`plot_artists` 与 Figure 中的 trace 一一对应

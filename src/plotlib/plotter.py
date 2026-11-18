@@ -1,10 +1,9 @@
 """科学数据绘图模块。"""
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
-import numpy as np
 from .dataset import DataSet
 from .group import Group
-from .plot_common import color_positions
+from .plot_common import color_positions, get_xy_data, resolve_groups
 from .style import translate_color, translate_linestyle, translate_marker
 
 # ============================================================================
@@ -106,19 +105,7 @@ class DataPlotter:
         ticker_width : int
             刻度线宽度。
         """
-        # 一个绘图器只对应一个数据集和一个 Group，三种情况：
-        if groups is None:
-            # 不分组：用空 Group，后面的代码总是面对一个 Group，不用判断 None
-            groups = Group(input_dataset, {})
-        elif not isinstance(groups, Group):
-            # 类型标注只在编辑器里提醒，运行时要自己检查，才能给出清楚的报错
-            raise TypeError(
-                f"groups 必须是 Group 对象，实际是 {type(groups).__name__}；"
-                "请先用 Group(input_dataset, config) 创建。"
-            )
-        elif groups.dataset is not input_dataset:
-            # 用 is 判断「是不是同一个对象」：内容相同的两个数据集也不算
-            raise ValueError("groups 是基于另一个数据集创建的；请基于绘图用的数据集创建 Group。")
+        groups = resolve_groups(groups, input_dataset)
 
         resolved_cmap = plt.get_cmap('plasma' if cmap is None else cmap)
         
@@ -159,33 +146,7 @@ class DataPlotter:
     # 数据与绘制
     # ========================================================================
 
-    def _ensure_ready(self):
-        """确保绘图所需的数据已加载，并补全 plotrange。"""
-        if self.data is None or self.column is None:
-            raise RuntimeError("未加载数据")
-        if self.plotrange is None:
-            self.plotrange = self.data.shape[0]
-        
-
-    def _get_data(self, sample_idx: int, channel_x: int, channel_y: int,
-                  neglog_x: bool = False, neglog_y: bool = False):
-        """取出一个样品的 X、Y 两列，返回 (x, y, x_label, y_label, x_unit, y_unit)。"""
-        Row_x, x_label, x_unit = self._get_column_data(sample_idx, channel_x, self.plotrange)
-        Row_y, y_label, y_unit = self._get_column_data(sample_idx, channel_y, self.plotrange)
-
-        if neglog_x:
-            Row_x = np.abs(Row_x)
-        if neglog_y:
-            Row_y = np.abs(Row_y)
-
-        return Row_x, Row_y, x_label, y_label, x_unit, y_unit
-
-    def _get_column_data(self, sample_idx: int, channel_idx: int, plotrange: int | None):
-        """根据样品号和通道号获取列数据，返回 (data, name, unit)。"""
-        for column in self.column:
-            if column['sample_idx'] == sample_idx and column['channel_idx'] == channel_idx:
-                return column['data'][0:plotrange], column['name'], column['unit']
-        raise RuntimeError("未找到对应的列数据")
+    # 取数（按样品号 + 通道号取 X、Y）与 InteractivePlotter 共用：plot_common.get_xy_data
 
     def _plot_data(self, ax, x, y, plot_kind='line', **kwargs):
         """按 plot_kind 绘制一组数据，返回对应的 artist。"""
@@ -368,14 +329,13 @@ class DataPlotter:
         DataPlotter
             返回 self 以支持链式调用。
         """
-        self._ensure_ready()
 
         with plt.rc_context(self.rc_params):
             fig, ax = plt.subplots(figsize=(10, 8))
             self.plot_artists = []
 
             for i in sorted(set(self.sample_idx)):
-                Row_x, Row_y, _, y_label, x_unit, y_unit = self._get_data(
+                Row_x, Row_y, _, y_label, x_unit, y_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
                     sample_idx=i,
                     channel_x=self.plotdataRowNum_x,
                     channel_y=self.plotdataRowNum_y,
@@ -448,7 +408,6 @@ class DataPlotter:
             分离模式：axesset = {组名: {'ax', 'fig', 'artists': {样品号: artist}}}
             合并模式：axesset = {'main': {'ax', 'fig', 'artists': {样品号: artist}}}
         """
-        self._ensure_ready()
 
         if not self.groups.names:
             return self.plot_objects(axes_formatter=axes_formatter,
@@ -490,7 +449,7 @@ class DataPlotter:
                     # 沿用第一个包含它的组的样式
                     if merge_groups and sample in merged_artists:
                         continue
-                    Row_x, Row_y, _, y_label, x_unit, y_unit = self._get_data(
+                    Row_x, Row_y, _, y_label, x_unit, y_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
                         sample_idx=sample,
                         channel_x=self.plotdataRowNum_x,
                         channel_y=self.plotdataRowNum_y,
@@ -588,14 +547,13 @@ class DataPlotter:
             返回 self 以支持链式调用。
             axesset = {样品号:{'artist', 'ax', 'fig'}}
         """
-        self._ensure_ready()
         self.axesset = {}
 
         with plt.rc_context(self.rc_params):
             for i in sorted(set(self.sample_idx)):
                 fig, ax = plt.subplots(figsize=(12, 8))
 
-                Row_Y1, Row_Y2, Y1_label, _, Y1_unit, Y2_unit = self._get_data(
+                Row_Y1, Row_Y2, Y1_label, _, Y1_unit, Y2_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
                     sample_idx=i,
                     channel_x=plotdataRowNum_Y1,
                     channel_y=plotdataRowNum_Y2,
@@ -684,21 +642,20 @@ class DataPlotter:
             返回 self 以支持链式调用。
             axesset = {样品号:{'artist_Y1', 'artist_Y2', 'ax1', 'ax2', 'fig'}}
         """
-        self._ensure_ready()
         self.axesset = {}
 
         with plt.rc_context(self.rc_params):
             for i in sorted(set(self.sample_idx)):
                 fig, ax1 = plt.subplots(figsize=(12, 8))
 
-                Row_X1, Row_Y1, _, Y1_label, X1_unit, Y1_unit = self._get_data(
+                Row_X1, Row_Y1, _, Y1_label, X1_unit, Y1_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
                     sample_idx=i,
                     channel_x=plotdataRowNum_X1,
                     channel_y=plotdataRowNum_Y1,
                     neglog_x=NegLogScale_X1,
                     neglog_y=NegLogScale_Y1
                 )
-                Row_X2, Row_Y2, _, Y2_label, _, Y2_unit = self._get_data(
+                Row_X2, Row_Y2, _, Y2_label, _, Y2_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
                     sample_idx=i,
                     channel_x=plotdataRowNum_X2,
                     channel_y=plotdataRowNum_Y2,

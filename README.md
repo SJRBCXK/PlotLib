@@ -271,8 +271,7 @@ data = Dataloader(COLUMNS_PER_DATASET=6).load_data()
 axes_fmt = make_axes_formatter(backend="plotly", xlim_left=0.001, xscale_type='log')
 
 plot = InteractivePlotter(
-    None,                 # 第一个参数目前未使用，传 None
-    input_dataset=data,
+    input_dataset=data,   # 分组参数 groups 与 DataPlotter 相同（Group 对象，可省略）
     plotrange=300,
     plotdataRowNum_x=2,   # Displacement
     plotdataRowNum_y=4,   # Voltage

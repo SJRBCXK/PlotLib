@@ -8,6 +8,7 @@ pytest.importorskip("plotly")
 import plotly.graph_objects as go
 
 from plotlib.dataset import DataSet
+from plotlib.group import Group
 from plotlib.interactive import InteractivePlotter
 
 
@@ -31,8 +32,31 @@ def _asset(plot: InteractivePlotter) -> go.Figure:
     return plot.asset
 
 
+# ══════════════════════════════════════════════
+# 分组参数：与 DataPlotter 相同的约定（plot_common.resolve_groups 共用）
+# ══════════════════════════════════════════════
+def test_groups_must_be_group_object(eis_dataset):
+    """传字典 → TypeError，提示先用 Group 包装。"""
+    with pytest.raises(TypeError, match="Group"):
+        InteractivePlotter(eis_dataset, groups={'A': {'num': [0, 1]}})  # pyright: ignore[reportArgumentType]  故意传错类型
+
+
+def test_groups_from_other_dataset_raises(eis_dataset, sparse_dataset):
+    """一个绘图器只对应一个数据集：Group 必须建在绘图器的数据集上。"""
+    with pytest.raises(ValueError):
+        InteractivePlotter(eis_dataset, groups=Group(sparse_dataset, {'A': {'num': [0, 5]}}))
+
+
+def test_default_groups_is_empty_group(eis_dataset):
+    """不传分组时是空 Group，且建在绘图器的数据集上。"""
+    plot = InteractivePlotter(eis_dataset)
+    assert isinstance(plot.groups, Group)
+    assert plot.groups.names == []
+    assert plot.groups.dataset is eis_dataset
+
+
 def test_plot_data_and_repeated_calls(eis_dataset):
-    plot = InteractivePlotter(None, eis_dataset, plotdataRowNum_x=0, plotdataRowNum_y=1)
+    plot = InteractivePlotter(eis_dataset, plotdataRowNum_x=0, plotdataRowNum_y=1)
     assert plot.plot_plotly_object() is plot
     first = _asset(plot)
     assert len(_traces(first)) == len(plot.plot_artists) == 3
@@ -56,14 +80,14 @@ def test_sparse_sample_ids_colors(sparse_dataset):
     """
     import plotly.colors as plyc
 
-    fig = _asset(InteractivePlotter(None, sparse_dataset).plot_plotly_object())
+    fig = _asset(InteractivePlotter(sparse_dataset).plot_plotly_object())
     expected = plyc.sample_colorscale(plyc.get_colorscale('Plasma'), [0, 1/3, 2/3])
     assert [trace.line.color for trace in _traces(fig)] == expected
 
 
 def test_template_hides_minor_log_labels(eis_dataset):
     """对数轴 10^n 之间默认显示小号 2、5 标签，大小不一致，模板默认关闭。"""
-    fig = _asset(InteractivePlotter(None, eis_dataset).plot_plotly_object())
+    fig = _asset(InteractivePlotter(eis_dataset).plot_plotly_object())
     template_layout = _layout(fig)['template']['layout']
     assert template_layout['xaxis']['minorloglabels'] == 'none'
     assert template_layout['yaxis']['minorloglabels'] == 'none'
@@ -74,7 +98,7 @@ def test_template_hides_minor_log_labels(eis_dataset):
     ("cumulative", [[True, False, False], [True, True, False], [True, True, True]]),
 ])
 def test_slider_steps(eis_dataset, mode, expected):
-    plot = InteractivePlotter(None, eis_dataset).plot_plotly_object()
+    plot = InteractivePlotter(eis_dataset).plot_plotly_object()
     fig = plot.add_slider(mode)
     assert fig is plot.asset
     assert [trace.visible for trace in _traces(fig)] == expected[0]
@@ -93,7 +117,7 @@ def test_slider_steps(eis_dataset, mode, expected):
 
 def test_slider_default_look(eis_dataset):
     """初始标题等于第 0 档；短标签放得下时可见；用户回调可覆盖默认值。"""
-    plot = InteractivePlotter(None, eis_dataset).plot_plotly_object()
+    plot = InteractivePlotter(eis_dataset).plot_plotly_object()
     fig = plot.add_slider(slider_formatter=lambda s: s.update(currentvalue_prefix="G: "))
     layout = _layout(fig)
     slider = layout['sliders'][0]
@@ -105,7 +129,7 @@ def test_slider_default_look(eis_dataset):
 
 def test_slider_hides_crowded_labels(eis_dataset):
     """33 条长名称（如 piezo 数据）会互相压住，默认隐藏档位标签。"""
-    plot = InteractivePlotter(None, eis_dataset)
+    plot = InteractivePlotter(eis_dataset)
     plot.asset = go.Figure(layout=dict(template=plot._create_template()))
     for i in range(33):
         plot.asset.add_scatter(x=[0, 1], y=[0, i], name=f'Mg10-back-1mm-relax-{i}')
@@ -116,18 +140,18 @@ def test_slider_hides_crowded_labels(eis_dataset):
 
 def test_slider_requires_figure(eis_dataset):
     with pytest.raises(RuntimeError, match='请先调用绘图方法'):
-        InteractivePlotter(None, eis_dataset).add_slider()
+        InteractivePlotter(eis_dataset).add_slider()
 
 
 def test_slider_rejects_empty_figure(eis_dataset):
-    plot = InteractivePlotter(None, eis_dataset)
+    plot = InteractivePlotter(eis_dataset)
     plot.asset = go.Figure()
     with pytest.raises(RuntimeError, match='图中没有曲线'):
         plot.add_slider()
 
 
 def test_invalid_mode_does_not_change_visibility(eis_dataset):
-    plot = InteractivePlotter(None, eis_dataset).plot_plotly_object()
+    plot = InteractivePlotter(eis_dataset).plot_plotly_object()
     before = _asset(plot).to_json()
     with pytest.raises(ValueError, match='不支持的 mode'):
         # 故意传入非法值，检验运行时校验；类型检查器的报错是预期的。
@@ -137,4 +161,4 @@ def test_invalid_mode_does_not_change_visibility(eis_dataset):
 
 def test_empty_dataset_has_clear_error():
     with pytest.raises(RuntimeError, match='数据集为空'):
-        InteractivePlotter(None, DataSet()).plot_plotly_object()
+        InteractivePlotter(DataSet()).plot_plotly_object()

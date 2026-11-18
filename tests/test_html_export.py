@@ -77,6 +77,6 @@ def test_works_with_interactive_plotter_template(eis_dataset):
     """集成：InteractivePlotter 的模板尺寸（1200 × 800）直接决定画框尺寸。"""
     from plotlib.interactive import InteractivePlotter
 
-    fig = InteractivePlotter(None, eis_dataset).plot_plotly_object().add_slider()
+    fig = InteractivePlotter(eis_dataset).plot_plotly_object().add_slider()
     page = build_fit_html(fig, side_html="<p>x</p>", include_plotlyjs="cdn")
     assert canvas_size(page) == (1200 + 24 + 300, 800)

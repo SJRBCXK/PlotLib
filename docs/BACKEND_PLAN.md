@@ -27,7 +27,8 @@ DataPlotter(dataset, groups=Group)（唯一的数据与模式入口）
         ▼
 绘图计划（与后端无关的小数据结构）
    每张图：坐标轴配置 + 曲线列表
-   每条曲线：X / Y、标签、样品号、左 / 右轴、样式
+   每条曲线：X / Y、标签、样品号、分组名、色带位置、左 / 右轴、
+            样式（2.2 节标准写法，翻译留给 backend）
         │
    ┌────┴────┐
    ▼         ▼
@@ -43,10 +44,11 @@ MatplotlibBackend    PlotlyBackend
 ```text
 src/plotlib/
 ├── group.py              # 已有：Group，分组的唯一主人（2.1 节）
-├── plot_common.py        # 已有：两个绘图器共用的函数（color_positions；步骤 5 起继续往里放）
+├── plot_common.py        # 已有：两个绘图器共用的函数（color_positions；STRUCTURE_REVIEW 步骤 5 起放入
+│                         #       resolve_groups、共用取数，步骤 6.1 放入绘图计划）
 ├── style.py              # 已有：样式标准写法的校验与到各后端的翻译（2.2 节）
 ├── plotter.py            # DataPlotter：公共入口与模式组织
-├── plot_spec.py          # 绘图计划
+├── plot_spec.py          # 绘图计划（先放在 plot_common.py，稳定后再拆出）
 ├── formatters.py         # 格式化器工厂（已支持 backend 参数）
 └── backends/
     ├── matplotlib_backend.py
@@ -92,7 +94,8 @@ src/plotlib/
 - 不传时为空 `Group`（`names == []`），`group_plotter` 退回普通多线图。
 - 配色用 `plot_common.color_positions(dataset.sample_idx)`，按整个数据集排名一次，同一样品在各张图里颜色一致；合并模式的组首色 = `sample_ids(name)[0]` 的颜色。
 - 分组样式写了就应用（两种模式一样，目前仅折线）；`color` 写了时整组同色。没写线型用 `plot_style`。优先级：默认样式 < 分组样式 < `lines_formatter`。
-- 现状：`DataPlotter` 已按此实现（属性 `self.groups`，翻译见 `_group_style`）；**`InteractivePlotter` 尚未改**，见第 7 节。
+- 现状：两个绘图器都按此接收 `groups`（属性 `self.groups`），三种情况的检查共用 `plot_common.resolve_groups`；
+  `DataPlotter` 已按此分组绘图（翻译见 `_group_style`），`InteractivePlotter` 只保存，分组绘图见 STRUCTURE_REVIEW 6.3。
 
 字段拼写不检查（2026-11-18 用户决定：`options` 返回全部字段，写错时一眼能看出来）。
 
@@ -133,6 +136,11 @@ src/plotlib/
 
 每一步都要有可运行的终点。
 
+**2026-11-18 调整：** 第 1、2 步之后，分组（`Group`）、样式（`style.py`）、配色（`color_positions`）已经公共，分组规则也已定并有测试保护，
+matplotlib 的分组模式就是那份「具体实现」。因此第 3 步不再先在 Plotly 里复制一份 `group_plotter`，而是先把分组规则抽成绘图计划（第 4 步的一部分），
+再让 Plotly 按同一份计划画。顺序变为：接上 `Group`、共用取数 → 分组绘图计划 → matplotlib 按计划画 → Plotly 按计划画（即第 3 步）→ 其余模式。
+对应 `STRUCTURE_REVIEW.md` 步骤 5、6。
+
 ## 5. 进度
 
 | 步骤 | 内容 | 状态 |
@@ -140,10 +148,10 @@ src/plotlib/
 | 0 | 恢复测试基线；稀疏样品号的稳定配色 | ✅ 配色于 2026-11-17 完成：`plot_common.color_positions`，两个绘图器共用 |
 | 1 | `plot_plotly_object(figure_formatter=...)`、`add_slider(slider_formatter=...)` 两个回调入口 | ✅ |
 | 2 | 格式化器收进 `formatters.py` | ✅ 三个工厂支持 `backend="plotly"`，另有 `combine_formatters`；滑块 formatter 工厂暂未做 |
-| 3 | 交互绘图补分组模式：复用 `Group`（绘图器只接受 `Group` 对象，见 STRUCTURE_REVIEW 步骤 4.2），对齐分离 / 合并 / 重叠样品去重规则；改为保存“样品号 → traces”映射，滑块按分组控制 | ⏳ |
-| 4 | 提取公共部分（取列、行范围、样品排序、稳定配色、分组组织）为绘图计划；创建图、绘制、默认格式、原生回调交给 backend | ⏳ |
+| 3 | 交互绘图补分组模式：`InteractivePlotter` 接上 `Group`（STRUCTURE_REVIEW 5.1）；按与 matplotlib **同一份绘图计划**画分组（6.3），不另写分组规则；保存“样品号 → traces”映射，滑块按分组控制（6.4） | ⏳ |
+| 4 | 提取公共部分为绘图计划：共用取数（5.2，✅ `plot_common.get_xy_data`）→ **从分组模式开始**抽计划（6.1）→ matplotlib 按计划画（6.2）→ 其余模式与结果形状（6.5）；创建图、绘制、默认格式、原生回调交给 backend。分组部分先于第 3 步完成 | ⏳ |
 
-第 3 步验收：相同选列与分组配置下，两个 backend 得到相同的数据、标签和分组顺序。
+第 3 步验收：相同选列与分组配置下，两个 backend 得到相同的数据、标签和分组顺序（同一份计划交给两个 backend）。
 第 4 步验收：旧的 matplotlib 测试行为不变；切换 backend 后曲线数量、数据、标签、顺序一致。
 
 ## 6. 暂时不做
@@ -162,10 +170,13 @@ src/plotlib/
   matplotlib 用 `cmap(位置)`、Plotly 用 `sample_colorscale(色带, [位置])` 各自取色。两个绘图器的 `num_samples` 构造参数已删除。
 - **子集与全集颜色一致**（遗留，暂不做）：配色按「本次绘图的数据集」排名，从全集中挑出部分样品单独画时，颜色与画全集时不同。
   这是有意的默认：子集按自身排名，对比度更好。需要时给绘图器加可选参数（如 `color_reference=全集样品号`），默认 `None` 保持现状。
-- **`InteractivePlotter` 还没有接上 `Group`**（2026-11-18 记录，在第 3 步开始时处理）：构造函数第一个参数 `plot_data_group` 必填却未使用，
+- ~~**`InteractivePlotter` 还没有接上 `Group`**~~（2026-11-18 已解决，STRUCTURE_REVIEW 步骤 5.1）：构造函数第一个参数 `plot_data_group` 必填却未使用，
   `plot_data_groups` 只保存不使用。要按 2.1 节的绘图器约定改：删掉第一个参数，改为可选的 `groups: Group | None`，三种情况的检查与 `DataPlotter` 相同；
   届时把检查移进 `plot_common.py`（如 `resolve_groups(groups, dataset) -> Group`），两个绘图器共用。随之更新测试中 12 处 `InteractivePlotter(None, ...)`、
   `scripts/piezo_interactive.py` 和 README。
 - **分组样式只对折线生效**（2026-11-18 记录）：scatter / bar 写了 linestyle / marker / color 也不应用（scatter 创建后改不了 marker，bar 没有 `set_color`）。
   按原则 5 以后应改为明确报错或在创建时传入。数据点很密时标记会糊成一片，以后可能需要 `markevery` 类参数。
+- **图例显示样品名，不显示分组名**（2026-11-18 记录）：分组绘图的图例来自列名（样品名）。绘图计划的曲线带 `group_name`，是否改为显示组名在 STRUCTURE_REVIEW 6.1 由用户定。
+- **作用在绘图计划上的样式调整**（2026-11-18 记录，方向）：有了计划后，可在画之前按标准写法改某条曲线的样式，两个 backend 都生效；
+  现在的 `lines_formatter` 是后端原生回调，只对一个 backend 有效。`group_style_applyer`、组内精调、计算结果各用各的样式都可以做成这种形式。
 - ~~**Plotly 依赖未声明**~~（2026-11-14 已解决）：`pyproject.toml` 增加可选依赖 `interactive`（plotly）和 `test`（pytest、plotly、kaleido）；`src/plotlib/__init__.py` 改为首次访问 `InteractivePlotter` 时才导入，没装 Plotly 也能使用数据模块和 matplotlib 绘图。

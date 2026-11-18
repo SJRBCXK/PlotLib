@@ -2,11 +2,10 @@
 from collections.abc import Callable
 from typing import Literal, Self, cast
 
-import numpy as np
 import plotly.graph_objects as go
 from .group import Group
 from .dataset import DataSet
-from .plot_common import color_positions
+from .plot_common import color_positions, get_xy_data, resolve_groups
 import plotly.colors as plyc
 
 # 滑块模式：single 每档只显示一条曲线；cumulative 每档累加显示到当前曲线。
@@ -23,30 +22,28 @@ class InteractivePlotter:
 
     def __init__(
         self,
-        plot_data_group: Group | None,
         input_dataset: DataSet,
         plotrange: int | None = None,
         plotdataRowNum_x: int = 0,
         plotdataRowNum_y: int = 1,
         cmap: str | None = None,
-        plot_data_groups: dict | None = None,
+        groups: Group | None = None,
     ):
         """初始化数据侧状态，不创建图形、不配置样式。
 
-        plot_data_group 保留旧脚本参数；plot_data_groups 对应 DataPlotter
-        的绘图分组字典。两者目前仅保存，不在这里执行分组计算或绘图。
         plotrange 为 None 时使用全部行；X/Y 索引均为通道号（样品内的列序号）。
+        groups 与 DataPlotter 的约定相同：只接受基于 input_dataset 创建的 Group 对象，
+        None 表示不分组（空 Group）。目前只保存，分组绘图见 STRUCTURE_REVIEW 步骤 6.3。
         """
-        if plot_data_groups is None:
-            plot_data_groups = {}
+        # 三种情况的检查与 DataPlotter 共用（plot_common.resolve_groups）
+        groups = resolve_groups(groups, input_dataset)
 
         resolved_cmap = plyc.get_colorscale('Plasma' if cmap is None else cmap)
         
 
         # 数据与选择设置：与 DataPlotter 保持对应，方便后续比较和合并。
-        self.group = plot_data_group
         self.dataset: DataSet = input_dataset
-        self.groups_config = plot_data_groups  # 只读，不写回
+        self.groups = groups  # 只读：通过 names / sample_ids / linestyle 等接口读取，不修改
         self.data = self.dataset.data
         self.sample_idx = self.dataset.sample_idx
         self.column = self.dataset.column
@@ -62,53 +59,7 @@ class InteractivePlotter:
         self.axesset: dict = {}
         self.asset: go.Figure | None = None
 
-    def _ensure_ready(self):
-        """确保绘图所需的数据已加载，并补全 plotrange。"""
-        if self.data is None or self.column is None:
-            raise RuntimeError("未加载数据")
-        if self.plotrange is None:
-            self.plotrange = self.data.shape[0]
-    
-    def _get_data(
-        self,
-        sample_idx: int,
-        channel_x: int,
-        channel_y: int,
-        neglog_x: bool = False,
-        neglog_y: bool = False,
-    ):
-        """返回 (x, y, x_label, y_label, x_unit, y_unit)，不创建绘图对象。
-
-        与 DataPlotter 一致，neglog 在这里只对数据取绝对值；
-        坐标尺度和刻度文字属于后续格式化，不在这里处理。
-        """
-        row_x, x_label, x_unit = self._get_column_data(
-            sample_idx, channel_x, self.plotrange,
-        )
-        row_y, y_label, y_unit = self._get_column_data(
-            sample_idx, channel_y, self.plotrange,
-        )
-        if neglog_x:
-            row_x = np.abs(row_x)
-        if neglog_y:
-            row_y = np.abs(row_y)
-        return row_x, row_y, x_label, y_label, x_unit, y_unit
-
-    def _get_column_data(
-        self,
-        sample_idx: int,
-        channel_idx: int,
-        plotrange: int | None,
-    ):
-        """按样品号和通道号取列，返回 (data, name, unit)。"""
-        for column in self.column:
-            if (
-                column.sample_idx == sample_idx
-                and column.channel_idx == channel_idx
-            ):
-                return column.data[:plotrange], column.name, column.unit
-        raise RuntimeError("未找到对应的列数据")
-
+    # 取数（按样品号 + 通道号取 X、Y）与 DataPlotter 共用：plot_common.get_xy_data
 
     def _get_color(self, sample: int):
         """返回样品在色带上对应位置的颜色（只取这一个位置）。"""
@@ -330,11 +281,10 @@ class InteractivePlotter:
         # 流程：
         # ① 检查数据。
         # ② 用 _create_template() 的模板创建 Figure。
-        # ③ 遍历样品号，用 _get_data() 取 X/Y 和标签、单位。
+        # ③ 遍历样品号，用 get_xy_data() 取 X/Y 和标签、单位。
         # ④ 用 _plot_data_plotly() 添加曲线，同时传入 name 等身份信息。
         # ⑤ 用 _apply_layout() 设置本次图；各样品的轴单位应一致。
         # ⑥ 应用可选的用户格式回调，保存到 self.asset 并返回 self。不在这里 show()。
-        self._ensure_ready()
         sample_ids = sorted(set(self.sample_idx))
         if not sample_ids or self.data.size == 0:
             raise RuntimeError("数据集为空，无法绘图")
@@ -344,7 +294,7 @@ class InteractivePlotter:
         artists = []
 
         for i in sample_ids:
-            Row_x, Row_y, _, y_label, x_unit, y_unit = self._get_data(
+            Row_x, Row_y, _, y_label, x_unit, y_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
                     sample_idx=i,
                     channel_x=self.plotdataRowNum_x,
                     channel_y=self.plotdataRowNum_y,

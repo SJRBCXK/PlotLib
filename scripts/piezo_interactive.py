@@ -39,12 +39,11 @@ data = Dataloader(
 
 
 
-interactive_plot = InteractivePlotter(plot_data_group=None,
-                                    input_dataset=data, 
-                                    plotrange=300, 
+interactive_plot = InteractivePlotter(input_dataset=data,
+                                    plotrange=300,
                                     plotdataRowNum_x=dataRowNum_unit3,
                                     plotdataRowNum_y=dataRowNum_unit5,
-                                    )  # Replace 'None' with the appropriate group if needed
+                                    )
 fig = interactive_plot.plot_plotly_object(figure_formatter=axes_fmt).add_slider(mode="cumulative")
 
 # 导出可随窗口等比缩放的页面（PPT 中嵌入不会出现滚动条），右侧附压缩示意图

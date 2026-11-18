@@ -62,6 +62,8 @@ DataPlotter(
 plt.show()
 ```
 
+> 图窗尺寸：`DataPlotter(..., figsize=(宽, 高))` 对所有绘图方法生效；不传时 `plot_objects` 为 (10, 8)、`group_plotter` 为 (16, 12)。
+
 > 根目录的 `matplotlibrc`（`backend: TkAgg`）只在从项目根目录启动 Python 时生效，从其他目录启动时不会读取它。
 
 ## 数据格式

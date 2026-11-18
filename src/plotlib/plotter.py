@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 from .dataset import DataSet
 from .group import Group
-from .plot_common import color_positions, get_xy_data, resolve_groups
+from .plot_common import FigureSpec, color_positions, get_xy_data, plan_figures, resolve_groups
 from .style import translate_color, translate_linestyle, translate_marker
 
 # ============================================================================
@@ -68,6 +68,7 @@ class DataPlotter:
         plotdataRowNum_y: int = dataRowNum_unit2,
         legend_fontsize: int = 10,
         ticker_width: int = 3,
+        figsize: tuple[float, float] | None = None,
     ):
         """
         初始化绘图器。
@@ -104,6 +105,9 @@ class DataPlotter:
             图例字体大小。
         ticker_width : int
             刻度线宽度。
+        figsize : tuple, optional
+            图窗尺寸（宽, 高），单位英寸，对本绘图器的所有绘图方法生效。
+            None 时各方法用各自的默认值：plot_objects 为 (10, 8)，group_plotter 为 (16, 12)。
         """
         groups = resolve_groups(groups, input_dataset)
 
@@ -132,12 +136,12 @@ class DataPlotter:
         self.data = self.dataset.data
         self.sample_idx = self.dataset.sample_idx
         self.column = self.dataset.column
-        self.plot_artists: list = []
         self.axesset: dict = {}
         self.plotrange = plotrange
         self.plotdataRowNum_x = plotdataRowNum_x
         self.plotdataRowNum_y = plotdataRowNum_y
         self.cmap = resolved_cmap
+        self.figsize = figsize  # None：各绘图方法用自己的默认尺寸
         # 样品号 → 色带位置，按整个数据集排名一次：
         # 样品号不连续也不越界，且同一样品在分组绘图的各张图里颜色一致
         self.color_positions = color_positions(self.sample_idx)
@@ -147,6 +151,47 @@ class DataPlotter:
     # ========================================================================
 
     # 取数（按样品号 + 通道号取 X、Y）与 InteractivePlotter 共用：plot_common.get_xy_data
+
+    def _draw_figure(self, spec: FigureSpec, plot_kind: str, figsize: tuple,
+                     neglog_x: bool = False, neglog_y: bool = False,
+                     axes_formatter=None, lines_formatter=None, legend_formatter=None):
+        """
+        按一张 FigureSpec 画出一张图，返回 (fig, ax, {样品号: artist})。
+
+        只读计划，不读 Group：画哪些线、颜色（色带位置）、样式都由计划决定（plot_common.plan_figures）。
+        顺序：建图 → 画线（色带色）→ 分组样式（仅折线，覆盖色带色和 plot_style）
+              → 默认格式 → 用户 formatter（优先级最高）→ 负对数刻度。
+        整段在 rc_context 里执行：plot_style、字号等默认值靠它生效。
+        neglog 只影响这里的刻度文字；取绝对值已在生成计划时做过。
+        """
+        with plt.rc_context(self.rc_params):
+            fig, ax = plt.subplots(figsize=figsize)
+            artists = {}    # {样品号: artist}；样品名可能重复，所以用样品号作键
+
+            for curve in spec.curves:
+                artist = self._plot_data(ax, curve.x, curve.y, plot_kind,
+                                         color=self.cmap(curve.color_position), label=curve.label)
+                # 分组样式：写了就应用（scatter / bar 暂不支持，见 STRUCTURE_REVIEW 4.3 的遗留问题）
+                if plot_kind == 'line' and curve.style:
+                    artist.set(**self._native_style(curve.style))  # type: ignore[union-attr]
+                artists[curve.sample_idx] = artist
+
+            # 同一通道的单位在所有样品里相同（DataSet._channel_units_unify_check），取任意一条即可
+            units = spec.curves[-1]
+            self._default_plot_formatter(ax, fig, plot_kind=plot_kind,
+                                         x_axislabel=units.x_unit, y_axislabel=units.y_unit)
+            self._apply_optional_formatters(
+                ax=ax, fig=fig, lines=list(artists.values()), legends=[ax.get_legend()],
+                axes_formatter=axes_formatter,
+                lines_formatter=lines_formatter,
+                legend_formatter=legend_formatter
+            )
+            self._apply_neglog_formatter(ax, neglog_x, neglog_y)
+
+        return fig, ax, artists
+
+
+
 
     def _plot_data(self, ax, x, y, plot_kind='line', **kwargs):
         """按 plot_kind 绘制一组数据，返回对应的 artist。"""
@@ -164,12 +209,11 @@ class DataPlotter:
     # 默认格式化
     # ========================================================================
 
-    def _default_plot_formatter(self, ax, fig, plot_kind='line', group_name=None, artists=None,
-                                x_axislabel=None, y_axislabel=None):
+    def _default_plot_formatter(self, ax, fig, plot_kind='line', x_axislabel=None, y_axislabel=None):
         """应用默认绘图格式。"""
         # 先配置线条再建图例：图例句柄保存的是创建时的线条样式
         if plot_kind == 'line':
-            self._configure_lines(ax, group_name, artists)
+            self._configure_lines(ax)
         self._set_plot_legends(ax)
         self._configure_xaxis(ax, x_axislabel)
         self._configure_yaxis(ax, y_axislabel)
@@ -194,37 +238,25 @@ class DataPlotter:
         ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.2f}"))
         ax.tick_params(axis='y', which='both', width=self.rc_params['ytick.major.width'], direction='out')
 
-    def _configure_lines(self, ax, group_name=None, artists=None):
+    def _configure_lines(self, ax):
         """
-        配置线条的默认线宽。
-
-        group_name 为 None 时处理 ax 上的全部线条；
-        否则只处理该分组的线条，artists 为 {样品号: artist}。
-        （分组的线型、标记、颜色在 group_plotter 画线后由 _apply_group_style 设置。）
+        把 ax 上全部线条设为默认线宽。
+        （一张图就是计划里的一张 FigureSpec，图上的线就是这张图的全部线，不再需要按分组挑；
+          分组的线型、标记、颜色在 _draw_figure 画线时由 _native_style 设置。）
         """
         default_lw = self.rc_params.get('lines.linewidth', 3)
-        if group_name is None:
-            for line in ax.get_lines():
-                line.set_linewidth(default_lw)
-        elif group_name in self.groups.names:
-            if artists is None:
-                raise ValueError("按组配置线条时必须传入 artists")
-            for sample in self.groups.sample_ids(group_name):
-                artists[sample].set_linewidth(default_lw)
+        for line in ax.get_lines():
+            line.set_linewidth(default_lw)
 
-    def _group_style(self, group_name) -> dict:
+    @staticmethod
+    def _native_style(style: dict) -> dict:
         """
-        该分组写了的样式，翻译成 matplotlib 原生值：{'linestyle': '--', 'marker': 'o', 'color': ...}。
-        没写的不出现在字典里。Group 创建时已校验，这里的翻译不会因写法报错。
+        把计划里的样式（CurveSpec.style，标准写法）翻译成 matplotlib 原生值：
+        {'linestyle': 'dash'} → {'linestyle': '--'}。没写的字段本来就不在字典里。
+        后端只读计划、不读 Group：样式在生成计划时已从 Group 取出，这里只负责翻译。
         """
-        native = {}
-        if (linestyle := self.groups.linestyle(group_name)) is not None:
-            native['linestyle'] = translate_linestyle(linestyle, 'matplotlib')
-        if (marker := self.groups.marker(group_name)) is not None:
-            native['marker'] = translate_marker(marker, 'matplotlib')
-        if (color := self.groups.color(group_name)) is not None:
-            native['color'] = translate_color(color, 'matplotlib')
-        return native
+        translators = {'linestyle': translate_linestyle, 'marker': translate_marker, 'color': translate_color}
+        return {field: translators[field](value, 'matplotlib') for field, value in style.items()}
 
     def _configure_figures(self, fig):
         """配置图形布局。"""
@@ -328,38 +360,19 @@ class DataPlotter:
         -------
         DataPlotter
             返回 self 以支持链式调用。
+            axesset = {'main': {'ax', 'fig', 'artists': [artist, ...]}}（artists 是列表，6.5 统一形状）
         """
+        # 不分组（groups=None）：一张 'main' 图，全部样品；不看 self.groups
+        [spec] = plan_figures(self.dataset, None, self.plotdataRowNum_x, self.plotdataRowNum_y,
+                              plotrange=self.plotrange, neglog_x=NegLogScale_x, neglog_y=NegLogScale_y)
 
-        with plt.rc_context(self.rc_params):
-            fig, ax = plt.subplots(figsize=(10, 8))
-            self.plot_artists = []
+        fig, ax, artists = self._draw_figure(
+            spec, plot_kind, figsize=self.figsize or (10, 8),
+            neglog_x=NegLogScale_x, neglog_y=NegLogScale_y,
+            axes_formatter=axes_formatter, lines_formatter=lines_formatter, legend_formatter=legend_formatter,
+        )
 
-            for i in sorted(set(self.sample_idx)):
-                Row_x, Row_y, _, y_label, x_unit, y_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
-                    sample_idx=i,
-                    channel_x=self.plotdataRowNum_x,
-                    channel_y=self.plotdataRowNum_y,
-                    neglog_x=NegLogScale_x,
-                    neglog_y=NegLogScale_y
-                )
-                artist = self._plot_data(
-                    ax, Row_x, Row_y, plot_kind,
-                    color=self.cmap(self.color_positions[i]),
-                    label=y_label
-                )
-                self.plot_artists.append(artist)
-
-            self._default_plot_formatter(ax, fig, plot_kind=plot_kind,
-                                         x_axislabel=x_unit, y_axislabel=y_unit)
-            self._apply_optional_formatters(
-                ax=ax, fig=fig, lines=self.plot_artists, legends=[ax.get_legend()],
-                axes_formatter=axes_formatter,
-                lines_formatter=lines_formatter,
-                legend_formatter=legend_formatter
-            )
-            self._apply_neglog_formatter(ax, NegLogScale_x, NegLogScale_y)
-
-            self.axesset = {'main': {'ax': ax, 'fig': fig, 'artists': self.plot_artists}}
+        self.axesset = {'main': {'ax': ax, 'fig': fig, 'artists': list(artists.values())}}
 
         return self
 
@@ -408,103 +421,29 @@ class DataPlotter:
             分离模式：axesset = {组名: {'ax', 'fig', 'artists': {样品号: artist}}}
             合并模式：axesset = {'main': {'ax', 'fig', 'artists': {样品号: artist}}}
         """
-
         if not self.groups.names:
-            return self.plot_objects(axes_formatter=axes_formatter,
-                                     lines_formatter=lines_formatter,
-                                     legend_formatter=legend_formatter,
-                                     NegLogScale_x=NegLogScale_x,
-                                     NegLogScale_y=NegLogScale_y,
-                                     plot_kind=plot_kind)
+            return self.plot_objects(
+                plot_kind=plot_kind,
+                NegLogScale_x=NegLogScale_x,
+                NegLogScale_y=NegLogScale_y,
+                axes_formatter=axes_formatter,
+                lines_formatter=lines_formatter,
+                legend_formatter=legend_formatter,
+            )
 
-        # 分组配置在创建 Group 时已全部校验，这里不会因配置有误而留下残缺图窗
-
-        # Initialize variables for type checking
-        fig = None
-        ax = None
-        x_unit = y_unit = None
-
+        # 分组规则（去重、先到先得、组首色、样式归属）都在计划里；合并模式的计划只有一张 'main' 图，
+        # 所以两种模式走同一个循环
+        figures = plan_figures(self.dataset, self.groups, self.plotdataRowNum_x, self.plotdataRowNum_y,
+                               merge_groups=merge_groups, plotrange=self.plotrange,
+                               neglog_x=NegLogScale_x, neglog_y=NegLogScale_y)
         self.axesset = {}
-        merged_artists = {}  # merge 模式：所有组的 {样品号: artist}
-
-        if merge_groups:
-            with plt.rc_context(self.rc_params):
-                fig, ax = plt.subplots(figsize=(16, 12))
-
-        with plt.rc_context(self.rc_params):
-            for group_name in self.groups:
-                sample_ids = self.groups.sample_ids(group_name)
-                style = self._group_style(group_name)    # 每个分组翻译一次，循环里重复用
-                artists = {}  # {样品号: artist}
-
-                if not merge_groups:
-                    fig, ax = plt.subplots(figsize=(16, 12))
-
-                # Ensure ax is not None for type checking
-                if ax is None:
-                    raise RuntimeError("ax is None - this should not happen")
-
-                for sample in sample_ids:
-                    # 合并模式：同一样品被多个组引用时只画一次（重画只会得到完全重合的线），
-                    # 沿用第一个包含它的组的样式
-                    if merge_groups and sample in merged_artists:
-                        continue
-                    Row_x, Row_y, _, y_label, x_unit, y_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
-                        sample_idx=sample,
-                        channel_x=self.plotdataRowNum_x,
-                        channel_y=self.plotdataRowNum_y,
-                        neglog_x=NegLogScale_x,
-                        neglog_y=NegLogScale_y
-                    )
-                    artist = self._plot_data(
-                        ax, Row_x, Row_y, plot_kind,
-                        color=self.cmap(self.color_positions[sample]),
-                        label=y_label
-                    )
-
-                    # 合并模式：同组统一为组首色（bar 无对应方法，保留各自颜色）
-                    if merge_groups and hasattr(artist, 'set_color'):
-                        artist.set_color(self.cmap(self.color_positions[sample_ids[0]]))  # type: ignore[union-attr]
-
-                    # 分组样式：写了就应用，两种模式一样，覆盖上面的默认颜色和 plot_style
-                    # （scatter / bar 暂不支持，见 STRUCTURE_REVIEW 4.3 的遗留问题）
-                    if plot_kind == 'line' and style:
-                        artist.set(**style)  # type: ignore[union-attr]
-
-                    artists[sample] = artist
-
-                merged_artists.update(artists)
-
-                # 只在分离模式下格式化（merge模式会在循环外统一格式化）
-                if not merge_groups and fig is not None:
-                    self._default_plot_formatter(ax, fig, plot_kind=plot_kind,
-                                                 group_name=group_name, artists=artists,
-                                                 x_axislabel=x_unit, y_axislabel=y_unit)
-                    self._apply_optional_formatters(
-                        ax=ax, fig=fig, lines=list(artists.values()), legends=[ax.get_legend()],
-                        axes_formatter=axes_formatter,
-                        lines_formatter=lines_formatter,
-                        legend_formatter=legend_formatter
-                    )
-                    self._apply_neglog_formatter(ax, NegLogScale_x, NegLogScale_y)
-
-                    self.axesset[group_name] = {'ax': ax, 'fig': fig, 'artists': artists}
-
-            if merge_groups:
-                if ax is None or fig is None:
-                    raise RuntimeError("ax or fig is not defined in merge_groups mode")
-
-                self._default_plot_formatter(ax, fig, plot_kind=plot_kind,
-                                             x_axislabel=x_unit, y_axislabel=y_unit)
-                self._apply_optional_formatters(
-                    ax=ax, fig=fig, lines=list(merged_artists.values()), legends=[ax.get_legend()],
-                    axes_formatter=axes_formatter,
-                    lines_formatter=lines_formatter,
-                    legend_formatter=legend_formatter
-                )
-                self._apply_neglog_formatter(ax, NegLogScale_x, NegLogScale_y)
-
-                self.axesset = {'main': {'ax': ax, 'fig': fig, 'artists': merged_artists}}
+        for spec in figures:
+            fig, ax, artists = self._draw_figure(
+                spec, plot_kind, figsize=self.figsize or (16, 12),
+                neglog_x=NegLogScale_x, neglog_y=NegLogScale_y,
+                axes_formatter=axes_formatter, lines_formatter=lines_formatter, legend_formatter=legend_formatter,
+            )
+            self.axesset[spec.key] = {'ax': ax, 'fig': fig, 'artists': artists}
 
         return self
 

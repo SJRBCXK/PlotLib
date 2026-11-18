@@ -125,6 +125,17 @@ def test_unknown_plot_kind_raises(eis_dataset):
         DataPlotter(eis_dataset).plot_objects(plot_kind='pie')
 
 
+@pytest.mark.parametrize("figsize, expected_objects, expected_groups", [
+    (None,   (10, 8), (16, 12)),     # 不传：各方法用自己的默认尺寸（与以前相同）
+    ((6, 4), (6, 4),  (6, 4)),       # 传了：所有绘图方法都用它
+], ids=['default', 'override'])
+def test_figsize(eis_dataset, figsize, expected_objects, expected_groups):
+    """figsize 是构造参数（步骤 6.2 用户新增），None 时保持各方法原来的尺寸。"""
+    plotter = DataPlotter(eis_dataset, groups=Group(eis_dataset, {'A': {'num': [0, 1]}}), figsize=figsize)
+    assert tuple(plotter.plot_objects().axesset['main']['fig'].get_size_inches()) == expected_objects
+    assert tuple(plotter.group_plotter().axesset['A']['fig'].get_size_inches()) == expected_groups
+
+
 # ──────────────────────────────────────────────
 # 用户格式化器
 # ──────────────────────────────────────────────
@@ -402,6 +413,23 @@ def test_sparse_sample_ids_group_colors(sparse_dataset, merge, expected):
     artists = plotter.axesset['main' if merge else 'A']['artists']
     for sample, position in expected.items():
         np.testing.assert_allclose(to_rgba(artists[sample].get_color()), PLASMA(position))
+
+
+@pytest.mark.parametrize("merge, expected", [
+    (False, {5: 1/3, 9: 2/3}),
+    (True,  {5: 1/3, 9: 1/3}),
+], ids=['separate', 'merge'])
+def test_bar_group_colors_follow_plan(sparse_dataset, merge, expected):
+    """
+    柱状图的颜色与折线同一规则：合并模式同组统一为组首色（步骤 6.2 用户选 A 的行为变化）。
+    以前 BarContainer 没有 set_color，合并模式下柱子各用各的样品色。
+    """
+    groups = Group(sparse_dataset, {'A': {'num': [5, 9]}})
+    plotter = DataPlotter(sparse_dataset, groups=groups).group_plotter(merge_groups=merge, plot_kind='bar')
+    artists = plotter.axesset['main' if merge else 'A']['artists']
+    for sample, position in expected.items():
+        for bar in artists[sample]:                      # BarContainer 里每根柱子是一个矩形
+            np.testing.assert_allclose(bar.get_facecolor(), PLASMA(position))
 
 
 # ══════════════════════════════════════════════

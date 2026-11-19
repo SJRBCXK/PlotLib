@@ -3,7 +3,7 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**385 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**385 个，368 个通过**（17 个是步骤 6.4「Plotly 按组翻页」先写的测试，功能实现后通过），`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
 
 > 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各样品都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
@@ -47,10 +47,10 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `test_plot_common.py` | `src/plotlib/plot_common.py` | 两个绘图器共用的函数：样品号 → 色带位置；分组参数检查 `resolve_groups`；共用取数 |
 | `test_plot_plan.py` | `src/plotlib/plot_common.py` 的 `plan_figures` | 分组绘图计划：不分组 / 分离 / 合并各画几张图、哪些线、归哪个分组、色带位置、样式；不开图窗 |
 | `test_style.py` | `src/plotlib/style.py` | 样式标准写法（线型、标记、颜色）的校验，以及到 matplotlib / Plotly 的翻译 |
-| `test_plotter.py` | `src/plotlib/plotter.py` | 四种绘图方法画出的线、标签、样式正确 |
+| `test_plotter.py` | `src/plotlib/plotter.py` | matplotlib 把计划画对（每张计划一张图、位置 → 颜色、样式翻译）；formatter、图例、`plot_style`、`figsize`、负对数刻度、Y-Y / 双 Y 轴 |
 | `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
-| `test_interactive.py` | `src/plotlib/interactive.py` | Plotly 曲线的数据与标签、滑块档位（single / cumulative）与默认外观、报错 |
-| `test_plotly_groups.py` | `src/plotlib/interactive.py` 的按计划绘图 | Plotly 按绘图计划画：不分组与计划一致；分组（合并模式）与 matplotlib 对照、组首色、分组样式翻译 |
+| `test_interactive.py` | `src/plotlib/interactive.py` | Plotly 把计划画对（位置 → 颜色、样式翻译、按组分页）；模板、曲线滑块与分组滑块、报错 |
+| `test_backend_parity.py` | `DataPlotter` 与 `InteractivePlotter` 对照 | 两个绘图器的分组参数约定相同；同一个 `Group` 画出的曲线一致（合并模式、分离模式每页） |
 | `test_html_export.py` | `src/plotlib/html_export.py` | 导出页面的画框尺寸、侧边面板位置、占位符全部填写、不修改 Figure |
 | `test_data_reorder_app.py` | `tools/data_reorder_app.py`（Tk 版） | 直接改序号插入并保留勾选、非法输入不移动、取消与失焦；没有显示环境时跳过 |
 | `test_data_reorder_qt.py` | `tools/data_reorder_qt.py`（Qt 版） | 插入与勾选保留、中点吸附、改序号、鼠标拖动；没装 PySide6 时跳过 |
@@ -166,7 +166,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - `color_positions`：去重、排序后，位置 = 排名 ÷ 样品数。`[0, 5, 9]` 与 `[0, 1, 2]` 得到相同的 0、1/3、2/3；
   乱序、重复不影响结果；单个样品为 0；空输入得到空字典
 - 样品号连续时与旧公式「样品号 ÷ 样品数」结果相同，已有图的颜色不变
-- `resolve_groups`：合法的 `Group` 原样返回，不复制（三种情况的报错由两个绘图器各自的测试覆盖）
+- `resolve_groups`：合法的 `Group` 原样返回，不复制（三种情况的报错在 `test_backend_parity.py` 里对两个绘图器一起测）
 - `get_column_data`：按样品号 + 通道号取一列，返回数据、列名（样品名）、单位；`plotrange` 只取前几行；样品号或通道号不存在 → `RuntimeError`（`未找到对应的列数据`）
 - `get_xy_data`：`neglog_y` 只对 Y 取绝对值，X 不变；返回 X、Y 各自的列名和单位
 
@@ -175,6 +175,8 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 分离模式：每个分组一张图（key 为分组名），同一样品可出现在两张图里，颜色按样品，样式只属于写了它的分组
 - 合并模式：同一样品只画一次、归第一个包含它的分组（先到先得）；书写顺序即优先级（B 写在前面，重叠样品就归 B）；同组用组首色——组首按本组配置，即使组首样品已归别的组
 - 曲线的数据、标签、单位与 `get_xy_data` 一致，`plotrange`、`neglog` 照样传下去；分组样式按标准写法原样带入，不翻译
+- 样品号 0、5、9：色带位置按整个数据集排名；分离模式各样品各自的位置（1/3、2/3），合并模式统一为组首位置 1/3（回归：组首色曾取 `cmap(5/3)` 被截断）
+- 生成计划只读分组：前后 `groups.to_config()` 不变（后端不读 `Group`，所以只在这里测）
 
 ### 样式标准写法 — `test_style.py`
 - 合法：线型 `'solid'` / `'dash'` / `'dot'` / `'dashdot'` 与自定义虚线 `(3, 5)`、`[3, 5]`；7 个标记名；
@@ -187,39 +189,27 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 翻译前先校验（非标准写法不能绕过）；未知 backend → `ValueError`
 
 ### 绘图 — `test_plotter.py`
+分组规则不在这里测（见 `test_plot_plan.py`）；这里只测 matplotlib 把计划画对，以及它独有的功能。
+
 **`plot_objects`**
-- 每个样品一条线，全部在一张图上，线上数值等于数据集对应列
-- X/Y 轴标题是单位，图例是样品名
+- 每个样品一条线，全部在一张图上；X/Y 轴标题是单位，图例是样品名
 - `plotrange` 限制绘制点数
 - `NegLogScale_x` / `NegLogScale_y`：数据取绝对值，刻度文字带负号；两轴同时启用时各保留自己的格式
 - `plot_kind` 为 line / scatter / bar 时生成对应类型的对象，且点 / 柱的数据正确；不支持的类型报错
-- 通道号超出每个样品的通道数 → `RuntimeError`
 - `axes_formatter` / `lines_formatter` / `legend_formatter` 都会被调用，拿到正确的对象
 - `lines_formatter` 改线型后，图例同步更新
 - `figsize`：不传时 `plot_objects` 为 (10, 8)、`group_plotter` 为 (16, 12)；传了则所有绘图方法都用它
 
-**分组参数 `groups`**
-- 只接受 `Group` 对象：传字典 → `TypeError`，提示先用 `Group(dataset, config)` 创建
-- `Group` 必须建在绘图器的同一个数据集上（`is` 判断），否则 → `ValueError`
-- 不传时是空 `Group`
-- 配置校验在创建 `Group` 时完成（见 `test_group.py`），绘图器里不再解析配置，也就不会因配置有误留下残缺图窗
-
 **`group_plotter`**
-- 分离模式：每个分组一张图，`artists` 以样品号为键
-- 分组写了线型就应用（`apply_group_linestyle` 开关已删除），`'dash'` / `'dot'` 翻译成 `'--'` / `':'`
-- 分组没写线型时用 `plot_style`（两种模式都是；合并模式以前写死 `'-'`）；`plot_style` 默认 `'solid'`，只收标准写法
-- 分组写了 marker 就应用（`'circle'` → `'o'`），没写的分组不加标记
-- 分组写了 color（RGB 或色号）时这组所有样品都用它；没写时分离模式按样品配色、合并模式用组首色
+- 计划里每张 `FigureSpec` 画成一张图：分离模式 `axesset` 的键是 `'A'`、`'B'`，合并模式是 `'main'`；`artists` 以样品号为键
+- 分组样式翻译成 matplotlib 原生值：`'dash'` → `'--'`、`'circle'` → `'o'`、RGB 和色号 → 对应颜色；没写样式时实线、无标记
+- 分组没写线型时用 `plot_style`（经 `rc_context` 生效）；`plot_style` 默认 `'solid'`，只收标准写法
 - 优先级：`lines_formatter` 最后执行，能覆盖分组线型
-- 合并模式：只有一张图；被多个组共用的样品只画一次，沿用第一个组的线型和颜色；同组统一颜色
-- 绘图不修改分组：画图前后 `groups.to_config()` 不变
 - 没有分组时退回 `plot_objects`
-- 两个方法都先生成绘图计划（`plan_figures`，见 `test_plot_plan.py`）再按计划画；分组规则只在计划里
 
-**配色（样品号不连续）**
-- 样品号 0、5、9：`plot_objects` 的三条线依次取 plasma 色带 0、1/3、2/3 处的颜色（回归：5、9 曾被截断成同一个末端色）
-- `group_plotter`：排名基于整个数据集；分离模式各样品各自取色，合并模式统一为组首样品的颜色
-- 柱状图同一规则：合并模式同组的柱子统一为组首色（步骤 6.2 起；以前 `BarContainer` 没有 `set_color`，各用各的样品色）
+**配色**
+- 样品号 0、5、9：三条线依次取 plasma 色带 0、1/3、2/3 处的颜色（回归：5、9 曾被截断成同一个末端色）
+- 柱状图也按计划的位置上色：合并模式同组的柱子统一为组首色（步骤 6.2 起；以前 `BarContainer` 没有 `set_color`，各用各的样品色）
 
 **`subplotter_yy` / `subplotter_xyy`**
 - 每个样品一张图，以样品号为键
@@ -244,22 +234,36 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - `combine_formatters`：按传入顺序调用，跳过 `None`
 
 ### 交互绘图 — `test_interactive.py`
-- 分组参数与 `DataPlotter` 相同：传字典 → `TypeError`（提示用 `Group`）；基于别的数据集的 `Group` → `ValueError`；不传时是建在本数据集上的空 `Group`
-- 每个样品一条曲线，X/Y 数据等于数据集对应列，曲线名是样品名，坐标轴标题是单位
-- 样品号 0、5、9：曲线颜色取 Plasma 色带 0、1/3、2/3 处，与 matplotlib 同一套位置（回归：曾在样品 5 处 `IndexError`）
-- 重复调用 `plot_plotly_object` 生成新的 Figure，`plot_artists` 与 Figure 中的 trace 一一对应
-- 模板默认关闭对数轴 10ⁿ 之间的小号数字标签（`minorloglabels="none"`）
-- 滑块：`single` 每档只显示当前曲线，`cumulative` 显示第一条到当前一条；初始可见性与第 0 档一致；档位标签和标题都是样品名；重复添加只保留一个滑块
-- 滑块默认外观：初始标题为第 0 档的名字；短标签可见，名称太长（如 33 条 `Mg10-back-1mm-relax-i`）时隐藏刻度标签、保留当前值文字；`slider_formatter` 可覆盖默认值
-- 报错：未绘图就加滑块、图中没有曲线 → `RuntimeError`；`mode` 写错 → `ValueError`，且不改动已有的图；空数据集 → 明确的 `RuntimeError`
+分组规则不在这里测（见 `test_plot_plan.py`）；这里只测 Plotly 把计划画对，以及模板和滑块。
 
-### Plotly 按计划画 — `test_plotly_groups.py`
-- `plot_plotly_object`：每条 trace 与不分组计划的曲线一一对应（顺序、名字、数据）
-- `plot_plotly_group`（合并模式）：**同一个 `Group`** 交给 `DataPlotter.group_plotter(merge_groups=True)`，曲线条数、顺序、标签、数据一致；重叠样品只画一次
-- 组首色：样品 0、1 归 A（位置 0），样品 2 归 B、用 B 的组首样品 1 的位置 1/3
+**`plot_plotly_object`**
+- 每条 trace 与不分组计划的曲线一一对应（顺序、名字、数据），坐标轴标题是单位
+- 重复调用生成新的 Figure，`plot_artists` 与 Figure 中的 trace 一一对应
+- 样品号 0、5、9：曲线颜色取 Plasma 色带 0、1/3、2/3 处（回归：曾在样品 5 处 `IndexError`）
+- 模板默认关闭对数轴 10ⁿ 之间的小号数字标签（`minorloglabels="none"`）
+
+**`plot_plotly_group`**
+- 合并模式按计划的位置上色：样品 0、1 归 A（位置 0），样品 2 归 B、用 B 的组首样品 1 的位置 1/3
 - 分组样式翻译到 trace：`'dash'` → `line.dash`；`(3, 5)` → `'9px,15px'`（按线宽 3 换算）；`'square'` → `marker.symbol`，`mode` 变为 `'lines+markers'`；
   RGB → `'rgb(255,0,0)'`；不写样式 → `mode` 保持 `'lines'`；写了 marker 时点色等于线色
-- 空分组：`plot_plotly_group` 与 `plot_plotly_object` 画出相同的曲线；`figure_formatter` 调用一次，收到的就是 `self.asset`
+- 空分组时与 `plot_plotly_object` 画出相同的曲线；`figure_formatter` 调用一次，收到的就是 `self.asset`
+- 分离模式（默认，步骤 6.4）：每组一页，`pages` 为 `{'A': {0, 1}, 'B': {1, 2}}`（共 4 条）；同一样品在各页用各自分组的样式；按样品上色；刚画完只显示第一页
+
+**滑块**
+- 曲线滑块 `add_slider`：`single` 每档只显示当前曲线，`cumulative` 显示第一条到当前一条；初始可见性与第 0 档一致；档位标签和标题都是样品名；重复添加只保留一个滑块
+- 默认外观：初始标题为第 0 档的名字；短标签可见，名称太长（如 33 条 `Mg10-back-1mm-relax-i`）时隐藏刻度标签、保留当前值文字；`slider_formatter` 可覆盖默认值
+- 分组滑块 `add_group_slider`（步骤 6.4）：每档一页，标签和标题是组名，只显示这一页的 trace，前缀 `'Group: '`
+- 方法用错：多页的图上调用 `add_slider`、只有一页的图上调用 `add_group_slider` → `RuntimeError`，提示该用哪个
+
+**报错**
+- 未绘图就加滑块、图中没有曲线 → `RuntimeError`；`mode` 写错 → `ValueError`，且不改动已有的图；空数据集 → 明确的 `RuntimeError`
+
+### 两个后端对照 — `test_backend_parity.py`
+- 分组参数（两个绘图器各测一遍）：只接受 `Group` 对象，传字典 → `TypeError`（提示用 `Group`）；基于别的数据集的 `Group` → `ValueError`；
+  不传时是建在本数据集上的空 `Group`。配置校验在创建 `Group` 时完成（见 `test_group.py`），绘图器里不再解析配置
+- **同一个 `Group`** 交给两个后端：合并模式曲线条数（重叠样品只画一次，3 条）、顺序、标签、数据一致；
+  分离模式 Plotly 每一页与 matplotlib 对应分组那张图一致（步骤 6.4）
+- 颜色不在这里比：两个库的色带实现不同，各自「位置 → 颜色」分别在上面两个文件里测
 
 ### HTML 导出 — `test_html_export.py`
 - 图的尺寸先取 layout、再取模板，layout 优先；两处都没有固定宽高 → `ValueError`
@@ -308,6 +312,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 ## 新增测试时的约定
 
 1. **文件**：测 `src/plotlib/xxx.py` 就写在 `tests/test_xxx.py`；测试函数以 `test_` 开头。
+   **绘图按层放**：分组规则只在 `test_plot_plan.py` 测；后端文件只测「把计划画对」和后端独有的功能；两个后端都要满足的约定写在 `test_backend_parity.py`，对两个绘图器参数化。
 2. **命名**：测试名写成「行为」，如 `test_group_config_is_not_modified`，让 `pytest -v` 的输出本身就是一份清单；docstring 写一句「为什么要测」。
 3. **数据**：用 `eis_dataset` 或 `make_dataset` 造小数据，数值设计成能心算；不要读真实数据文件。
 4. **多组输入**用 `@pytest.mark.parametrize`，并加 `ids` 让输出可读。
@@ -316,3 +321,4 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 7. **弹窗、文件对话框**等交互用 `monkeypatch.setattr` 临时替换掉。
 8. **修 bug**：先写一个会失败的测试复现它（标 `xfail(strict=True)`），修好后删掉标记，留作回归测试。
 9. 新增或删除测试后，顺手更新本文件的「测试清单」和「已知 bug」。
+10. **测试跟着需求走**：结构变化后，测已消失的结构或在多层重复同一规则的测试，经用户同意清理（2026-11-19 起）。

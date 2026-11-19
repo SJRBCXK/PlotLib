@@ -1,15 +1,27 @@
-"""交互绘图的数据、状态和滑块规则；不打开浏览器。"""
+"""
+测试对象：src/plotlib/interactive.py 的 InteractivePlotter —— 不打开浏览器。
+
+分层（2026-11-19 整理）：分组规则只在 test_plot_plan.py 测；这里只测 Plotly 把计划画对
+（位置 → 颜色、样式翻译、按组分页）和它独有的功能（模板、两种滑块）。
+与 matplotlib 的对照、两个绘图器共同的构造约定在 test_backend_parity.py。
+
+数据来自 conftest.py 的 eis_dataset：3 个样品，色带位置 0、1/3、2/3。
+"""
 from typing import Any, cast
 
 import numpy as np
 import pytest
 
 pytest.importorskip("plotly")
+import plotly.colors as plyc
 import plotly.graph_objects as go
 
 from plotlib.dataset import DataSet
 from plotlib.group import Group
 from plotlib.interactive import InteractivePlotter
+from plotlib.plot_common import plan_figures
+
+PLASMA = plyc.get_colorscale('Plasma')      # InteractivePlotter 默认色带
 
 
 def _traces(fig: go.Figure) -> tuple[go.Scatter, ...]:
@@ -32,38 +44,45 @@ def _asset(plot: InteractivePlotter) -> go.Figure:
     return plot.asset
 
 
+def plasma(position: float) -> str:
+    """色带位置 → Plotly 颜色字符串（与 InteractivePlotter 默认色带相同）。"""
+    return cast(str, plyc.sample_colorscale(PLASMA, [position])[0])
+
+
+def overlap_config():
+    """样品 1 同时属于 A、B 两组；只有 A 写了线型。与 test_plot_plan.py 相同。"""
+    return {
+        'A': {'num': [0, 1], 'linestyle': 'dash'},
+        'B': {'num': [1, 2]},
+    }
+
+
+def plot_group(dataset, config, merge_groups=False) -> InteractivePlotter:
+    """按配置建 Group（每次新建：Group 会原地格式化传入的配置）并画分组图。"""
+    plot = InteractivePlotter(dataset, groups=Group(dataset, config))
+    plot.plot_plotly_group(merge_groups=merge_groups)
+    return plot
+
+
+def page_samples(plot: InteractivePlotter) -> dict[str, list[int]]:
+    """{页名: [样品号]}：每一页画了哪些样品（按画线顺序）。"""
+    return {key: list(page) for key, page in plot.pages.items()}
+
+
 # ══════════════════════════════════════════════
-# 分组参数：与 DataPlotter 相同的约定（plot_common.resolve_groups 共用）
+# plot_plotly_object：不分组的计划（一张 'main' 图）
 # ══════════════════════════════════════════════
-def test_groups_must_be_group_object(eis_dataset):
-    """传字典 → TypeError，提示先用 Group 包装。"""
-    with pytest.raises(TypeError, match="Group"):
-        InteractivePlotter(eis_dataset, groups={'A': {'num': [0, 1]}})  # pyright: ignore[reportArgumentType]  故意传错类型
-
-
-def test_groups_from_other_dataset_raises(eis_dataset, sparse_dataset):
-    """一个绘图器只对应一个数据集：Group 必须建在绘图器的数据集上。"""
-    with pytest.raises(ValueError):
-        InteractivePlotter(eis_dataset, groups=Group(sparse_dataset, {'A': {'num': [0, 5]}}))
-
-
-def test_default_groups_is_empty_group(eis_dataset):
-    """不传分组时是空 Group，且建在绘图器的数据集上。"""
-    plot = InteractivePlotter(eis_dataset)
-    assert isinstance(plot.groups, Group)
-    assert plot.groups.names == []
-    assert plot.groups.dataset is eis_dataset
-
-
 def test_plot_data_and_repeated_calls(eis_dataset):
+    """每条 trace 与不分组计划的曲线一一对应（顺序、名字、数据）；坐标轴标题是单位；重复调用生成新的 Figure。"""
     plot = InteractivePlotter(eis_dataset, plotdataRowNum_x=0, plotdataRowNum_y=1)
     assert plot.plot_plotly_object() is plot
     first = _asset(plot)
-    assert len(_traces(first)) == len(plot.plot_artists) == 3
-    for i, trace in enumerate(_traces(first)):
-        np.testing.assert_array_equal(trace.x, [1, 10, 100])
-        np.testing.assert_array_equal(trace.y, np.array([10, 20, 30]) * (i + 1))
-        assert trace.name == f"S{i}"
+    [spec] = plan_figures(eis_dataset, None, 0, 1)
+    assert len(_traces(first)) == len(plot.plot_artists) == len(spec.curves) == 3
+    for trace, curve in zip(_traces(first), spec.curves):
+        assert trace.name == curve.label
+        np.testing.assert_array_equal(trace.x, curve.x)
+        np.testing.assert_array_equal(trace.y, curve.y)
     assert _layout(first)['xaxis']['title']['text'] == 'Frequency(Hz)'
     assert _layout(first)['yaxis']['title']['text'] == "Zs'(ohm)"
 
@@ -75,14 +94,101 @@ def test_plot_data_and_repeated_calls(eis_dataset):
 
 def test_sparse_sample_ids_colors(sparse_dataset):
     """
-    样品号 0、5、9：与 matplotlib 用同一套色带位置 0、1/3、2/3（见 test_plot_common.py）。
+    样品号 0、5、9：计划给的位置 0、1/3、2/3 换成 Plasma 色带上的颜色（位置怎么算见 test_plot_common.py）。
     回归：曾把样品号当作颜色列表的下标，画到样品 5 时 IndexError。
     """
-    import plotly.colors as plyc
-
     fig = _asset(InteractivePlotter(sparse_dataset).plot_plotly_object())
-    expected = plyc.sample_colorscale(plyc.get_colorscale('Plasma'), [0, 1/3, 2/3])
-    assert [trace.line.color for trace in _traces(fig)] == expected
+    assert [trace.line.color for trace in _traces(fig)] == [plasma(p) for p in (0, 1/3, 2/3)]
+
+
+# ══════════════════════════════════════════════
+# plot_plotly_group：把计划画对（分组规则本身在 test_plot_plan.py）
+# ══════════════════════════════════════════════
+def test_merge_mode_group_head_color(eis_dataset):
+    """
+    合并模式按计划的位置上色：样品 0、1 归 A（组首 0，位置 0）；
+    样品 2 归 B，B 的组首是样品 1（位置 1/3）。
+    """
+    plot = plot_group(eis_dataset, overlap_config(), merge_groups=True)
+    assert [t.line.color for t in _traces(_asset(plot))] == [plasma(0), plasma(0), plasma(1/3)]
+
+
+@pytest.mark.parametrize("style, expected", [
+    ({'linestyle': 'dash'},     {'line.dash': 'dash'}),
+    ({'linestyle': (3, 5)},     {'line.dash': '9px,15px'}),           # 段长 × 线宽 3
+    ({'marker': 'square'},      {'marker.symbol': 'square', 'mode': 'lines+markers'}),
+    ({'color': (255, 0, 0)},    {'line.color': 'rgb(255,0,0)'}),
+    ({},                        {'mode': 'lines'}),                   # 没写样式：只画线
+], ids=['dash', 'custom-dash', 'marker', 'rgb-color', 'no-style'])
+def test_group_style_translated(eis_dataset, style, expected):
+    """分组写了的样式按 Plotly 写法放到 trace 上（标准写法 → style.translate_*(v, 'plotly')）。"""
+    plot = plot_group(eis_dataset, {'A': {'num': [0, 1], **style}})
+    trace = _traces(_asset(plot))[0]
+    for path, value in expected.items():
+        obj = trace
+        for attr in path.split('.'):
+            obj = getattr(obj, attr)
+        assert obj == value, path
+
+
+def test_group_marker_color_follows_line(eis_dataset):
+    """写了 marker 时，点的颜色与线一致（都是样品色），不会落回 Plotly 的默认配色。"""
+    plot = plot_group(eis_dataset, {'A': {'num': [0, 1], 'marker': 'square'}})
+    for trace in _traces(_asset(plot)):
+        props = trace.to_plotly_json()      # 读字典：Plotly 给 marker 标注的类型过宽，属性访问会被检查器误报
+        assert props['marker']['color'] == props['line']['color']
+
+
+def test_empty_groups_falls_back_to_plot_object(eis_dataset):
+    """不分组时 plot_plotly_group 与 plot_plotly_object 画出相同的曲线。"""
+    grouped = InteractivePlotter(eis_dataset)
+    assert grouped.plot_plotly_group() is grouped
+    plain = InteractivePlotter(eis_dataset).plot_plotly_object()
+
+    assert [t.name for t in _traces(_asset(grouped))] == [t.name for t in _traces(_asset(plain))]
+    assert [t.line.color for t in _traces(_asset(grouped))] == [t.line.color for t in _traces(_asset(plain))]
+
+
+def test_group_figure_formatter(eis_dataset):
+    """figure_formatter 在默认格式之后调用一次，收到的就是保存下来的 Figure。"""
+    received = []
+    plot = InteractivePlotter(eis_dataset, groups=Group(eis_dataset, overlap_config()))
+    plot.plot_plotly_group(figure_formatter=received.append)
+
+    assert len(received) == 1
+    assert received[0] is plot.asset
+
+
+# ──────────────────────────────────────────────
+# 分离模式 = 一张图按组翻页，每页是计划里的一张 FigureSpec（步骤 6.4）
+# ──────────────────────────────────────────────
+def test_separate_is_default(eis_dataset):
+    """不传 merge_groups 就是分离模式：每组一页，重叠的样品 1 在两页各画一次，共 4 条。"""
+    plot = InteractivePlotter(eis_dataset, groups=Group(eis_dataset, overlap_config()))
+    assert plot.plot_plotly_group() is plot
+
+    assert len(_traces(_asset(plot))) == len(plot.plot_artists) == 4
+    assert page_samples(plot) == {'A': [0, 1], 'B': [1, 2]}
+
+
+def test_same_sample_styled_per_page(eis_dataset):
+    """样品 1 在 A 页用 A 的线型（dash），在 B 页没有分组线型（B 没写）。"""
+    plot = plot_group(eis_dataset, overlap_config())
+    assert plot.pages['A'][1].line.dash == 'dash'
+    assert plot.pages['B'][1].line.dash is None
+
+
+def test_separate_colors_by_sample(eis_dataset):
+    """分离模式按样品上色（不是组首色）：B 页的样品 1、2 分别取位置 1/3、2/3。"""
+    page_b = plot_group(eis_dataset, overlap_config()).pages['B']
+    assert [page_b[1].line.color, page_b[2].line.color] == [plasma(1/3), plasma(2/3)]
+
+
+def test_only_first_page_visible(eis_dataset):
+    """刚画完只显示第一页，否则同一样品的几条线叠在一起；翻页用 add_group_slider。"""
+    plot = plot_group(eis_dataset, overlap_config())
+    assert [t.visible for t in plot.pages['A'].values()] == [True, True]
+    assert [t.visible for t in plot.pages['B'].values()] == [False, False]
 
 
 def test_template_hides_minor_log_labels(eis_dataset):
@@ -157,6 +263,49 @@ def test_invalid_mode_does_not_change_visibility(eis_dataset):
         # 故意传入非法值，检验运行时校验；类型检查器的报错是预期的。
         plot.add_slider('typo')  # pyright: ignore[reportArgumentType]
     assert _asset(plot).to_json() == before
+
+
+# ──────────────────────────────────────────────
+# 分组滑块：按页翻（步骤 6.4；与按曲线的 add_slider 是两个方法）
+# ──────────────────────────────────────────────
+def test_group_slider_steps(eis_dataset):
+    """每档一页：档位标签和标题是组名，只显示这一页的 trace；当前值前缀是 'Group: '。"""
+    plot = plot_group(eis_dataset, overlap_config())
+    received = []
+    fig = plot.add_group_slider(slider_formatter=received.append)
+
+    assert fig is plot.asset
+    layout = _layout(fig)
+    slider = layout['sliders'][0]
+    assert [step['label'] for step in slider['steps']] == ['A', 'B']
+    assert [step['args'][1]['title']['text'] for step in slider['steps']] == ['A', 'B']
+    # trace 顺序：A 页 [0, 1]，B 页 [1, 2]
+    assert [list(step['args'][0]['visible']) for step in slider['steps']] == [
+        [True, True, False, False],
+        [False, False, True, True],
+    ]
+    assert slider['currentvalue']['prefix'] == 'Group: '
+    assert layout['title']['text'] == 'A'
+    assert len(received) == 1
+
+
+def test_curve_slider_rejects_pages(eis_dataset):
+    """多页的图上按曲线滑动没有意义（会跨页逐条显示）→ 提示改用 add_group_slider。"""
+    plot = plot_group(eis_dataset, overlap_config())
+    with pytest.raises(RuntimeError, match='add_group_slider'):
+        plot.add_slider()
+
+
+@pytest.mark.parametrize("draw", [
+    lambda plot: plot.plot_plotly_object(),
+    lambda plot: plot.plot_plotly_group(merge_groups=True),
+], ids=['object', 'merge'])
+def test_group_slider_rejects_single_page(eis_dataset, draw):
+    """只有一页的图翻不了页 → 提示改用 add_slider。"""
+    plot = InteractivePlotter(eis_dataset, groups=Group(eis_dataset, overlap_config()))
+    draw(plot)
+    with pytest.raises(RuntimeError, match='add_slider'):
+        plot.add_group_slider()
 
 
 def test_empty_dataset_has_clear_error():

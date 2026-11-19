@@ -125,3 +125,32 @@ def test_group_style_kept_as_written(eis_dataset):
 
     assert [c.style for c in a.curves] == [{'marker': 'circle', 'color': (255, 0, 0)}] * 2
     assert positions(a) == pytest.approx([0, 1/3])
+
+
+# ──────────────────────────────────────────────
+# 色带位置按整个数据集排名；只读 Group
+# （两条由 test_plotter.py 搬来：规则在计划里，只在这里测一次）
+# ──────────────────────────────────────────────
+@pytest.mark.parametrize("merge, expected", [
+    (False, [1/3, 2/3]),       # 分离模式：各样品各自的位置
+    (True,  [1/3, 1/3]),       # 合并模式：统一为组首（样品 5）的位置
+], ids=['separate', 'merge'])
+def test_sparse_sample_ids_group_positions(sparse_dataset, merge, expected):
+    """
+    样品号 0、5、9：排名基于整个数据集，不是只看分组里的样品。
+    回归：组首色曾取 cmap(5/3)，被截断成色带末端。
+    """
+    figure = plan(sparse_dataset, {'A': {'num': [5, 9]}}, merge_groups=merge)[0]
+    assert samples(figure) == [5, 9]
+    assert positions(figure) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
+def test_plan_does_not_modify_group(eis_dataset, merge):
+    """生成计划只读分组：前后 group.to_config() 不变。后端不读 Group，所以只需在这里测。"""
+    from plotlib.plot_common import plan_figures
+
+    groups = Group(eis_dataset, overlap_config())
+    before = groups.to_config()
+    plan_figures(eis_dataset, groups, 0, 1, merge_groups=merge)
+    assert groups.to_config() == before

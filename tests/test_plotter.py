@@ -11,6 +11,10 @@ DataPlotter 把画出的东西都存在 self.axesset 里，测试就从这里取
 
 后端在 conftest.py 里切到了 Agg（不弹窗），每个测试结束自动 plt.close('all')。
 
+分层（2026-11-19 整理）：分组规则（去重、先到先得、组首色、样式归属、色带位置）只在 test_plot_plan.py 测；
+这里只测 matplotlib 把计划画对（每张 FigureSpec 一张图、位置 → 颜色、样式翻译）和它独有的功能
+（formatter、图例、plot_style、figsize、负对数刻度、Y-Y / 双 Y 轴）。与 Plotly 的对照在 test_backend_parity.py。
+
 数据来自 eis_dataset：每个样品 3 列 [Frequency(Hz), Zs'(ohm), Zs''(ohm)]，
 S1 = S0 × 2，S2 = S0 × 3。
 """
@@ -43,16 +47,6 @@ def test_plot_objects_one_line_per_sample(eis_dataset):
     assert list(plotter.axesset) == ['main']
     assert len(plotter.axesset['main']['artists']) == 3
     assert len(plt.get_fignums()) == 1
-
-
-def test_plot_objects_line_data(eis_dataset):
-    """每条线的 x/y 就是对应样品的那两列。"""
-    plotter = DataPlotter(eis_dataset, plotdataRowNum_x=FREQ, plotdataRowNum_y=ZS_RE).plot_objects()
-    lines = plotter.axesset['main']['artists']
-
-    for k, line in enumerate(lines):          # 样品 k = S0 × (k+1)
-        np.testing.assert_array_equal(line.get_xdata(), [1, 10, 100])
-        np.testing.assert_array_equal(line.get_ydata(), np.array([10, 20, 30]) * (k + 1))
 
 
 def test_plot_objects_labels(eis_dataset):
@@ -177,8 +171,8 @@ def test_legend_follows_lines_formatter(eis_dataset):
 
 
 # ══════════════════════════════════════════════
-# 分组参数：只接受建在同一数据集上的 Group
-# （分组配置本身的校验在 test_group.py，这里只测绘图器怎么接收和使用 Group）
+# group_plotter：把计划画对（分组规则本身在 test_plot_plan.py；
+# 分组参数的约定在 test_backend_parity.py 里对两个绘图器一起测）
 # ══════════════════════════════════════════════
 def make_groups(dataset):
     """每次新建：Group 会原地格式化传入的配置，不能让测试共用同一个字典。"""
@@ -188,59 +182,52 @@ def make_groups(dataset):
     })
 
 
-def test_groups_must_be_group_object(eis_dataset):
-    """传字典 → TypeError，提示先用 Group 包装（类型标注只在编辑器里提醒，运行时要自己检查）。"""
-    with pytest.raises(TypeError, match="Group"):
-        DataPlotter(eis_dataset, groups={'A': {'num': [0, 1]}})  # pyright: ignore[reportArgumentType]  故意传错类型
+@pytest.mark.parametrize("merge, expected", [
+    (False, {'A': [0, 1], 'B': [1, 2]}),
+    (True,  {'main': [0, 1, 2]}),
+], ids=['separate', 'merge'])
+def test_one_figure_per_spec(eis_dataset, merge, expected):
+    """计划里每张 FigureSpec 画成一张 matplotlib 图：axesset 的键是 FigureSpec.key，artists 以样品号为键。"""
+    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter(merge_groups=merge)
+
+    assert {key: list(entry['artists']) for key, entry in plotter.axesset.items()} == expected
+    assert len(plt.get_fignums()) == len(expected)
 
 
-def test_groups_from_other_dataset_raises(eis_dataset, sparse_dataset):
-    """一个绘图器只对应一个数据集：Group 必须建在绘图器的数据集上。"""
-    with pytest.raises(ValueError):
-        DataPlotter(eis_dataset, groups=Group(sparse_dataset, {'A': {'num': [0, 5]}}))
-
-
-def test_default_groups_is_empty_group(eis_dataset):
-    """不传分组时是空 Group：后续代码总是面对一个 Group，不用判断 None。"""
-    plotter = DataPlotter(eis_dataset)
-    assert isinstance(plotter.groups, Group)
-    assert plotter.groups.names == []
-
-
-# ══════════════════════════════════════════════
-# group_plotter：按 Group 分组绘图
-# ══════════════════════════════════════════════
-def test_group_separate_mode_one_figure_per_group(eis_dataset):
-    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter()
-
-    assert list(plotter.axesset) == ['A', 'B']
-    assert list(plotter.axesset['A']['artists']) == [0, 1]   # artists 以样品号为键
-    assert list(plotter.axesset['B']['artists']) == [1, 2]
-    assert len(plt.get_fignums()) == 2
-
-
-def test_group_separate_mode_linestyle(eis_dataset):
+@pytest.mark.parametrize("style, expected", [
+    ({'linestyle': 'dash'},  {'linestyle': '--'}),
+    ({'marker': 'circle'},   {'marker': 'o'}),
+    ({'color': (255, 0, 0)}, {'color': (1.0, 0.0, 0.0, 1.0)}),
+    ({'color': '#00ff00'},   {'color': (0.0, 1.0, 0.0, 1.0)}),
+    ({},                     {'linestyle': '-', 'marker': 'None'}),   # 没写：plot_style 默认实线、无标记
+], ids=['dash', 'marker', 'rgb', 'hex', 'no-style'])
+def test_group_style_translated(eis_dataset, style, expected):
     """
-    分离模式：分组写了线型就应用（apply_group_linestyle 开关已删除），
-    标准写法 'dash' / 'dot' 翻译成 matplotlib 的 '--' / ':'。
+    分组写了的样式翻译成 matplotlib 原生值、应用到这组的线上（标准写法 → style.translate_*(v, 'matplotlib')）。
+    哪种模式下哪条线用谁的样式是计划的规则（test_plot_plan.py），这里只用分离模式。
+    自定义虚线的翻译见 test_style.py（matplotlib 的 get_linestyle 对任何虚线都返回 '--'，看不出段长）。
     """
-    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter()
-    for name, style in {'A': '--', 'B': ':'}.items():
-        assert all(a.get_linestyle() == style for a in plotter.axesset[name]['artists'].values())
+    groups = Group(eis_dataset, {'A': {'num': [0, 1], **style}})
+    lines = DataPlotter(eis_dataset, groups=groups).group_plotter().axesset['A']['artists'].values()
+    getters = {
+        'linestyle': lambda line: line.get_linestyle(),
+        'marker':    lambda line: line.get_marker(),
+        'color':     lambda line: to_rgba(line.get_color()),
+    }
+    for line in lines:
+        for field, value in expected.items():
+            assert getters[field](line) == value, field
 
 
-@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
 @pytest.mark.parametrize("plot_style, expected", [
     ('solid', '-'),
     ('dot',   ':'),
 ])
-def test_group_without_linestyle_uses_plot_style(eis_dataset, merge, plot_style, expected):
-    """分组没写线型时用绘图器的 plot_style（合并模式以前写死为 '-'）。"""
+def test_group_without_linestyle_uses_plot_style(eis_dataset, plot_style, expected):
+    """分组没写线型时用绘图器的 plot_style（经 rc_context 生效）。"""
     groups = Group(eis_dataset, {'A': {'num': [0, 1]}})
-    plotter = DataPlotter(eis_dataset, groups=groups, plot_style=plot_style) \
-        .group_plotter(merge_groups=merge)
-    key = 'main' if merge else 'A'
-    assert all(a.get_linestyle() == expected for a in plotter.axesset[key]['artists'].values())
+    plotter = DataPlotter(eis_dataset, groups=groups, plot_style=plot_style).group_plotter()
+    assert all(a.get_linestyle() == expected for a in plotter.axesset['A']['artists'].values())
 
 
 def test_plot_style_default_and_standard_words(eis_dataset):
@@ -255,81 +242,13 @@ def test_plot_style_default_and_standard_words(eis_dataset):
         DataPlotter(eis_dataset, plot_style='-')
 
 
-@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
-def test_group_marker(eis_dataset, merge):
-    """分组写了 marker 就应用并翻译（'circle' → 'o'）；没写的分组不加标记。"""
-    groups = Group(eis_dataset, {'A': {'num': [0, 1], 'marker': 'circle'}, 'B': {'num': [2]}})
-    plotter = DataPlotter(eis_dataset, groups=groups).group_plotter(merge_groups=merge)
-    if merge:
-        artists = plotter.axesset['main']['artists']
-        a_lines, b_lines = [artists[0], artists[1]], [artists[2]]
-    else:
-        a_lines = list(plotter.axesset['A']['artists'].values())
-        b_lines = list(plotter.axesset['B']['artists'].values())
-    assert all(line.get_marker() == 'o' for line in a_lines)
-    assert all(line.get_marker() == 'None' for line in b_lines)
-
-
-@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
-@pytest.mark.parametrize("color, rgba", [
-    ((255, 0, 0), (1.0, 0.0, 0.0, 1.0)),
-    ('#00ff00',   (0.0, 1.0, 0.0, 1.0)),
-], ids=['rgb', 'hex'])
-def test_group_color(eis_dataset, merge, color, rgba):
-    """
-    分组写了 color：这组所有样品都用它（两种模式一样），覆盖按样品配色。
-    没写 color 的分组保持原样：分离模式按样品配色，合并模式用组首色。
-    """
-    groups = Group(eis_dataset, {'A': {'num': [0, 1], 'color': color}, 'B': {'num': [1, 2]}})
-    plotter = DataPlotter(eis_dataset, groups=groups).group_plotter(merge_groups=merge)
-
-    if merge:
-        artists = plotter.axesset['main']['artists']
-        assert to_rgba(artists[0].get_color()) == rgba
-        assert to_rgba(artists[1].get_color()) == rgba
-        # B 只画了样品 2（样品 1 已由 A 画过），颜色是 B 的组首色：样品 1 的按样品配色
-        assert to_rgba(artists[2].get_color()) == to_rgba(plotter.cmap(plotter.color_positions[1]))
-    else:
-        a_artists = plotter.axesset['A']['artists']
-        assert all(to_rgba(a.get_color()) == rgba for a in a_artists.values())
-        b_artists = plotter.axesset['B']['artists']
-        for sample, artist in b_artists.items():
-            assert to_rgba(artist.get_color()) == to_rgba(plotter.cmap(plotter.color_positions[sample]))
-
-
-@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
-def test_lines_formatter_overrides_group_style(eis_dataset, merge):
+def test_lines_formatter_overrides_group_style(eis_dataset):
     """优先级：默认样式 < 分组样式 < 用户 formatter（formatter 最后执行）。"""
     from plotlib.formatters import make_lines_formatter
     plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter(
-        merge_groups=merge, lines_formatter=make_lines_formatter(linestyle='dashdot'))
+        lines_formatter=make_lines_formatter(linestyle='dashdot'))
     for entry in plotter.axesset.values():
         assert all(a.get_linestyle() == '-.' for a in entry['artists'].values())
-
-
-def test_group_merge_mode(eis_dataset):
-    """
-    合并模式：一张图；被多个组共用的样品只画一次，沿用第一个组（A）的样式；
-    同组线条统一为组线型 + 组首色。
-    """
-    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).group_plotter(merge_groups=True)
-    m = plotter.axesset['main']
-    artists = m['artists']
-
-    assert len(plt.get_fignums()) == 1
-    assert len(m['ax'].get_lines()) == 3                 # 0、1、2 各一条，1 没有重复画
-    assert [artists[i].get_linestyle() for i in (0, 1, 2)] == ['--', '--', ':']
-    assert artists[0].get_color() == artists[1].get_color()     # 1 跟 A 的组首色
-    assert artists[1].get_color() != artists[2].get_color()
-
-
-@pytest.mark.parametrize("merge", [False, True], ids=['separate', 'merge'])
-def test_group_plotter_does_not_modify_group(eis_dataset, merge):
-    """绘图只读分组：画图前后 group.to_config() 不变。"""
-    groups = make_groups(eis_dataset)
-    before = groups.to_config()
-    DataPlotter(eis_dataset, groups=groups).group_plotter(merge_groups=merge)
-    assert groups.to_config() == before
 
 
 def test_group_without_config_falls_back_to_plot_objects(eis_dataset):
@@ -383,8 +302,8 @@ def test_subplotter_xyy_custom_formatter(eis_dataset):
 
 
 # ══════════════════════════════════════════════
-# 配色：样品号不连续（sparse_dataset 的样品号是 0、5、9）
-# 位置 = 排名 ÷ 样品数，见 test_plot_common.py
+# 配色：计划给的色带位置 → matplotlib 颜色（位置怎么算见 test_plot_common.py、test_plot_plan.py）
+# sparse_dataset 的样品号是 0、5、9
 # ══════════════════════════════════════════════
 PLASMA = plt.get_cmap('plasma')       # DataPlotter 默认色带
 
@@ -399,48 +318,21 @@ def test_sparse_sample_ids_colors(sparse_dataset):
                                [PLASMA(p) for p in (0, 1/3, 2/3)])
 
 
-@pytest.mark.parametrize("merge, expected", [
-    (False, {5: 1/3, 9: 2/3}),       # 分离模式：各样品各自的颜色
-    (True,  {5: 1/3, 9: 1/3}),       # 合并模式：统一为组首（样品 5）的颜色
-], ids=['separate', 'merge'])
-def test_sparse_sample_ids_group_colors(sparse_dataset, merge, expected):
+def test_bar_colors_follow_plan(sparse_dataset):
     """
-    分组绘图同样按排名取色；排名基于整个数据集（0、5、9），不是只看分组里的样品。
-    回归：组首色曾取 cmap(5/3)，被截断成色带末端。
-    """
-    groups = Group(sparse_dataset, {'A': {'num': [5, 9]}})
-    plotter = DataPlotter(sparse_dataset, groups=groups).group_plotter(merge_groups=merge)
-    artists = plotter.axesset['main' if merge else 'A']['artists']
-    for sample, position in expected.items():
-        np.testing.assert_allclose(to_rgba(artists[sample].get_color()), PLASMA(position))
-
-
-@pytest.mark.parametrize("merge, expected", [
-    (False, {5: 1/3, 9: 2/3}),
-    (True,  {5: 1/3, 9: 1/3}),
-], ids=['separate', 'merge'])
-def test_bar_group_colors_follow_plan(sparse_dataset, merge, expected):
-    """
-    柱状图的颜色与折线同一规则：合并模式同组统一为组首色（步骤 6.2 用户选 A 的行为变化）。
+    柱状图也按计划的位置上色：合并模式下样品 5、9 都是组首（样品 5）的位置 1/3（步骤 6.2 用户选 A 的行为变化）。
     以前 BarContainer 没有 set_color，合并模式下柱子各用各的样品色。
     """
     groups = Group(sparse_dataset, {'A': {'num': [5, 9]}})
-    plotter = DataPlotter(sparse_dataset, groups=groups).group_plotter(merge_groups=merge, plot_kind='bar')
-    artists = plotter.axesset['main' if merge else 'A']['artists']
-    for sample, position in expected.items():
-        for bar in artists[sample]:                      # BarContainer 里每根柱子是一个矩形
-            np.testing.assert_allclose(bar.get_facecolor(), PLASMA(position))
+    plotter = DataPlotter(sparse_dataset, groups=groups).group_plotter(merge_groups=True, plot_kind='bar')
+    for sample in (5, 9):
+        for bar in plotter.axesset['main']['artists'][sample]:   # BarContainer 里每根柱子是一个矩形
+            np.testing.assert_allclose(bar.get_facecolor(), PLASMA(1/3))
 
 
 # ══════════════════════════════════════════════
-# 边界情况
+# 负对数刻度（取绝对值在计划里；刻度文字补负号是 matplotlib 的事）
 # ══════════════════════════════════════════════
-def test_column_index_out_of_range_raises(eis_dataset):
-    """每个样品只有 3 个通道，要通道 5 → 报错，而不是画出空图。"""
-    with pytest.raises(RuntimeError, match="未找到对应的列数据"):
-        DataPlotter(eis_dataset, plotdataRowNum_y=5).plot_objects()
-
-
 def test_neglog_x(eis_dataset):
     """X 轴负对数：用 Zs''（全负）当 X。"""
     plotter = DataPlotter(eis_dataset, plotdataRowNum_x=ZS_IM, plotdataRowNum_y=ZS_RE)

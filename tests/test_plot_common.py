@@ -25,7 +25,7 @@ def test_color_positions(sample_ids, expected):
 
 # ──────────────────────────────────────────────
 # resolve_groups(groups, dataset)：两个绘图器共用的分组参数检查
-# 三种情况（None / 非 Group / 别的数据集）由两个绘图器各自的测试覆盖，这里只测「不复制」
+# 三种情况（None / 非 Group / 别的数据集）在 test_backend_parity.py 里对两个绘图器一起测，这里只测「不复制」
 # ──────────────────────────────────────────────
 def test_resolve_groups_returns_same_object(eis_dataset):
     """合法的 Group 原样返回，不复制：绘图器和调用方看到的是同一个 Group。"""

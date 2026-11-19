@@ -87,7 +87,7 @@ def test_axes_custom_formation_receives_ax_and_fig(fig_ax):
 def test_axes_formatter_works_with_plotter(eis_dataset):
     """集成：作为 axes_formatter 交给 DataPlotter（eis_bode.py 的用法）。"""
     fmt = make_axes_formatter(xscale_type='log', x_format='{x:.1e}')
-    ax = DataPlotter(eis_dataset).plot_objects(axes_formatter=fmt).axesset['main']['ax']
+    ax = DataPlotter(eis_dataset).plot_multiline(axes_formatter=fmt).figures['main'].axes['left']
     assert ax.get_xscale() == 'log'
 
 
@@ -237,11 +237,11 @@ def test_plotly_axis_bounds_after_render(eis_dataset, render, axis, kwargs, expe
     断言 Plotly.js 实际渲染出的范围，而不是 JSON 里的设置。
     使用真实模板：模板开了 automargin，正是它的扩边重绘曾让单侧边界失效。
     """
-    from plotlib.interactive import InteractivePlotter
+    from plotlib.plotter import DataPlotter
 
-    plot = InteractivePlotter(eis_dataset, plotdataRowNum_x=0, plotdataRowNum_y=1)
-    fig = plot.plot_plotly_object(
-        figure_formatter=make_axes_formatter(backend="plotly", **kwargs)).asset
+    plot = DataPlotter(eis_dataset, channel_x=0, channel_y=1, backend='plotly')
+    fig = plot.plot_multiline(
+        axes_formatter=make_axes_formatter(backend="plotly", **kwargs)).figures['main'].fig
     full_axis = render(fig).layout[axis]
     low, high = (10 ** v if full_axis.type == "log" else v for v in full_axis.range)
 
@@ -275,6 +275,6 @@ def test_combine_formatters_runs_in_order_and_skips_none():
 
 def test_legend_formatter_works_with_plotter(eis_dataset):
     """集成：作为 legend_formatter 交给 DataPlotter——修复前这条路径从没跑通过。"""
-    ax = DataPlotter(eis_dataset).plot_objects(
-        legend_formatter=make_legend_formatter(legend_fontsize=7)).axesset['main']['ax']
+    ax = DataPlotter(eis_dataset).plot_multiline(
+        legend_formatter=make_legend_formatter(legend_fontsize=7)).figures['main'].axes['left']
     assert all(t.get_fontsize() == 7 for t in ax.get_legend().get_texts())

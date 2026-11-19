@@ -38,7 +38,7 @@ dataRowNum_unit7 = 6  # Zp''
 dataRowNum_unit8 = 7  # Tan Delta
 dataRowNum_unit9 = 8  # Tan Phi
 
-# 数据分组配置（用于 group_plotter）
+# 数据分组配置（用于 plot_groups）
 # 样式用标准写法（style.py）：线型 'solid' / 'dash' / 'dot' / 'dashdot'，或自定义虚线 (实线长, 空白长)
 data_groups = {
     '1st': {'num': [0, 1], 'linestyle': 'solid'},
@@ -110,17 +110,17 @@ groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下
 # ============================================================
 
 Bode_Plotter_TanDelta = DataPlotter(
-    input_dataset=data,
-    plotdataRowNum_x=dataRowNum_unit1,
-    plotdataRowNum_y=dataRowNum_unit8
-).plot_objects(axes_formatter=Bode_Delta_formatter)
+    dataset=data,
+    channel_x=dataRowNum_unit1,
+    channel_y=dataRowNum_unit8
+).plot_multiline(axes_formatter=Bode_Delta_formatter)
 
 Bode_Plotter_TanDelta_group = DataPlotter(
-    input_dataset=data,
-    plotdataRowNum_x=dataRowNum_unit1,
-    plotdataRowNum_y=dataRowNum_unit8,
+    dataset=data,
+    channel_x=dataRowNum_unit1,
+    channel_y=dataRowNum_unit8,
     groups=groups
-).group_plotter(    
+).plot_groups(    
     axes_formatter=Bode_Delta_formatter,
     lines_formatter=Group_lines_formatter)
 
@@ -146,10 +146,10 @@ RevCampdata_v2 = groups.apply(
 )
 
 RevCampdata_v2_pltsubsyy = DataPlotter(
-    input_dataset=RevCampdata_v2,
-    plotdataRowNum_x=2,
-    plotdataRowNum_y=1,
-).plot_objects(
+    dataset=RevCampdata_v2,
+    channel_x=2,
+    channel_y=1,
+).plot_multiline(
     axes_formatter=NegLog_formatter
 )
 
@@ -162,10 +162,10 @@ for dataslice in Selected_data.iter('samples'):
     Conductivity.expandata(conductivity_slice)
 data = data.expandata(Conductivity)._rearrange_columns()
 Conductivity_pltliner1 = DataPlotter(
-    input_dataset=data,
-    plotdataRowNum_x = 0,
-    plotdataRowNum_y = 9
-).plot_objects(
+    dataset=data,
+    channel_x = 0,
+    channel_y = 9
+).plot_multiline(
     axes_formatter=NegLog_formatter,
 )
 

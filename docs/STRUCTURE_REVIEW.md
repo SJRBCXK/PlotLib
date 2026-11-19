@@ -4,7 +4,7 @@
 > 评估范围：`src/`、`scripts/` 逐行阅读；`tools/`、`gui/`、`tests/`、配置与文档看了结构和接口。
 > 本文分三部分：A 评估结论与问题清单（背景）；**B 分步开发指南（当前要做的）**；C 整理工作的记录（已完成）。
 > **状态**：C 部分已全部完成并提交（`92bbde6`，206 passed）。接下来由执行者（Opus 5.5）按 B 部分**指导用户**一步步做，先读 B.0。
-> **进度（2026-11-19）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已提交（`815634e`）；步骤 6.1 已提交（`2d87f86`）；步骤 6.2 已提交（`d6f7af6`；374 passed）。步骤 6.3 已提交（`b0d65dd`；385 passed）。之后绘图测试按层整理（待提交），6.4 的测试已写好（17 条待实现）。**下一步是步骤 6.4 的「改」：`interactive.py` 实现按组翻页，先读 6.4 小节**。
+> **进度（2026-11-19）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已提交（`815634e`）；步骤 6.1 已提交（`2d87f86`）；步骤 6.2 已提交（`d6f7af6`；374 passed）。步骤 6.3 已提交（`b0d65dd`；385 passed）。之后绘图测试按层整理（`e0799fd`）。6.4「计划补全」、6.5「统一结果与清理」、6.6a「matplotlib 后端（搬家）」、6.6b「排版预设」、6.7「Plotly 后端」已完成（426 passed，待提交）。**后端重构完成，结构已确认**（见 6.7 之后的「结构确认」）：唯一入口 `DataPlotter(backend='matplotlib' | 'plotly')`，`plot_spec.py`（约定）/ `plan.py`（规则）/ `layouts.py` / `style.py`（翻译层）/ `backends/`；公开接口已统一命名（`plot_multiline` 等）。2026-11-19 路线调整：**先建后端，再加新功能**——原 6.4（按组翻页）挪到 6.8，新的 6.4 ~ 6.7 依次是计划补全、统一结果、matplotlib 后端、Plotly 后端。**下一步是 6.8「Plotly 按组翻页」（在新架构上加新功能），先读 6.7 执行记录和 6.8 小节**。
 > **2026-11-18 路线调整**：步骤 5、6 按「先抽绘图计划、两个后端按同一份计划画」重排，不再先在 Plotly 里复制一份 `group_plotter`（理由见步骤 5 的「讲」）。
 > 4.3 引入了标准样式写法（`src/plotlib/style.py`，见 4.3 执行记录）。6.1 起绘图规则集中在 `plot_common.plan_figures`，两个后端只按计划画。
 > 新文件 `src/plotlib/style.py`、`tests/test_style.py` 提交时需要 `git add`。
@@ -161,7 +161,7 @@ matplotlib 坐标轴回调把刻度线宽写死为 3（`formatters.py:134`、`14
 - 不跨步骤，不顺手修本文没列出的问题；发现了就记下来告诉用户。
 - 本文的行号对应提交 `92bbde6`，改动后会漂移，**以函数名为准**。本文与代码不一致时以代码为准，并告诉用户。
 - 测试跟着需求走（2026-11-19 用户改定，原为「只增不减」）：重构途中旧测试是安全网，不改；结构变了以后，测已消失的结构、或在多层重复同一规则的测试，经用户同意清理。
-  绘图测试按层放（见 `tests/README.md` 约定第 1 条）。基线是 368 passed + 17 个 6.4 待实现（测试整理之后，共 385；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354 → 355 → 359 → 364 → 370 → 374 → 385）。
+  绘图测试按层放（见 `tests/README.md` 约定第 1 条）。基线是 428 passed（6.7 后的结构确认之后；此前 426；6.8 先写的 10 条 xfail 随 InteractivePlotter 删除，6.8 按新入口重写；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354 → 355 → 359 → 364 → 370 → 374 → 385）。
 - 本文给出的名字、签名都是建议。「定」这个动作里用户改了主意，就按用户的来，并把决定写回本文对应小节。
 - 修改代码用编辑工具逐处修改，让用户能看到 diff。注释和文档保持中文。
 
@@ -174,7 +174,7 @@ matplotlib 坐标轴回调把刻度线宽写死为 3（`formatters.py:134`、`14
 | 3    | 稀疏样品号配色：第一块公共代码                  | 逻辑，小               | 2    |
 | 4    | 让 `Group` 成为分组的唯一主人                 | 逻辑，中               | 2    |
 | 5    | 交互图接上 `Group`，两个绘图器共用取数        | 机械 + 逻辑，小        | 3、4 |
-| 6    | 绘图计划，从分组模式开始（`BACKEND_PLAN.md` 第 3、4 步） | 架构，大      | 5    |
+| 6    | 绘图计划与后端：计划 → 两个后端 → 统一入口（`BACKEND_PLAN.md` 第 3、4 步） | 架构，大      | 5    |
 | 7    | 补接口缺口：`Dataloader`、逐样品变换、列排序  | 逻辑，小，三项互相独立 | 2    |
 | 8    | 让脚本可复现                                    | 逻辑，小               | 7    |
 | 9    | 工具收敛（Tk / Qt）                             | 待定                   | —   |
@@ -646,7 +646,7 @@ CurveSpec(sample_idx, x, y, label, color_position, group_name,
 - **matplotlib 对照**：`DataPlotter._draw_figure`（建图 → 画线 → 折线应用 `_native_style(curve.style)` → 默认格式 → formatter → neglog，返回 `(fig, ax, {样品号: artist})`），
   `group_plotter` 只剩「空分组转交 `plot_objects`；生成计划 → 循环画」。Plotly 一侧照这个形状写 `_draw_figure` 的对应物，**后端只读计划、不读 `Group`**。
 - **Plotly 现状**（`interactive.py`）：`plot_plotly_object(figure_formatter)` 自己按样品循环画（颜色 `_get_color(i)` = `sample_colorscale(cmap, [color_positions[i]])`），
-  只产出一个 `self.asset: go.Figure`；`self.plot_artists` 是 trace 列表（`test_interactive.py` 有 3 处断言）；`add_slider` 按 **trace 位置** 控制显隐（6.4 改为按分组）。
+  只产出一个 `self.asset: go.Figure`；`self.plot_artists` 是 trace 列表（`test_interactive.py` 有 3 处断言）；`add_slider` 按 **trace 位置** 控制显隐（按分组翻页见 6.8）。
   `self.groups` 已接上（5.1）但没用。模板 `_create_template` 里 Scatter 线宽 3 —— 翻译自定义虚线 `translate_linestyle(v, 'plotly', linewidth=3)` 要传线宽。
 - **样式翻译**：Plotly 写在 trace 上：`line=dict(color=..., dash=...)`、`marker=dict(symbol=...)`；分组写了 marker 时折线 `mode` 要变成 `'lines+markers'`。
   可仿照 `DataPlotter._native_style` 写一个 Plotly 版（`style.translate_*(v, 'plotly')`）。分组样式仍只对折线生效（与 matplotlib 一致）。
@@ -666,7 +666,7 @@ CurveSpec(sample_idx, x, y, label, color_position, group_name,
 写成一组对照测试，**同一个 `Group` 对象**分别交给两个绘图器（两者用同一个数据集），再比较。重叠样品只出现一次、组首色、线型各一条测试。
 
 **执行记录（2026-11-19，已完成，385 passed，`b0d65dd`）：** 旧测试一条未改，全部通过；新增 `tests/test_plotly_groups.py`（11 条；随后的测试整理中拆进 `test_interactive.py` 和 `test_backend_parity.py`）。
-- 「定」全按建议：先做合并模式；分离模式 = 一张图按组翻页（6.4，见下）；入口名 `plot_plotly_group`；只画折线。
+- 「定」全按建议：先做合并模式；分离模式 = 一张图按组翻页（原 6.4，现 6.8）；入口名 `plot_plotly_group`；只画折线。
   另定：新增类常量 `_LINE_WIDTH = 3`，模板线宽和自定义虚线的像素换算共用（否则改模板线宽后虚线间距悄悄对不上）。
 - `_draw_figure(spec, plot_kind='line', figure_formatter=None)`：建图（模板）→ 逐条画线 → 折线应用分组样式 → 轴标题 → formatter，
   返回 `(fig, {样品号: trace})`。画线循环与 matplotlib 逐行对应：
@@ -694,7 +694,7 @@ CurveSpec(sample_idx, x, y, label, color_position, group_name,
 | `test_interactive.py` | Plotly 把计划画对 + 模板、两种滑块 |
 | `test_backend_parity.py`（新） | 两个绘图器的分组参数约定（对两个类参数化）；同一个 `Group` 画出的曲线一致 |
 
-处理（394 → 385，其中 17 条是 6.4 先写、待实现的测试）：
+处理（394 → 385，其中 17 条是原 6.4（现 6.8）先写、待实现的测试）：
 - 删除：`test_plot_objects_line_data`（与 `test_plot_kind[line]` 重复）、`test_column_index_out_of_range_raises`（与 `test_get_column_data_missing_raises` 重复）、
   `test_group_merge_mode`（去重、先到先得、组首色已在计划里测）。
 - 合并：matplotlib 的分组线型、marker、颜色测试 × 两种模式（7 条）→ 一条参数化的 `test_group_style_translated`（5 种情况，只用分离模式）；
@@ -703,52 +703,244 @@ CurveSpec(sample_idx, x, y, label, color_position, group_name,
 - 两个文件各 3 条分组参数测试 → `test_backend_parity.py` 里 3 条，对两个绘图器参数化；`test_plotly_groups.py` 拆掉。
 - B.0 的「测试只增不减」改为「测试跟着需求走」；`tests/README.md` 约定加第 1 条（按层放）和第 10 条。
 
-#### 6.4 Plotly 分离模式：按组翻页（2026-11-19 修订）
+#### 路线调整：先建后端，再加新功能（2026-11-19，用户提出）
+
+用户指出：原 6.4（Plotly 按组翻页）是新功能，要动的「一个 Figure 画多页」「结果存哪、什么形状」正是建后端时要定的接口；
+照现有结构先写，接口一换就得重写。所以**先完成后端重构，再加新功能**。
+
+执行者对照 `src` 与 `BACKEND_PLAN.md` 后补充：**后端的接口就是计划**（每个后端只做 `draw(计划)`），所以计划要先补全、定型，
+否则建完后端再给计划加字段（如双 Y 轴的左 / 右轴），两个后端都要再改。
+
+原 6.4 的方向和「定」保留，挪到 6.8；它的 17 条测试已写好（`test_interactive.py`、`test_backend_parity.py`），
+**6.4 开始时先标 `xfail(strict=True, reason='6.8')`**，让 6.4 ~ 6.7 每一步结束都是全绿，6.8 实现时去掉标记、按新入口改调用。
+用户在 `plot_plotly_group` 上已加的 `merge_groups` 参数（未提交）在 6.7 随入口一起搬走。
+
+**用户已定（2026-11-19）：**
+
+| # | 问题 | 决定 |
+| - | ---- | ---- |
+| 1 | `InteractivePlotter` 最后怎么办 | **删除**，统一用 `DataPlotter(backend='plotly')`；`scripts/piezo_interactive.py`、README、测试随之更新（机械） |
+| 2 | 外观参数（字号、线宽、图例字号、`figsize`） | **公共参数、各后端翻译**（`BACKEND_PLAN` 原则 4）：matplotlib → `rc_params`，Plotly → 模板；`figsize` 英寸，到 Plotly × 100 成像素 |
+| 3 | formatter 参数 | **统一为 `axes_formatter / lines_formatter / legend_formatter`**，各后端用原生对象调用：matplotlib 传 `ax, fig` / `lines` / `legends`，Plotly 三个都传 `fig`（`make_*_formatter(backend='plotly')` 生成的本来就是 `fn(fig)`）；Plotly 的 `figure_formatter` 去掉 |
+
+**目标结构：**
+
+```text
+DataPlotter(dataset, groups, backend='matplotlib' | 'plotly', 外观参数...)   ← 唯一入口
+   plot_objects / group_plotter / subplotter_yy / subplotter_xyy
+      │ ① 生成计划（plot_common，不碰绘图库）
+      ▼
+   list[FigureSpec]    图：key、单位、neglog、版式（单轴 / 双 Y 轴）
+                       线：数据、标签、色带位置、样式、图的种类、左 / 右轴
+      │ ② 交给后端
+      ▼
+backends/matplotlib_backend.py      backends/plotly_backend.py
+   每张 FigureSpec 一张图              所有 FigureSpec 画进一个 Figure，每张是一页（6.8）
+      │ ③ 结果统一存进 self.axesset（键是 FigureSpec.key）
+      ▼
+滑块：只有 Plotly 有，matplotlib 后端调用时明确报错（BACKEND_PLAN 原则 3、5）
+```
+
+| 步 | 做什么 | 结束时 |
+| -- | ------ | ------ |
+| 6.4 计划补全 | 曲线加「图的种类、左 / 右轴」，图加「单位、neglog、版式」；新增 Y-Y、双 Y 轴计划；`subplotter_yy/xyy` 按计划画 | 四种模式全走计划，**计划定型** |
+| 6.5 统一结果与清理 | 结果形状统一；删无人读的 `color_positions` 属性；颜色一次赋值（用户定的 B） | 一种结果形状 |
+| 6.6 matplotlib 后端 | 画图代码搬进 `backends/matplotlib_backend.py`；`DataPlotter` 只剩「计划 → 后端 → 存结果」；`backend` 参数 | matplotlib 行为不变 |
+| 6.7 Plotly 后端 | `InteractivePlotter` 的画图、模板、滑块搬进 `plotly_backend.py`；删除 `InteractivePlotter` | 两个后端同一入口 |
+| 6.8 Plotly 按组翻页（原 6.4） | 分离模式按组翻页、分组滑块 | 功能齐全 |
+
+每一步结束全绿、可单独提交。
+
+#### 6.4 计划补全（计划定型）
+
+**讲。** 现在的计划只覆盖不分组、分组两种模式；Y-Y、双 Y 轴还直接调 `get_xy_data`；图的单位挂在每条曲线上（后端取 `curves[-1]`），neglog 靠参数传给后端。
+把这些都放进计划，后端才能只读计划。
+
+**定（开始时逐条问，下面是建议）：**
+
+| # | 要定的事 | 建议 |
+| - | -------- | ---- |
+| 1 | 曲线新增字段 | `kind`（`'line'` / `'scatter'` / `'bar'`，即 `plot_kind`；双 Y 轴两侧可不同）、`axis`（`'left'` / `'right'`） |
+| 2 | 图新增字段 | `x_unit`、`y_unit`、`y2_unit`（没有右轴为 None）；`neglog`（哪些轴补负号刻度）；`layout`（`'multiline'`（6.4 时叫 `'single'`）/ `'dual_y'`）。曲线上的单位是否保留由用户定 |
+| 3 | Y-Y 的计划 | 每个样品一张 FigureSpec、一条线，`key` 为样品号（与现在 `axesset` 的键一致） |
+| 4 | 双 Y 轴的计划 | 每个样品一张 FigureSpec、两条线（左轴、右轴），`layout='dual_y'` |
+| 5 | 各模式不同的默认格式（Y-Y 图例右下、Y 轴 4 位小数；双 Y 轴左红右蓝） | 由 `layout` 区分还是统一成一种默认格式（会是行为变化），用户定 |
+
+**测。** 计划测试新增 Y-Y、双 Y 轴两种计划；`test_plotter.py` 里 Y-Y、双 Y 轴的旧测试保持通过（安全网）。
+
+**执行记录（2026-11-19，已完成，386 passed + 10 xfailed）：**
+- 开始前：原 6.4 的测试标 `xfail(strict=True)`（`PENDING_6_8`）。用户已给 `plot_plotly_group` 加了 `merge_groups`，其中 7 条已通过，只剩 10 条标记。
+- 用户的决定（与上表不同处）：
+  - **Y-Y 改名为 xy**：它就是最基本的「每个样品一张 x-y 单线图」，不是特殊模式。公开方法 `subplotter_yy` → `subplotter_xy`（3 个脚本、README、测试随之改），
+    计划函数 `plan_xy_figures`、版式 `'xy'`；参数名 `plotdataRowNum_Y1/Y2` 留到 6.6 统一入口时整理。
+  - **xy 的颜色不变**（第 2 条不按建议）：一张图一条线，不需要按样品换色。计划里色带位置允许为 `None`，表示「用后端默认色」（matplotlib 默认颜色序列第一个色）。
+  - **线和图分清**：属于线的放 `CurveSpec`（数据、标签、色带位置、样式、`kind`、`axis`），属于图的放 `FigureSpec`（key、单位、`neglog`、`layout`）。
+    左右轴跨两层（线挂哪根轴 / 那根轴的设置），6.6、6.7 实现后端时按需要调整；已写进 `plot_common.py` 的注释。
+  - **双 Y 轴照旧模板**；排版设置要有地方存（见 6.6「排版预设」）。默认格式照旧，由 `layout` 区分。
+  - `neglog` 保留 `'x2'`（拼图时上轴可能用到），取值 `{'x', 'y', 'x2', 'y2'}`。
+  - 修 `figsize`：xy、双 Y 轴以前写死 (12, 8)，现在也用构造参数，不传时仍是 (12, 8)。
+- 计划（`plot_common.py`）：
+  - `CurveSpec` 删去 `x_unit / y_unit`，加 `kind`（默认 `'line'`）、`axis`（默认 `'left'`），`color_position` 可为 `None`；
+  - `FigureSpec` 加 `x_unit`、`y_unit`、`y2_unit`、`neglog: frozenset`（不可变，多张图共用同一份也安全）、`layout`；
+  - 新增 `channel_unit(dataset, 通道号)`、`plan_xy_figures`、`plan_dual_y_figures(left=(X, Y), right=(X, Y), kinds=...)`；
+  - `plan_figures` 加 `kind` 参数；三个内部函数多收一个 `make_figure`（与 `make_curve` 同样用 `partial` 绑定单位、neglog、版式）
+  - 完成后用户提出改名：`plan_figures` → **`plan_multiline_figures`**（多线图，与 `plan_xy_figures`、`plan_dual_y_figures` 按「画出来的样子」并列），版式 `'single'` → **`'multiline'`**（`'single'` 原想表达单轴，但 xy 图也是单轴，易误会）。之前的执行记录保留旧名。
+- matplotlib：`_draw_figure` 不再收 `plot_kind`、`neglog_*`，改读 `curve.kind`、`spec.x_unit`、`spec.neglog`；`_default_plot_formatter` 去掉 `plot_kind`
+  （散点、柱不在 `ax.get_lines()` 里，不用判断）；`subplotter_xy/xyy` 改为「生成计划 → 按计划画」，颜色用新的 `_curve_color(curve)`
+  （分组写了用它，否则色带位置，位置为 None 不传）——这就是 6.5「颜色一次赋值」的写法，6.5 时 `_draw_figure` 也改用它。
+- Plotly：`_draw_figure` 读 `curve.kind`、`spec.x_unit / y_unit`，不再取 `curves[-1]` 的单位。
+- 新增测试 11 条（计划 8、matplotlib 3；改 1 条单位断言）；类型检查 0 错误。
+
+#### 6.5 统一结果与清理
+
+- **结果形状**：`{FigureSpec.key: {'fig', 'artists', ...}}`（A.4 第 2 条的四种形状合为一种）。要定：
+  `artists` 的键——双 Y 轴同一样品有左右两条线，单靠样品号会冲突（可用 `(样品号, 轴)` 或按曲线顺序的列表）；
+  matplotlib 的坐标轴放 `'ax'` 还是 `'axes'`（双 Y 轴有两个）；容器名是否从 `axesset` 改名（Plotly 没有 axes）；
+  Plotly 分离模式各键的 `'fig'` 指向**同一个** Figure（6.8）。
+- **颜色一次赋值（用户决定）**：先定这条线的最终颜色（分组写了就用它，否则色带位置换算），画线时一次传入、画完不再覆盖。
+  执行者曾建议保留「先画再覆盖」（优先级写在代码顺序里；颜色对所有 `kind` 生效而样式只对折线生效），改时注意别让颜色跟着 `kind == 'line'` 的条件走。
+  如果计划给出最终颜色来源（例如 `CurveSpec` 带上分组写的颜色），后端只剩「取色 → 赋值」。
+- 删除两个绘图器上无人读取的 `color_positions` 属性（颜色由计划给出）。
+- 读取 `axesset` 的测试和脚本随之修改。
+
+**执行记录（2026-11-19，已完成，393 passed + 10 xfailed）：** 「定」全按建议。
+- 新增 `plot_common.DrawnFigure(spec, fig, axes, artists)` 与 `artist(样品号, axis='left')`（找不到报 `KeyError`）；
+  `artists` 是与 `spec.curves` 对齐的列表，解决了双 Y 轴同一样品两条线的键冲突。
+- `DataPlotter.axesset` → **`figures = {计划的 key: DrawnFigure}`**，四种方法同一形状，不留别名；`_draw_figure` 返回 `DrawnFigure`。
+  双 Y 轴 `axes={'left': ax1, 'right': ax2}`，`artists=[左线, 右线]`。
+- 颜色一次赋值（用户定的 B）：两个后端的 `_draw_figure` 都在画线时用 `_curve_color(curve)` 给出最终颜色；`_native_style` 只翻译线型和标记，不再碰颜色。
+  **行为变化**：分组写的 `color` 现在对散点图、柱状图也生效（BACKEND_PLAN 第 7 节「分组样式只对折线生效」的颜色部分解决；线型、标记仍只对折线）。
+  顺手修：Plotly 的 `go.Bar` 没有 `line` 属性，柱状图只写 `marker` 颜色（入口还只画折线，6.7 开放 `plot_kind` 时会用到）。
+- 删除两个绘图器的 `color_positions` 属性、`InteractivePlotter.axesset`（都无人读取）。Plotly 的 `asset`、`plot_artists` 按决定 5 留到 6.7。
+- 测试：读 `axesset` 的 36 处改成 `figures` 写法（断言内容不变）；新增 7 条（结果形状 4 种方法、按样品取线、分组颜色作用于散点 / 柱）。
+  Plotly 散点 / 柱的颜色测试留到 6.7 开放 `plot_kind` 时补。
+
+#### 6.6 matplotlib 后端
+
+- 建 `backends/__init__.py`、`backends/matplotlib_backend.py`；`DataPlotter` 的建图、画线、默认格式、formatter、neglog 搬过去，`DataPlotter` 只剩「生成计划 → 交给后端 → 存结果」。
+- `DataPlotter` 加 `backend='matplotlib'` 参数；外观参数由后端翻译成 `rc_params`（决定 2）。
+- 行为不变：`test_plotter.py` 全过。拆 `formatters.py`（按后端）可在本步或 6.7 一起做。
+- **排版预设（6.4 时用户提出）**：现在写死在 `_default_plot_formatter`、`_default_xy_formatter`、`_default_xyy_formatter` 里的设置
+  （图例位置、刻度小数位、双 Y 轴左红右蓝、`subplots_adjust`）抽到一处存放（如 `layouts.py`，按 `FigureSpec.layout` 取），用标准写法，各后端翻译；
+  参照 `scripts/eis_*.py`、`scripts/piezo.py` 里常用的 formatter 设置做一份前端模板。双 Y 轴两条线的红、蓝从计划的 `style` 改为从预设读。
+
+**6.6a 执行记录（2026-11-19，已完成，396 passed + 10 xfailed）：** 用户要求「一步步指导迁移」（这一步思想上最重要），按 6 小步走：
+1. **分类练习**（用户做）：判断标准「换成 Plotly 要不要重写」→ 要重写就搬进后端。用户对了大半；`_draw_figure`、`_curve_color` 判成「留」
+   （证据：Plotly 也各有一份），`subplotter_xy/xyy` 只搬了格式那几行（建图、画线也要搬），标准收紧为「碰不碰绘图库」。
+   用户提出「计划交给后端渲染、入口与后端解耦」——落实为入口新增 `_render(specs, ...)`，后端只有一个公开方法 `draw(spec, ...)`。
+   用户问「翻译要不要放在 plotter 与后端之间单独一层」：不单独成层（翻译结果的形状因后端而异：rc_params / Template；部分翻译需要后端状态；
+   加后端要改两处），翻译规则集中在 `style.py`，后端内部分「翻译 / 渲染」两段。
+2. `plot_common` 新增两个 `frozen` dataclass（用户写）：`Appearance`（字体、字号、字重、`line_width`、`axis_width`、`linestyle`、`legend_font_size`、`tick_width`，
+   默认值与 DataPlotter 构造参数一致）、`AxesFormatter`（一根轴的一组回调：`axes` / `lines` / `legend`，没给为 None；用户定名）。
+3. `backends/matplotlib_backend.py` 的 `MatplotlibBackend.__init__`（用户写）：Appearance → `rc_params`、解析色带名。
+4. 画图方法原样搬进后端（执行者搬），分「翻译」（`_curve_color`、`_native_style`）与「渲染」两段。
+5. `draw(spec, figsize, formatters=None, figure_formatter=None) -> DrawnFigure`（用户写分派与三个 `_draw_*`，执行者按用户要求收尾）：
+   `formatters = {'left': AxesFormatter(...), 'right': ...}` 按轴取；`_apply_optional_formatters` 改为直接收一组 `AxesFormatter`（两层取值易错，用户写错多次后改接口）；
+   **整图回调三种版式都支持**（用户选 B），签名统一为 `figure_formatter(fig, axes)`，`axes = {'left': ax, 'right': ax2}`；未知版式报 `ValueError`。
+6. 接线（执行者写，用户去吃饭）：`backends/__init__.py` 的 `get_backend(name, appearance, cmap)`（各后端用到时才导入；`'plotly'` → `NotImplementedError`，
+   写错 → `ValueError` 列出可选值）；`DataPlotter` 加 `backend='matplotlib'`，外观参数打包成 `Appearance` 交给后端，删掉 `rc_params`、`cmap` 属性；
+   新增 `_render`；四个绘图方法都成了「计划 → 打包回调 → `_render`」；`subplotter_xyy` 把旧的 `custom_formatter(ax1, ax2, fig)` 包成新签名，脚本不用改。
+   `plotter.py` 637 → 396 行，不再导入 matplotlib。
+- 公开签名未变，脚本不用改；新增测试 3 条（后端只读计划、`backend` 参数、外观翻译）。
+- 记到 6.6b / 6.7：刻度标签字号（用户在写 rc_params 时想加，未加，会改变现有图）；`Appearance` 是否补字段等 Plotly 需要时定。
+
+**6.6b 执行记录（2026-11-20，已完成，407 passed + 10 xfailed）：** 「定」全按建议；用户定节奏「你定、我写、我讲」，执行者写、用户看 diff。
+- 先写排版安全网测试 11 条（图例位置与可拖动、刻度格式、边距、双 Y 轴轴色与线色），在旧代码上全部通过，再重构。
+- 新增 `layouts.py`：`LayoutPreset(legend, legend_draggable, tick_formats, axis_colors, margins)`（frozen，标准写法）与 `LAYOUTS = {'multiline', 'xy', 'dual_y'}`。
+- 后端三个 `_draw_*` 合成一个 `_draw`：有挂右轴的线才 `twinx`；每条线画在 `axes[curve.axis]` 上；`_apply_layout` 按预设设图例（只放左轴）、
+  轴标题、刻度格式（`_tick_formatter` 单独成函数，避开循环里 lambda 的晚绑定）、轴着色、边距；各轴回调只拿到挂在本轴的线。
+  删除写死的 `_default_plot_formatter`、`_default_xy_formatter`、`_default_xyy_formatter` 及 `_configure_*`（其中线宽、刻度宽、刻度朝外与 rc_params 重复，本就不起作用）。
+- 双 Y 轴红蓝只由预设定：计划不再写 `style={'color': ...}`；`_curve_color` 优先级为 分组颜色 > 色带位置 > 预设里这根轴的颜色 > 默认色。
+- 后端 250 行（6.6a 时 ~330 行）；行为不变。参照脚本做「前端模板」（命名的 formatter 组合）是新功能，留到以后。
+
+#### 6.7 Plotly 后端
+
+- `InteractivePlotter` 的画图、模板、`_native_style`、滑块搬进 `backends/plotly_backend.py`；`DataPlotter(backend='plotly')` 可用；删除 `InteractivePlotter`（决定 1）。
+- formatter 用三个统一名字调用（决定 3）；外观参数翻译成模板（决定 2）。
+- 滑块是画完之后的可选交互：放在 `DataPlotter` 上（如 `add_slider`），matplotlib 后端调用时报错。
+- 要定：Plotly 的负号刻度（建议 `tickprefix='-'`）；双 Y 轴在 Plotly 里怎么画（`yaxis2`）还是先明确报错；`plot_kind` 开放；`asset` 是否保留。
+- 双 Y 轴（6.4 后用户问到，记录）：Plotly 没有 `ax2` 这样的轴对象，右轴是 layout 里的 `yaxis2=dict(overlaying='y', side='right')`，
+  trace 写 `yaxis='y2'`（或 `make_subplots(specs=[[{"secondary_y": True}]])`）；计划的 `axis='right'`、`y2_unit`、`neglog` 的 `'y2'` 两边都能翻译，
+  上轴 `'x2'` 同理（`xaxis2=dict(overlaying='x', side='top')`）。不能直接对应的是**按轴的 formatter**：matplotlib 的 `axes_formatter_ax2` 拿到 `ax2`，
+  Plotly 的 formatter 只拿到整个 `fig`，不知道改哪根轴。执行者倾向给 Plotly 的格式化器工厂加「目标轴」参数（如 `axis='y2'`，只改 `yaxis2`），
+  与 `axes_formatter_ax2` 一一对应；另一种是双 Y 轴只收整图 formatter、由用户自己写 `yaxis2`。另：matplotlib 默认只给左轴建图例，Plotly 两条线共用一个图例，要定是否一致。
+- 对照测试改为同一个 `DataPlotter` 换 `backend`；`scripts/piezo_interactive.py`、README、`test_html_export.py` 随之更新。
+- **`plot_common` 拆分或改名（6.6a 后用户问到，待定）**：用户问 plotter 与 plot_common 能否合并——不能（plot_common 是入口与后端之间的约定，
+  并进 plotter 会让后端反过来导入入口，形成循环导入）。但名字已跟不上内容：它现在是「规则层」（`plan_*`），用户读 plotter 时找不到规则在哪。
+  建议改名（如 `plan.py`），或按 BACKEND_PLAN 的规划拆出 `plot_spec.py`（约定类型）+ 计划函数；时机由用户定（6.7 前改只多改 InteractivePlotter 一行导入）。
+- 回调每个位置只收一个函数，多个用 `combine_formatters` 合成（6.6 时讨论）。现在的 `combine_formatters` 类型标注是 Plotly 专用、只转发 `fig`，
+  统一 formatter 时改成两个后端都能用（转发全部参数，如 matplotlib 的 `(ax, fig)`）。
+
+**6.7 执行记录（2026-11-20，已完成，426 passed）：** 用户定节奏「你定、我写」；分 6.7a（建 Plotly 后端，新旧并存）、6.7b（切换入口、删除 `InteractivePlotter`）。
+- 用户改定（与执行者建议不同处）：
+  - **dpi 显式化**：`Appearance` 加 `dpi=100`，`DataPlotter` 加同名参数；磅（字号、线宽、刻度宽）和英寸（figsize）由翻译函数按 dpi 换成后端单位，
+    不在后端里写死「× 100」。matplotlib 设成 `figure.dpi`（默认值本来就是 100，行为不变）。
+  - **翻译层**：能通用的换算都放进 `style.py`（「后端专注渲染」）：新增 `translate_points`、`translate_figsize`、`translate_legend`、`translate_tick_format`；
+    formatters.py 里重复的 Plotly 刻度格式翻译、matplotlib 后端 6.6b 写在内部的图例 / 刻度格式翻译都改用它们。
+  - **Plotly 的轴**：没有轴对象，`DrawnFigure.axes` 放 Plotly 配置里的轴名 `{'left': 'yaxis', 'right': 'yaxis2'}`（共用 'xaxis'），用 `fig.layout[轴名]` 读写。
+- 其余按建议：`PlotlyBackend(appearance, cmap).draw(spec, figsize, formatters, figure_formatter)`，与 matplotlib 后端逐段对应（翻译 / `_draw` / `_apply_layout` / neglog）；
+  模板由 `Appearance` 生成（像素）；预设的图例位置、刻度格式、轴着色照用，边距和可拖动不用（Plotly 自动给图外图例留边）；
+  双 Y 轴 `yaxis2=dict(overlaying='y', side='right')`、右线 `yaxis='y2'` 且不进图例；回调都收 `fig`；neglog → `tickprefix='-'`。
+- **行为变化（Plotly 一侧）**：字号 24 → 约 31 像素（22 磅 × 100/72）、图例 18 → 约 14；线宽 3 → 约 4.2 像素；多线图 1200×800 → 1000×800（figsize × dpi）；
+  多线图默认刻度两位小数（预设）——`scripts/piezo_interactive.py` 的对数 X 轴补了 `x_format='{x:.0e}'`。
+- 滑块：`DataPlotter.add_slider(mode, slider_formatter) -> go.Figure`，实现搬进 `PlotlyBackend.add_slider(fig, ...)`；
+  按「后端有没有这个能力」判断（matplotlib → `NotImplementedError`），只有一张图时可用（否则 `RuntimeError` 说明原因）。
+- 删除：`src/plotlib/interactive.py`、`plotlib.InteractivePlotter`（`__init__` 的按需导入）、`tests/test_interactive.py`（有效期望迁到 `test_plotly_backend.py`）、
+  6.8 那 10 条 xfail 测试（期望保留在 6.8 小节，6.8 按新入口重写）。计划函数开头加「数据集为空」的明确报错（原由 InteractivePlotter 自己检查）。
+- 测试：`test_backend_parity.py` 改为同一个 `DataPlotter` 换 `backend`，五种画法（含分离模式、xy、双 Y 轴）都对照；新增 `test_plotly_backend.py`（29 条）、翻译层 3 条、dpi 1 条。
+- 记到以后：`plot_common` 改名 / 拆分（用户待定）；formatter 工厂「目标轴」参数（右轴回调）；`combine_formatters` 两后端通用；
+  Plotly 的 `'x2'` 上轴（neglog 暂跳过）；参照脚本做「前端模板」。
+
+#### 6.7 之后：结构确认（2026-11-20，用户提出「趁热打铁把结构完全确认」）
+
+**盘点**：旧 `InteractivePlotter` 的功能全部有对应；matplotlib 行为不变；两个后端五种画法对照一致；覆盖率 97%（新模块只剩防御性报错分支）；
+脚本、README 无旧接口；`import plotlib` 不加载 Plotly / pyplot；`plotter.py` 无绘图库导入；两个后端前 7 个方法逐一对应。
+
+**确认的五件事（全按建议）：**
+1. `plot_common.py` 拆成 **`plot_spec.py`**（约定类型）+ **`plan.py`**（规则）：两个后端从它导入的全是约定类型，拆开后「后端只依赖约定、不依赖规则」体现在导入上。
+   测试 `test_plot_common.py` 改名 `test_plan_helpers.py`。
+2. **公开接口统一命名**（用户：上下文够就今天一起改）：构造参数 `input_dataset` → `dataset`、`plotdataRowNum_x/_y` → `channel_x/_y`、
+   `plot_lw` / `axis_lw` / `ticker_width` / `legend_fontsize` / `plot_style` → `line_width` / `axis_width` / `tick_width` / `legend_font_size` / `linestyle`；
+   方法 `plot_objects` / `group_plotter` / `subplotter_xy` / `subplotter_xyy` → **`plot_multiline` / `plot_groups` / `plot_xy` / `plot_dual_y`**；
+   `NegLogScale_*` → `neglog_*`；xy 图通道 `channel_x/_y`（默认用构造时的值）；双 Y 轴 `left=(X, Y)`、`right=(X, Y)`、`neglog_x2/_y2`、`plot_kinds`、
+   右轴回调 `right_axes_formatter` 等；`custom_formatter(ax1, ax2, fig)` → 四个方法都有的 **`figure_formatter(fig, axes)`**；删除常量 `dataRowNum_unit1~4`。
+   不留别名；脚本、测试、README 用迁移脚本替换（双 Y 轴单独处理），eis_nyquist 的 lambda 手工改写。
+3. `formatters.py` 不按后端拆（工厂用 `backend` 参数区分，是前端接口）；记下遗留：matplotlib axes formatter 写死刻度宽 3。
+4. 删除 `DataPlotter.data / sample_idx / column`（无人读取）。
+5. Plotly `_apply_neglog` 改名 `_apply_neglog_formatter`（与 matplotlib 对齐）；两个后端补「版式 / 画法写错报错」的测试。
+- 结果：428 passed；类型检查 0 错误；BACKEND_PLAN 第 2 节改为「当前架构（定稿）」与模块职责表。
+
+#### 6.8 Plotly 分离模式：按组翻页（原 6.4）
 
 **方向（6.3 时定）：** 分离模式 = 一张 Figure 按组翻页，**每一页就是计划里的一张 `FigureSpec`**：
-`plan_figures(..., merge_groups=False)` 给出几张图，就把它们的曲线依次画进同一个 Figure，滑块的每一档显示一页的 trace。
+`plan_multiline_figures(..., merge_groups=False)` 给出几张图，就把它们的曲线依次画进同一个 Figure，滑块的每一档显示一页的 trace。
 这样每一页和 matplotlib 那组的图完全一致（同一样品在 B 组那页用 B 组的样式和样品色），滑块也只读计划、不读 `Group`。
 原写法「曲线登记为样品号 → trace，分组名 → 样品号向 `self.groups.sample_ids` 要」作废：它让每个样品只有一条 trace，B 组那页会显示 A 组的样式，且后端又去读 `Group`。
 
-要做的事：
-- `plot_plotly_group` 加 `merge_groups` 参数（与 `group_plotter` 同名；默认值由用户定）。
-- 分离模式下同一样品会有多条 trace（每组一条），所以登记要带上页：`{FigureSpec.key: {样品号: trace}}`，正好是 6.5 建议的结果形状的 `artists` 部分。
-- 「按组翻页」的滑块与现有的「按 trace 逐条 / 累加」滑块的关系（新方法还是 `add_slider` 的新 mode）由用户定。
-- 对照测试：每一页的 trace 与 `DataPlotter.group_plotter(merge_groups=False)` 对应分组那张图的线一致（条数、顺序、标签、数据）。
+**已定（2026-11-19，全按建议）：** `merge_groups` 默认 False（与 `group_plotter` 一致）；刚画完只显示第一页；
+曲线滑块 `add_slider` 与分组滑块 `add_group_slider` 是两个方法（用户强调解耦），共用私有的「装滑块 → 判断标签放不放得下 → 默认外观 → formatter」；
+多页图上调用 `add_slider`、一页图上调用 `add_group_slider` → `RuntimeError` 并提示该用哪个；分组滑块当前值前缀 `'Group: '`。
+结果按页登记 `{FigureSpec.key: {样品号: trace}}`，即 6.5 统一形状里的 `artists`。
 
-#### 6.5 之后
+**测（6.7 后更新）：** 原先按 `InteractivePlotter` 写的 10 条 xfail 测试已随它删除，6.8 按新入口 `DataPlotter(backend='plotly')` 重写，期望不变：默认分离模式 4 条 trace、每页与 matplotlib 对应分组那张图一致、同一样品各页样式不同、
+分离模式按样品上色、初始只显示第一页、分组滑块的档位与可见性、两种方法用错报错。实现时按 6.7 的新入口改调用。
 
-- **Y-Y、双 Y 轴迁移。** 一次一个模式，计划里加「左轴 / 右轴」字段；每次迁移后旧测试保持通过。
-- **统一结果的形状。** `axesset` 现在四种形状（A.4 第 2 条），需要用户定一种。这会改动读取 `axesset` 的测试。
-  其中 `group_plotter` 的形状是 `{分组名或 'main': {'ax', 'fig', 'artists': {样品号: artist}}}`，`artists` 的键在步骤 2 已明确为样品号。
-  **建议方向（2026-11-19 讨论）：** 两个后端用同一个容器、同一种形状，键就是计划的 `FigureSpec.key`：`{key: {'fig', 'artists': {样品号: 曲线对象}}}`（matplotlib 多一个 `'ax'`），
-  计划和结果一一对应。Plotly 分离模式是「一张图按组翻页」（6.4），每个键的 `'fig'` 指向**同一个** Figure，`'artists'` 是那一页的 trace。
-  `InteractivePlotter.asset`（`add_slider`、HTML 导出在用）删掉还是留作快捷方式、容器是否从 `axesset` 改名（Plotly 没有 axes），到时由用户定。
-  6.3、6.4 期间 Plotly 照旧存 `asset` 和 `plot_artists`，不提前写 `axesset`。
-- **建 `backends/`、拆 `formatters.py`。** 前面都稳定后再搬文件。
-- **两个绘图器的参数对照（2026-11-19 讨论，6.3 期间记录）。** 原则：统一的是「画什么」（计划），不是参数签名。
-  `InteractivePlotter` 最终收敛为 `backends/plotly_backend.py`，没有公开入口，公开参数只在 DataPlotter 上定义一次
-  （`DataPlotter(dataset, groups, backend=...).group_plotter(...)` → `plan_figures` → `backend.draw(spec, 后端选项)`），
-  所以 6.3、6.4 不照 DataPlotter 给 `InteractivePlotter` 补签名，合并入口时按下表逐项处理：
+#### 6.4 ~ 6.8 期间的记录
 
-  | DataPlotter 参数 | 属于哪层 | Plotly 现状（6.3 时） | 处理 |
-  | --- | --- | --- | --- |
-  | X/Y 通道、`plotrange`、`groups` | 计划 | 构造器已有 | 已统一（都交给 `plan_figures`） |
-  | `merge_groups` | 计划 | 无 | 计划已支持；Plotly 分离模式 = 按组翻页（6.4） |
-  | `NegLogScale_x/y` | 计划（取绝对值）+ 后端（刻度标签加负号） | 无 | 数据部分传参数就有；Plotly 的负号刻度要自己写 |
-  | `plot_kind` | 后端绘制 | `_plot_data_plotly` 已支持，入口未开放 | 名字和取值相同，各自实现 |
-  | `figsize`、`rc_params` | 后端外观 | 模板里的 `width/height`、字体 | 含义相同、写法不同，合并入口时定 |
-  | `axes/lines/legend_formatter` | 后端原生回调 | 只有 `figure_formatter` | 不统一参数（一个收 `ax`，一个收 `Figure`）；统一的是工厂 `make_*_formatter(backend=...)` |
+**参数对照（6.3 时讨论；决定 2、3 已定处理方式）：**
 
-- **颜色赋值统一为「先定最终颜色，再一次赋值」（2026-11-19，用户决定）。** 现在两个后端都是「画时写色带色，分组写了颜色再覆盖」（6.2 沿用旧 `group_plotter`，6.3 照着对齐）。
-  用户的写法习惯是「选颜色再赋值」，6.5 两个后端一起改成：先确定这条线的最终颜色（分组写了就用它，否则色带位置换算），画线时一次传入，画完不再覆盖颜色。
-  如果那时计划已经给出最终颜色来源（例如 `CurveSpec` 带上分组写的颜色），后端只剩「取色 → 赋值」。
-  执行者曾建议保留「先画再覆盖」（优先级写在代码顺序里；颜色对所有 `plot_kind` 生效而样式只对折线生效，两件事分开），改时注意别让颜色跟着 `plot_kind == 'line'` 的条件走。
-  同时删除两个绘图器上已无人读取的 `color_positions` 属性（颜色由计划给出）。
-- **Plotly 的 `plot_kind`。** `_draw_figure` 已接收 `plot_kind`，但两个入口只画折线；柱状图、散点图随参数对照表一起开放。
+| DataPlotter 参数 | 属于哪层 | Plotly 现状（6.3 时） | 处理 |
+| --- | --- | --- | --- |
+| X/Y 通道、`plotrange`、`groups` | 计划 | 构造器已有 | 已统一（都交给 `plan_multiline_figures`） |
+| `merge_groups` | 计划 | 用户已加（未提交） | 6.7 随入口统一；Plotly 分离模式 = 按组翻页（6.8） |
+| `NegLogScale_x/y` | 计划（取绝对值）+ 后端（刻度补负号） | 无 | 6.4 进计划；Plotly 的负号刻度 6.7 定 |
+| `plot_kind` | 计划（`CurveSpec.kind`）+ 后端绘制 | `_plot_data_plotly` 已支持，入口未开放 | 6.4 进计划，6.7 开放 |
+| `figsize`、字号、线宽等 | 外观，公共参数 | 模板里写死 | 决定 2：各后端翻译 |
+| `axes/lines/legend_formatter` | 后端原生回调 | 只有 `figure_formatter` | 决定 3：三个统一名字，各后端用原生对象调用 |
 
-**方向（记录，不在本步骤做）：作用在计划上的样式调整。** 有了计划，就可以在「画之前」按标准写法改某条曲线的 `style`，两个后端都生效；
+**方向（记录，不在本轮做）：作用在计划上的样式调整。** 有了计划，就可以在「画之前」按标准写法改某条曲线的 `style`，两个后端都生效；
 现在的 `lines_formatter` 是后端原生回调，只对一个后端有效。以后的 `group_style_applyer`、组内精调、「计算结果各用各的样式」（4.5 取消时的需求）都可以做成这种形式。
+「在某一页里再按曲线滑动」（两个滑块）也留到以后。
 
 验收见 `BACKEND_PLAN.md` 第 3、4 步：旧的 matplotlib 测试行为不变；同一份计划交给两个后端，曲线数量、数据、标签、顺序一致。
 
@@ -837,7 +1029,7 @@ CurveSpec(sample_idx, x, y, label, color_position, group_name,
 | 4.4 结果带分组名           | 完成   | 2026-11-18 | 不传 `naming` 时结果名为「组名_函数名」；「组间计算」改名为「分组计算」（见执行记录）。基线 355 |
 | 4.5 结果配新 Group         | 取消   | 2026-11-18 | 计算结果很少再分组；需要时手动套 `Group`（见 4.5）。步骤 4 已验收 |
 | 5 交互图接上 Group、共用取数 | 完成   | 2026-11-18 | 路线调整：原步骤 5 的分组绘图移到 6.3。5.1、5.2 全按建议；`_ensure_ready` 删除不搬（见 5.2 执行记录）。基线 364 |
-| 6 绘图计划（从分组模式开始） | 进行中 |          | 6.1（`2d87f86`）、6.2（`d6f7af6`）、6.3（`b0d65dd`）已提交；之后绘图测试按层整理（用户提出，B.0 改为「测试跟着需求走」）；6.4 测试已写，下一步实现。6.1 完成：重复样品保持先到先得、归属单独一步；拆成三个内部函数（用户提出）。6.2 完成：合并模式柱状图改为组首色（选 A）；新增 `figsize`；删除 `plot_artists`。6.3 完成：Plotly 按计划画，新增 `plot_plotly_group`（合并模式）、`_LINE_WIDTH`；删除 `_get_color`；6.4 改为按 `FigureSpec` 翻页；6.5 颜色统一为一次赋值（用户决定）。基线 385 |
+| 6 绘图计划与后端 | 进行中 |          | 6.1（`2d87f86`）、6.2（`d6f7af6`）、6.3（`b0d65dd`）已提交；之后绘图测试按层整理（用户提出，B.0 改为「测试跟着需求走」）；路线调整：先建后端（6.4 计划补全 → 6.5 统一结果 → 6.6 matplotlib 后端 → 6.7 Plotly 后端，删除 `InteractivePlotter`），原 6.4 按组翻页挪到 6.8（测试已写，标 xfail）。6.4 完成：计划补全（图层面单位 / neglog / 版式，xy 与双 Y 轴计划），`subplotter_yy` 改名 `subplotter_xy`，xy 颜色不变（色带位置可为 None），`figsize` 对所有方法生效。6.5 完成：结果统一为 `figures = {key: DrawnFigure}`（替换 `axesset`），颜色一次赋值（分组颜色对散点 / 柱也生效），删 `color_positions` 属性。6.6a 完成：建 `backends/`，`MatplotlibBackend.draw` 只读计划，`DataPlotter` 只剩「计划 → `_render` → 存结果」，`Appearance` / `AxesFormatter`，整图回调统一 `(fig, axes)`。6.6b 完成：`layouts.py` 排版预设，后端三种版式合成一段 `_draw`，双 Y 轴红蓝只由预设定。6.7 完成：`PlotlyBackend`、翻译层（`style.py`）、显式 dpi、`DataPlotter.add_slider`，删除 `InteractivePlotter`。之后结构确认：拆出 `plot_spec.py` / `plan.py`，公开接口统一命名。下一步 6.8。6.1 完成：重复样品保持先到先得、归属单独一步；拆成三个内部函数（用户提出）。6.2 完成：合并模式柱状图改为组首色（选 A）；新增 `figsize`；删除 `plot_artists`。6.3 完成：Plotly 按计划画，新增 `plot_plotly_group`（合并模式）、`_LINE_WIDTH`；删除 `_get_color`；按组翻页改为按 `FigureSpec` 分页（现 6.8）；颜色统一为一次赋值（用户决定，现 6.5）。基线 385 |
 | 7.1 `Dataloader` 接口    | 未开始 |          |                                |
 | 7.2 逐样品变换             | 未开始 |          |                                |
 | 7.3 公开的列排序           | 未开始 |          |                                |

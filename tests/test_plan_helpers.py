@@ -1,5 +1,5 @@
 """
-测试对象：src/plotlib/plot_common.py —— 两个绘图器共用的函数
+测试对象：src/plotlib/plan.py 里生成计划用的公共函数（2026-11-20 前在 plot_common.py）
 
 color_positions(sample_ids)：样品号 → 色带位置（0 ~ 1 之间）。
 规则：去重、排序后，位置 = 排名 ÷ 样品数。
@@ -9,7 +9,7 @@ color_positions(sample_ids)：样品号 → 色带位置（0 ~ 1 之间）。
 """
 import pytest
 
-from plotlib.plot_common import color_positions
+from plotlib.plan import color_positions
 
 
 @pytest.mark.parametrize("sample_ids, expected", [
@@ -30,7 +30,7 @@ def test_color_positions(sample_ids, expected):
 def test_resolve_groups_returns_same_object(eis_dataset):
     """合法的 Group 原样返回，不复制：绘图器和调用方看到的是同一个 Group。"""
     from plotlib.group import Group
-    from plotlib.plot_common import resolve_groups
+    from plotlib.plan import resolve_groups
 
     groups = Group(eis_dataset, {'A': {'num': [0, 1]}})
     assert resolve_groups(groups, eis_dataset) is groups
@@ -42,7 +42,7 @@ def test_resolve_groups_returns_same_object(eis_dataset):
 # ──────────────────────────────────────────────
 def test_get_column_data(eis_dataset):
     """按样品号 + 通道号取一列，返回 (数据, 列名, 单位)；列名是样品名。"""
-    from plotlib.plot_common import get_column_data
+    from plotlib.plan import get_column_data
 
     data, name, unit = get_column_data(eis_dataset, 1, 1)
     assert data.tolist() == [20, 40, 60]
@@ -51,14 +51,14 @@ def test_get_column_data(eis_dataset):
 
 def test_get_column_data_plotrange(eis_dataset):
     """plotrange 只取前几行；不传（None）取全部行。"""
-    from plotlib.plot_common import get_column_data
+    from plotlib.plan import get_column_data
 
     assert get_column_data(eis_dataset, 1, 1, plotrange=2)[0].tolist() == [20, 40]
 
 
 @pytest.mark.parametrize("sample_idx, channel_idx", [(1, 5), (7, 0)], ids=['no_channel', 'no_sample'])
 def test_get_column_data_missing_raises(eis_dataset, sample_idx, channel_idx):
-    from plotlib.plot_common import get_column_data
+    from plotlib.plan import get_column_data
 
     with pytest.raises(RuntimeError, match="未找到对应的列数据"):
         get_column_data(eis_dataset, sample_idx, channel_idx)
@@ -66,7 +66,7 @@ def test_get_column_data_missing_raises(eis_dataset, sample_idx, channel_idx):
 
 def test_get_xy_data_neglog(eis_dataset):
     """neglog_y 只对 Y 取绝对值，X 不变；返回 (x, y, x_label, y_label, x_unit, y_unit)。"""
-    from plotlib.plot_common import get_xy_data
+    from plotlib.plan import get_xy_data
 
     x, y, x_label, y_label, x_unit, y_unit = get_xy_data(eis_dataset, 1, 0, 2, neglog_y=True)
     assert x.tolist() == [1, 10, 100]

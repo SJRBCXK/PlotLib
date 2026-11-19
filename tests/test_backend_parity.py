@@ -1,10 +1,10 @@
 """
-两个绘图器的对照：DataPlotter（matplotlib）与 InteractivePlotter（Plotly）
+两个后端的对照：DataPlotter(backend='matplotlib') 与 DataPlotter(backend='plotly')
 
-两个绘图器读同一份绘图计划（plot_common.plan_figures），所以：
-  - 构造时对分组参数的约定相同（plot_common.resolve_groups 共用）；
-  - 同一个 Group 交给两个后端，画出的曲线条数、顺序、标签、数据一致（BACKEND_PLAN 第 3 步的验收）。
-颜色不在这里比：两个库的色带实现不同，各自「位置 → 颜色」在 test_plotter.py / test_interactive.py 里测。
+同一个入口、同一份绘图计划（plan.plan_*），换后端只换「怎么画」，所以：
+  - 构造时对分组参数的约定相同（plan.resolve_groups，与后端无关）；
+  - 同一个 Group 交给两个后端，四种绘图方法画出的图数、曲线条数、顺序、标签、数据一致（BACKEND_PLAN 第 3、4 步的验收）。
+颜色不在这里比：两个库的色带实现不同，各自「位置 → 颜色」在 test_plotter.py / test_plotly_backend.py 里测。
 
 数据来自 conftest.py 的 eis_dataset：3 个样品；配置里样品 1 同时属于 A、B 两组。
 """
@@ -14,10 +14,10 @@ import pytest
 pytest.importorskip("plotly")
 
 from plotlib.group import Group
-from plotlib.interactive import InteractivePlotter
 from plotlib.plotter import DataPlotter
 
-PLOTTERS = pytest.mark.parametrize("Plotter", [DataPlotter, InteractivePlotter], ids=['matplotlib', 'plotly'])
+BACKENDS = pytest.mark.parametrize("backend", ['matplotlib', 'plotly'])
+FREQ, ZS_RE, ZS_IM = 0, 1, 2
 
 
 def overlap_config():
@@ -38,56 +38,72 @@ def assert_same_curves(traces, lines):
 
 
 # ══════════════════════════════════════════════
-# 构造：分组参数只接受建在同一数据集上的 Group
+# 构造：分组参数只接受建在同一数据集上的 Group（两个后端一样）
 # （分组配置本身的校验在 test_group.py）
 # ══════════════════════════════════════════════
-@PLOTTERS
-def test_groups_must_be_group_object(eis_dataset, Plotter):
+@BACKENDS
+def test_groups_must_be_group_object(eis_dataset, backend):
     """传字典 → TypeError，提示先用 Group 包装（类型标注只在编辑器里提醒，运行时要自己检查）。"""
     with pytest.raises(TypeError, match="Group"):
-        Plotter(eis_dataset, groups={'A': {'num': [0, 1]}})
+        DataPlotter(eis_dataset, groups={'A': {'num': [0, 1]}}, backend=backend)  # pyright: ignore[reportArgumentType]
 
 
-@PLOTTERS
-def test_groups_from_other_dataset_raises(eis_dataset, sparse_dataset, Plotter):
+@BACKENDS
+def test_groups_from_other_dataset_raises(eis_dataset, sparse_dataset, backend):
     """一个绘图器只对应一个数据集：Group 必须建在绘图器的数据集上。"""
     with pytest.raises(ValueError):
-        Plotter(eis_dataset, groups=Group(sparse_dataset, {'A': {'num': [0, 5]}}))
+        DataPlotter(eis_dataset, groups=Group(sparse_dataset, {'A': {'num': [0, 5]}}), backend=backend)
 
 
-@PLOTTERS
-def test_default_groups_is_empty_group(eis_dataset, Plotter):
+@BACKENDS
+def test_default_groups_is_empty_group(eis_dataset, backend):
     """不传分组时是建在本数据集上的空 Group：后续代码总是面对一个 Group，不用判断 None。"""
-    plotter = Plotter(eis_dataset)
+    plotter = DataPlotter(eis_dataset, backend=backend)
     assert isinstance(plotter.groups, Group)
     assert plotter.groups.names == []
     assert plotter.groups.dataset is eis_dataset
 
 
 # ══════════════════════════════════════════════
-# 同一个 Group 交给两个后端
+# 同一个 Group、同一个入口，换后端：画出的东西一致
 # ══════════════════════════════════════════════
-def test_merge_mode_same_curves(eis_dataset):
-    """合并模式：一张图，重叠的样品 1 只画一次，所以两边都是 3 条，且顺序、标签、数据一致。"""
+@pytest.mark.parametrize("draw", [
+    lambda p: p.plot_multiline(),
+    lambda p: p.plot_groups(merge_groups=True),
+    lambda p: p.plot_groups(merge_groups=False),
+    lambda p: p.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM),
+    lambda p: p.plot_dual_y(right=(FREQ, ZS_IM)),
+], ids=['objects', 'merge', 'separate', 'xy', 'dual_y'])
+def test_same_figures_and_curves(eis_dataset, draw):
+    """
+    图的 key 相同，每张图的曲线条数、顺序、标签、数据相同（去重、先到先得等规则本身在 test_plot_plan.py）。
+    分离模式每组一张图：Plotly 在 6.8 前也是每组一个 Figure。
+    """
     groups = Group(eis_dataset, overlap_config())
-    mpl = DataPlotter(eis_dataset, groups=groups).group_plotter(merge_groups=True)
-    plot = InteractivePlotter(eis_dataset, groups=groups)
-    plot.plot_plotly_group(merge_groups=True)
+    mpl = draw(DataPlotter(eis_dataset, groups=groups, channel_x=FREQ, channel_y=ZS_RE))
+    ply = draw(DataPlotter(eis_dataset, groups=groups, channel_x=FREQ, channel_y=ZS_RE,
+                           backend='plotly'))
 
-    lines = list(mpl.axesset['main']['artists'].values())
-    assert len(lines) == 3
-    assert_same_curves(plot.plot_artists, lines)
+    assert list(ply.figures) == list(mpl.figures)
+    for key, drawn in mpl.figures.items():
+        assert_same_curves(ply.figures[key].artists, drawn.artists)
 
 
-def test_separate_mode_same_pages(eis_dataset):
-    """分离模式：Plotly 的每一页与 matplotlib 对应分组那张图一致（步骤 6.4）。"""
-    groups = Group(eis_dataset, overlap_config())
-    mpl = DataPlotter(eis_dataset, groups=groups).group_plotter(merge_groups=False)
-    plot = InteractivePlotter(eis_dataset, groups=groups)
-    plot.plot_plotly_group(merge_groups=False)
+@BACKENDS
+def test_backend_rejects_unknown_layout_and_kind(backend):
+    """计划里的版式、画法写错时，两个后端都明确报错，不悄悄画成别的（BACKEND_PLAN 原则 5）。"""
+    from plotlib.backends import get_backend
+    from plotlib.plot_spec import Appearance, CurveSpec, FigureSpec
 
-    assert list(plot.pages) == list(mpl.axesset) == ['A', 'B']
-    for key, page in plot.pages.items():
-        lines = mpl.axesset[key]['artists']
-        assert list(page) == list(lines)                  # 同样的样品号、同样的顺序
-        assert_same_curves(list(page.values()), list(lines.values()))
+    drawer = get_backend(backend, Appearance(), None)
+
+    def one_curve(kind='line') -> CurveSpec:
+        return CurveSpec(sample_idx=0, x=np.array([0, 1]), y=np.array([0, 1]), label='S0',
+                         group_name=None, color_position=None, style={}, kind=kind)  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(ValueError, match='版式'):
+        drawer.draw(FigureSpec(key='k', x_unit='', y_unit='', curves=[one_curve()],
+                               layout='pie'), figsize=(4, 3))  # pyright: ignore[reportArgumentType]  故意写错
+    with pytest.raises(ValueError, match='plot_kind'):
+        drawer.draw(FigureSpec(key='k', x_unit='', y_unit='', curves=[one_curve('pie')]),  # pyright: ignore[reportArgumentType]
+                    figsize=(4, 3))

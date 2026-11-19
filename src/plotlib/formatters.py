@@ -11,7 +11,7 @@
     lines_fmt = make_lines_formatter(linewidth=2, linestyle='dash')
     legend_fmt = make_legend_formatter(legend_fontsize=12)
 
-    plotter.plot_objects(
+    plotter.plot_multiline(
         axes_formatter=axes_fmt,
         lines_formatter=lines_fmt,
         legend_formatter=legend_fmt,
@@ -22,9 +22,12 @@
     lines_fmt = make_lines_formatter(backend="plotly", linestyle="dash")
     legend_fmt = make_legend_formatter(backend="plotly", legend_fontsize=18)
 
-    interactive_plot.plot_plotly_object(
-        figure_formatter=combine_formatters(axes_fmt, lines_fmt, legend_fmt),
+    DataPlotter(data, backend="plotly").plot_multiline(
+        axes_formatter=axes_fmt,
+        lines_formatter=lines_fmt,
+        legend_formatter=legend_fmt,
     )
+    # Plotly 的三种回调都收 fig；也可以用 combine_formatters 合成一个，交给任意一个参数
 
 注意事项:
     - 刻度格式、线条与图例参数默认为 None，表示保持原样；只修改明确传入的设置，
@@ -42,7 +45,6 @@
       fig.show(config={"edits": {"legendPosition": True}})。
 """
 import math
-import re
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Literal, cast, overload
 
@@ -56,7 +58,8 @@ if TYPE_CHECKING:
     from matplotlib.legend import Legend
     from matplotlib.lines import Line2D
 
-from .style import Backend, check_backend, translate_color, translate_linestyle, translate_marker
+from .style import (Backend, check_backend, translate_color, translate_linestyle, translate_marker,
+                    translate_tick_format)
 
 # 各 backend 返回的回调类型；入口函数用 overload 按 backend 选择其一。
 type MplAxesFormatter = Callable[[Axes, Figure], None]
@@ -158,15 +161,10 @@ class AxesFormatterFactory:
         # ── Plotly：创建回调前先校验，转换不了的设置立即报错 ──
         # Plotly 没有 Python FuncFormatter，只翻译可直接对应的数字格式。
         # None 表示不设置 tickformat，保留 Plotly 自动格式。
-        tick_formats: list[str | None] = []
-        for fmt in (x_format, y_format):
-            if fmt is None:
-                tick_formats.append(None)
-                continue
-            match = re.fullmatch(r"\{[xy]:(\.\d+[feg%])\}", fmt)
-            if match is None:
-                raise ValueError(f"Plotly 暂不支持此刻度格式: {fmt!r}")
-            tick_formats.append(match.group(1))
+        # 刻度格式的翻译在翻译层（style.translate_tick_format），与 Plotly 后端的排版预设共用
+        tick_formats: list[str | None] = [
+            None if fmt is None else translate_tick_format(fmt, 'plotly') for fmt in (x_format, y_format)
+        ]
         if xscaler != 1 or yscaler != 1:
             raise ValueError("Plotly 暂不支持显示值缩放 xscaler/yscaler；不会修改原始数据替代")
         if xscale_type not in ("linear", "log") or yscale_type not in ("linear", "log"):
@@ -456,11 +454,11 @@ def combine_formatters(*formatters: PlotlyFormatter | None) -> PlotlyFormatter:
         formatters: make_xxx_formatter(backend="plotly") 返回的回调，或任意 fn(fig)。
 
     Returns:
-        formatter(fig)，可直接交给 plot_plotly_object(figure_formatter=...)。
+        formatter(fig)，可直接交给 DataPlotter(backend='plotly') 绘图方法的 axes_formatter 等参数。
 
     Example:
         fmt = combine_formatters(axes_fmt, lines_fmt, legend_fmt)
-        plot.plot_plotly_object(figure_formatter=fmt)
+        DataPlotter(data, backend='plotly').plot_multiline(axes_formatter=fmt)
     """
     active = [f for f in formatters if f is not None]
 

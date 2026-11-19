@@ -1,7 +1,7 @@
 """
 公共样式词汇与后端翻译（STRUCTURE_REVIEW 步骤 4.3）。
 
-约定：程序入口（分组配置、formatter 工厂、DataPlotter 的 plot_style）只接受一套标准写法，
+约定：程序入口（分组配置、formatter 工厂、DataPlotter 的 linestyle）只接受一套标准写法，
 不认识就报错，也不替用户改写；翻译只在后端发生：translate_* 把标准写法换成各后端的原生值。
 
 标准写法：
@@ -12,10 +12,14 @@
 
 check_*      只校验：合法时返回 None；类型错报 TypeError，值错报 ValueError，信息里带写错的值。
 translate_*  先校验，再翻译成指定后端的原生值。
+
+这一层就是「翻译层」（6.7 起）：除了线型 / 标记 / 颜色，排版预设的图例位置、刻度格式，
+以及按显式 dpi 的单位换算（磅 → 像素、英寸 → 像素）也在这里；两个后端只调用 translate_* 再应用结果。
 """
 import re
+from collections.abc import Callable
 from numbers import Integral, Real
-from typing import Literal
+from typing import Any, Literal, overload
 
 # matplotlib 的 CSS4_COLORS 与 Plotly 内置颜色名是同一套 148 个 CSS 标准名，
 # 所以颜色名不用翻译，这里只借它的名字表做校验。
@@ -144,3 +148,61 @@ def translate_color(value, backend: Backend):
     if backend == 'matplotlib':
         return tuple(x / 255 for x in value)
     return f"rgb({value[0]},{value[1]},{value[2]})"
+
+
+# ══════════════════════════════════════════════
+# 排版与尺寸的翻译（STRUCTURE_REVIEW 6.7）：通用的换算都放在这一层，两个后端只管应用结果
+# ══════════════════════════════════════════════
+
+# 图例位置（排版预设 layouts.LayoutPreset.legend 的写法）→ 各后端参数
+LEGEND_POSITIONS: dict[str, dict[str, dict]] = {
+    'outside right': {'matplotlib': {'loc': 'center left', 'bbox_to_anchor': (1, 0.5)},       # 图外右侧，竖直居中
+                      'plotly':     {'x': 1.02, 'y': 0.5, 'xanchor': 'left', 'yanchor': 'middle'}},
+    'lower right':   {'matplotlib': {'loc': 'lower right'},                                    # 图内右下角
+                      'plotly':     {'x': 0.98, 'y': 0.02, 'xanchor': 'right', 'yanchor': 'bottom'}},
+}
+
+# 刻度格式的写法与 make_axes_formatter 的 x_format / y_format 相同：'{x:.2f}'、'{y:.1e}'
+_TICK_FORMAT = re.compile(r"\{([xy]):([^}]*)\}")
+_PLOTLY_TICK_FORMAT = re.compile(r"\{[xy]:(\.\d+[feg%])\}")    # Plotly（d3）能直接对应的只有这几种
+
+
+def translate_legend(position: str, backend: Backend) -> dict:
+    """图例位置 → matplotlib 的 ax.legend(**参数) / Plotly 的 layout.legend。"""
+    check_backend(backend)
+    if position not in LEGEND_POSITIONS:
+        raise ValueError(f"不支持的图例位置 {position!r}，可用 {_words(LEGEND_POSITIONS)}")
+    return dict(LEGEND_POSITIONS[position][backend])
+
+
+@overload
+def translate_tick_format(fmt: str, backend: Literal['matplotlib']) -> Callable[[Any, Any], str]: ...
+@overload
+def translate_tick_format(fmt: str, backend: Literal['plotly']) -> str: ...
+def translate_tick_format(fmt: str, backend: Backend) -> Callable[[Any, Any], str] | str:
+    """
+    刻度格式 '{x:.2f}' → matplotlib：格式函数 f(值, 位置) -> 文字（交给 set_major_formatter）；
+                      → Plotly：d3 格式 '.2f'（交给 tickformat）。Plotly 对应不了的格式报错，不悄悄忽略。
+    """
+    check_backend(backend)
+    if (match := _TICK_FORMAT.search(fmt)) is None:
+        raise ValueError(f"刻度格式 {fmt!r} 里要有 {{x:...}} 或 {{y:...}}，如 '{{x:.2f}}'")
+    if backend == 'matplotlib':
+        key = match.group(1)
+        return lambda value, _pos: fmt.format(**{key: value})
+    if (plotly_match := _PLOTLY_TICK_FORMAT.fullmatch(fmt)) is None:
+        raise ValueError(f"Plotly 暂不支持此刻度格式: {fmt!r}")
+    return plotly_match.group(1)
+
+
+def translate_points(value: float, dpi: float, backend: Backend) -> float:
+    """以磅（1/72 英寸）为单位的量（字号、线宽）→ 后端单位：matplotlib 本来就用磅；Plotly 用像素 = 磅 × dpi / 72。"""
+    check_backend(backend)
+    return value if backend == 'matplotlib' else value * dpi / 72
+
+
+def translate_figsize(size: tuple[float, float], dpi: float, backend: Backend) -> tuple:
+    """以英寸为单位的图尺寸 → 后端单位：matplotlib 本来就用英寸；Plotly 用像素 = 英寸 × dpi。"""
+    check_backend(backend)
+    width, height = size
+    return (width, height) if backend == 'matplotlib' else (round(width * dpi), round(height * dpi))

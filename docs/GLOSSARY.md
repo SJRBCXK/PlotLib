@@ -7,8 +7,8 @@
 | 词 | 含义 | 代码名字（括号内为步骤 2 之前的旧名） |
 |---|---|---|
 | **样品**（sample） | 一个来源的一次测量，对应 DataSet 里连续的若干列 | `sample_idx`（`groups_idx`、`Column.group_idx`）；`num_samples`（`num_datagroups`）；`select('samples', […])`（`select('group', …)`，现在只认这一个写法）；`iter('samples')`（`iter('groups')`）；`DataTransformer` 的 `new_sample`（`New_group`） |
-| **通道**（channel） | 样品里的第几列，如 Freq、Zs'、Voltage | `channel_idx`（`group_local_idx`）；`iter('channels')`；取数函数 `plot_common.get_xy_data(dataset, sample_idx, channel_x, channel_y)`；绘图参数 `plotdataRowNum_x` / `_y` 实际也是通道号（暂不改名） |
-| **分组**（group） | 按分析需要挑出若干样品、起一个名字组成的集合 | 不变：`data_groups` 字典、`Group` 类、`group_plotter`、`merge_groups` |
+| **通道**（channel） | 样品里的第几列，如 Freq、Zs'、Voltage | `channel_idx`（`group_local_idx`）；`iter('channels')`；取数函数 `plan.get_xy_data(dataset, sample_idx, channel_x, channel_y)`；绘图参数 `channel_x` / `channel_y`（2026-11-20 由 `plotdataRowNum_x` / `_y` 改名） |
+| **分组**（group） | 按分析需要挑出若干样品、起一个名字组成的集合 | 不变：`data_groups` 字典、`Group` 类、`DataPlotter.plot_groups`（原 `group_plotter`）、`merge_groups` |
 
 DataSet 可以看成一张「样品 × 通道」的表，行是样品，列是通道：
 

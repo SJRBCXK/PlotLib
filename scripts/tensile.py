@@ -66,10 +66,10 @@ print(EB_data.names)
 
 
 Tensile = DataPlotter(
-    input_dataset=data,
-).subplotter_yy(
-    plotdataRowNum_Y1=2,
-    plotdataRowNum_Y2=1,
+    dataset=data,
+).plot_xy(
+    channel_x=2,
+    channel_y=1,
     axes_formatter=Tensile_formatter
 )
 

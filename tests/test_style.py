@@ -182,3 +182,49 @@ def test_translate_rejects_non_standard(translate, value):
 def test_translate_unknown_backend_raises(translate, value):
     with pytest.raises(ValueError, match="backend"):
         translate(value, 'svg')
+
+
+# ──────────────────────────────────────────────
+# 排版与尺寸的翻译（STRUCTURE_REVIEW 6.7）：通用的翻译放在这一层，后端只管应用
+# ──────────────────────────────────────────────
+def test_translate_tick_format():
+    """刻度格式（与 make_axes_formatter 同一写法）：matplotlib 得到格式函数，Plotly 得到 d3 格式。"""
+    from plotlib.style import translate_tick_format
+
+    assert translate_tick_format('{x:.2f}', 'matplotlib')(1.234, 0) == '1.23'
+    assert translate_tick_format('{y:.4f}', 'matplotlib')(1.234, 0) == '1.2340'
+    assert translate_tick_format('{y:.4f}', 'plotly') == '.4f'
+    assert translate_tick_format('{x:.1e}', 'plotly') == '.1e'
+    with pytest.raises(ValueError, match='Plotly 暂不支持此刻度格式'):
+        translate_tick_format('{x:,.2f}', 'plotly')
+
+
+@pytest.mark.parametrize("position, matplotlib, plotly", [
+    ('outside right', {'loc': 'center left', 'bbox_to_anchor': (1, 0.5)},
+                      {'x': 1.02, 'y': 0.5, 'xanchor': 'left', 'yanchor': 'middle'}),
+    ('lower right',   {'loc': 'lower right'},
+                      {'x': 0.98, 'y': 0.02, 'xanchor': 'right', 'yanchor': 'bottom'}),
+])
+def test_translate_legend(position, matplotlib, plotly):
+    """图例位置（排版预设的写法）→ matplotlib 的 legend 参数 / Plotly 的 layout.legend。"""
+    from plotlib.style import translate_legend
+
+    assert translate_legend(position, 'matplotlib') == matplotlib
+    assert translate_legend(position, 'plotly') == plotly
+    with pytest.raises(ValueError):
+        translate_legend('upper middle', 'plotly')
+
+
+def test_translate_points_and_figsize():
+    """
+    以磅为单位的量（字号、线宽）、以英寸为单位的 figsize 按显式的 dpi 换成后端单位：
+    matplotlib 本来就用磅和英寸，原样返回；Plotly 用像素：磅 × dpi / 72、英寸 × dpi。
+    """
+    from plotlib.style import translate_figsize, translate_points
+
+    assert translate_points(22, 100, 'matplotlib') == 22
+    assert translate_points(72, 100, 'plotly') == pytest.approx(100)
+    assert translate_points(22, 200, 'plotly') == pytest.approx(22 * 200 / 72)
+    assert translate_figsize((10, 8), 100, 'matplotlib') == (10, 8)
+    assert translate_figsize((10, 8), 100, 'plotly') == (1000, 800)
+    assert translate_figsize((6, 4), 150, 'plotly') == (900, 600)

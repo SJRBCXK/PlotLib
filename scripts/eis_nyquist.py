@@ -32,7 +32,7 @@ dataRowNum_unit5 = 4  # Phase angle (相角)
 dataRowNum_unit6 = 5  # Real Z' (for Nyquist)
 dataRowNum_unit7 = 6  # Imaginary Z'' (for Nyquist)
 
-# 数据分组配置（用于 group_plotter）
+# 数据分组配置（用于 plot_groups）
 # 样式用标准写法（style.py）：线型 'solid' / 'dash' / 'dot' / 'dashdot'，或自定义虚线 (实线长, 空白长)
 data_groups = {
     '1st': {'num': [0, 1], 'linestyle': 'solid'},
@@ -120,23 +120,23 @@ groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下
 # ============================================================
 # --- Nyquist 图（标准线图）---
 Test_pltliner1 = DataPlotter(
-    input_dataset=data,
-    plotdataRowNum_x = dataRowNum_unit6,
-    plotdataRowNum_y = dataRowNum_unit7
-).plot_objects(
+    dataset=data,
+    channel_x = dataRowNum_unit6,
+    channel_y = dataRowNum_unit7
+).plot_multiline(
     axes_formatter=Nyquist_formatter,
-    NegLogScale_y=True
+    neglog_y=True
 )
 
 # --- Nyquist 图（分组绘制）---
 Test_pltGliner2 = DataPlotter(
-    input_dataset=data,
+    dataset=data,
     groups=groups,
-    plotdataRowNum_x = dataRowNum_unit6,
-    plotdataRowNum_y = dataRowNum_unit7
-).group_plotter(
+    channel_x = dataRowNum_unit6,
+    channel_y = dataRowNum_unit7
+).plot_groups(
     axes_formatter=Nyquist_formatter,
-    NegLogScale_y=True,
+    neglog_y=True,
     merge_groups=False,
     lines_formatter=Group_lines_formatter
 )
@@ -144,45 +144,42 @@ Test_pltGliner2 = DataPlotter(
 
 # --- Y-Y 子图（Real Z vs -Imaginary Z）---
 Test_pltsubsyy = DataPlotter(
-    input_dataset=data,
-).subplotter_yy(
-    plotdataRowNum_Y1=dataRowNum_unit6,
-    plotdataRowNum_Y2=dataRowNum_unit7,
-    NegLogScale_Y2=True,
+    dataset=data,
+).plot_xy(
+    channel_x=dataRowNum_unit6,
+    channel_y=dataRowNum_unit7,
+    neglog_y=True,
     axes_formatter=NegLog_formatter
 )
 # 备用方案：使用自定义 eis_log_formatter
-# ).subplotter_yy(
-#     plotdataRowNum_Y1=dataRowNum_unit6,
-#     plotdataRowNum_Y2=dataRowNum_unit7,
+# ).plot_xy(
+#     channel_x=dataRowNum_unit6,
+#     channel_y=dataRowNum_unit7,
 #     axes_formatter=eis_log_formatter
 # )
 
 # --- X-YY 双轴子图（Frequency vs Z components）---
 Test_pltsubsxyy = DataPlotter(
-    input_dataset=data,
-).subplotter_xyy(
-    plotdataRowNum_X1=dataRowNum_unit1,
-    plotdataRowNum_Y1=dataRowNum_unit6,
-    plotdataRowNum_X2=dataRowNum_unit1,
-    plotdataRowNum_Y2=dataRowNum_unit7,
-    NegLogScale_Y2=True,
-    axes_formatter_ax1=NegLog_formatter,
-    axes_formatter_ax2=NegLog_formatter,
-    custom_formatter=lambda _ax1, ax2, _fig: (
-        ax2.spines['right'].set_visible(True),
-        ax2.spines['top'].set_visible(True),
-        ax2.set_xscale('log'),
-        ax2.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.1e}"))
+    dataset=data,
+).plot_dual_y(
+    left=(dataRowNum_unit1, dataRowNum_unit6),
+    right=(dataRowNum_unit1, dataRowNum_unit7),
+    neglog_y2=True,
+    axes_formatter=NegLog_formatter,
+    right_axes_formatter=NegLog_formatter,
+    # 整图回调 (fig, axes)：axes['right'] 是右轴（原 custom_formatter(ax1, ax2, fig) 的 ax2）
+    figure_formatter=lambda _fig, axes: (
+        axes['right'].spines['right'].set_visible(True),
+        axes['right'].spines['top'].set_visible(True),
+        axes['right'].set_xscale('log'),
+        axes['right'].yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.1e}"))
     )
 )
 # 备用方案：使用自定义 eis_dual_axis_formatter
-# ).subplotter_xyy(
-#     plotdataRowNum_X1=dataRowNum_unit1,
-#     plotdataRowNum_Y1=dataRowNum_unit6,
-#     plotdataRowNum_X2=dataRowNum_unit1,
-#     plotdataRowNum_Y2=dataRowNum_unit7,
-#     custom_formatter=eis_dual_axis_formatter,
+# ).plot_dual_y(
+#     left=(dataRowNum_unit1, dataRowNum_unit6),
+#     right=(dataRowNum_unit1, dataRowNum_unit7),
+#     figure_formatter=lambda fig, axes: eis_dual_axis_formatter(axes['left'], axes['right'], fig),
 # )
 Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data
 Impendence = DataSet()
@@ -191,10 +188,10 @@ for dataslice in Selected_data.iter('samples'):
     Impendence.expandata(impendence_slice)
 data = data.expandata(Impendence)._rearrange_columns()
 Impendence_pltliner1 = DataPlotter(
-    input_dataset=data,
-    plotdataRowNum_x = 0,
-    plotdataRowNum_y = 7
-).plot_objects(
+    dataset=data,
+    channel_x = 0,
+    channel_y = 7
+).plot_multiline(
     axes_formatter=Nyquist_formatter,
 )
 
@@ -220,11 +217,11 @@ RevCampdata_v2 = groups.apply(
 print(RevCampdata_v2.units)
 
 RevCampdata_v2_pltsubsyy = DataPlotter(
-    input_dataset=RevCampdata_v2,
-).subplotter_yy(
-    plotdataRowNum_Y1=2,
-    plotdataRowNum_Y2=1,
-    NegLogScale_Y2=True,
+    dataset=RevCampdata_v2,
+).plot_xy(
+    channel_x=2,
+    channel_y=1,
+    neglog_y=True,
     axes_formatter=NegLog_formatter
 )
 

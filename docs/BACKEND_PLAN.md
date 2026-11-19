@@ -11,49 +11,50 @@ matplotlib 出静态图，Plotly 出交互图 / HTML。
 
 **不维护两个相似的完整绘图类**：只保留一个绘图器作为数据与模式入口，配多个渲染实现。
 
-## 2. 目标架构
+## 2. 当前架构（2026-11-20 定稿）
+
+> 原「目标架构」已全部实现（STRUCTURE_REVIEW 步骤 6.1 ~ 6.7，以及 6.7 之后的结构确认）。以后改结构要重新讨论。
 
 ```text
 Dataloader → DataSet → 按需 select / by / DataTransformer / Group.apply
         │              │
         │              ▼
-        │        Group(dataset, config)：分组的唯一主人（见 2.1 节）
-        │              │
+        │        Group(dataset, config)：分组的唯一主人（2.1 节）
         ▼              ▼
-DataPlotter(dataset, groups=Group)（唯一的数据与模式入口）
-   取列、行范围、样品排序、稳定配色、分组 / 去重，
-   决定几张图、每张图有哪些曲线
-        │
+DataPlotter(dataset, groups, channel_x, channel_y, 外观参数, figsize, dpi, backend)   ← 唯一入口（plotter.py）
+   plot_multiline / plot_groups / plot_xy / plot_dual_y：计划 → _render → figures；add_slider（Plotly）
+        │ ① 生成计划（plan.py：规则）
         ▼
-绘图计划（与后端无关的小数据结构）
-   每张图：坐标轴配置 + 曲线列表
-   每条曲线：X / Y、标签、样品号、分组名、色带位置、左 / 右轴、
-            样式（2.2 节标准写法，翻译留给 backend）
-        │
-   ┌────┴────┐
-   ▼         ▼
-MatplotlibBackend    PlotlyBackend
-   创建图 → 绘制 → 默认格式 → 用户 formatter（后端原生回调）
-                        │
-                        ▼
-                可选交互（Plotly 曲线滑块）
+   list[FigureSpec]（plot_spec.py：约定）
+   图：key、单位、neglog、版式；线：数据、标签、色带位置、样式（标准写法）、画法、左 / 右轴
+        │ ② backend.draw(spec, figsize, formatters, figure_formatter)
+   ┌────┴─────────────────────┐
+   ▼                          ▼
+MatplotlibBackend          PlotlyBackend          （backends/：只管渲染，两份逐段对应）
+   读：layouts.py（排版预设）、style.py（翻译层：标准写法 → 原生值，按 dpi 换算单位）
+        │ ③ 交回 DrawnFigure(spec, fig, axes, artists)
+        ▼
+DataPlotter.figures = {FigureSpec.key: DrawnFigure}；取线 figures[key].artist(样品号, 轴)
 ```
 
-设想中的文件组织（第 4 步时再建，不要提前铺开；标「已有」的已经存在）：
+| 模块 | 职责 | 依赖 |
+|---|---|---|
+| `plotter.py` | `DataPlotter`：唯一入口。选计划函数、定默认尺寸、把用户回调按轴打包、交给后端、存结果；不导入绘图库 | plan、plot_spec、backends |
+| `plan.py` | 规则：`plan_multiline_figures` / `plan_xy_figures` / `plan_dual_y_figures`，以及 `color_positions`、`resolve_groups`、取数 | plot_spec、DataSet、Group |
+| `plot_spec.py` | 约定：`CurveSpec`、`FigureSpec`、`DrawnFigure`、`Appearance`（含 `dpi`）、`AxesFormatter`；不含规则、不导入绘图库 | numpy |
+| `layouts.py` | 排版预设：每种版式的图例位置、刻度格式、轴着色、边距（标准写法） | plot_spec |
+| `style.py` | 翻译层：线型 / 标记 / 颜色 / 图例位置 / 刻度格式的标准写法 → 各后端原生值；磅、英寸按 dpi 换算 | — |
+| `backends/` | `get_backend(name, appearance, cmap)`；`MatplotlibBackend`、`PlotlyBackend`：唯一公开方法 `draw`，Plotly 另有 `add_slider`；只依赖约定，不依赖规则 | plot_spec、layouts、style |
+| `formatters.py` | 用户回调工厂 `make_*_formatter(backend=...)`、`combine_formatters`（前端接口，按 backend 参数区分，不按后端拆文件） | style |
+| `html_export.py` | 把 Plotly Figure 导出成随窗口缩放的 HTML | plotly |
 
-```text
-src/plotlib/
-├── group.py              # 已有：Group，分组的唯一主人（2.1 节）
-├── plot_common.py        # 已有：两个绘图器共用的函数（color_positions；STRUCTURE_REVIEW 步骤 5 起放入
-│                         #       resolve_groups、共用取数，步骤 6.1 放入绘图计划）
-├── style.py              # 已有：样式标准写法的校验与到各后端的翻译（2.2 节）
-├── plotter.py            # DataPlotter：公共入口与模式组织
-├── plot_spec.py          # 绘图计划（先放在 plot_common.py，稳定后再拆出）
-├── formatters.py         # 格式化器工厂（已支持 backend 参数）
-└── backends/
-    ├── matplotlib_backend.py
-    └── plotly_backend.py   # 由现在的 interactive.py 收敛而来
-```
+依赖只朝一个方向：入口 → 计划 → 约定 ← 后端；后端不认识 `DataSet`、`Group`、`DataPlotter`，也不依赖规则。
+`import plotlib` 不加载 Plotly 和 pyplot：后端在 `get_backend` 里用到时才导入。
+
+公开接口的命名（2026-11-20 统一，与计划层、`Appearance`、GLOSSARY 一致）：
+构造参数 `dataset`、`channel_x` / `channel_y`、`line_width` / `axis_width` / `tick_width`、`linestyle`、`legend_font_size`、`dpi`、`backend`；
+方法名「plot_ + 版式」；方法参数 `neglog_x` / `neglog_y`（双 Y 轴再有 `neglog_x2` / `neglog_y2`）、`plot_kind`（双 Y 轴 `plot_kinds`）、
+双 Y 轴 `left=(X, Y)` / `right=(X, Y)`、按轴回调 `axes_formatter` 等（右轴 `right_axes_formatter` 等）、整图回调 `figure_formatter(fig, axes)`。
 
 ### 2.1 分组输入约定（`Group`，2026-11-18 定稿）
 
@@ -92,10 +93,10 @@ src/plotlib/
 - 分组参数名 `groups`，**只接受 `Group` 对象**（传字典报 `TypeError`，类型标注只在编辑器里提醒，运行时用 `isinstance` 检查）。
 - 一个绘图器只对应一个数据集和一个 `Group`：`groups.dataset is not input_dataset` 时报 `ValueError`。不复制、不重建 `Group`。
 - 不传时为空 `Group`（`names == []`），`group_plotter` 退回普通多线图。
-- 配色用 `plot_common.color_positions(dataset.sample_idx)`，按整个数据集排名一次，同一样品在各张图里颜色一致；合并模式的组首色 = `sample_ids(name)[0]` 的颜色。
+- 配色用 `plan.color_positions(dataset.sample_idx)`，按整个数据集排名一次，同一样品在各张图里颜色一致；合并模式的组首色 = `sample_ids(name)[0]` 的颜色。
 - 分组样式写了就应用（两种模式一样，目前仅折线）；`color` 写了时整组同色。没写线型用 `plot_style`。优先级：默认样式 < 分组样式 < `lines_formatter`。
-- 现状：两个绘图器都按此接收 `groups`（属性 `self.groups`），三种情况的检查共用 `plot_common.resolve_groups`；
-  两个绘图器都按同一份绘图计划（`plot_common.plan_figures`）分组绘图，样式翻译各自在 `_native_style`；`InteractivePlotter` 目前只有合并模式（`plot_plotly_group`，STRUCTURE_REVIEW 6.3），分离模式（按组翻页）见 6.4。
+- 现状：两个绘图器都按此接收 `groups`（属性 `self.groups`），三种情况的检查共用 `plan.resolve_groups`；
+  两个后端都按同一份绘图计划（`plan.plan_multiline_figures`）分组绘图，样式翻译各自在 `_native_style`；6.7 起只有一个入口 `DataPlotter(backend=...)`；Plotly 分离模式现在每组一个 Figure，按组翻页见 STRUCTURE_REVIEW 6.8。
 
 字段拼写不检查（2026-11-18 用户决定：`options` 返回全部字段，写错时一眼能看出来）。
 
@@ -141,6 +142,16 @@ matplotlib 的分组模式就是那份「具体实现」。因此第 3 步不再
 再让 Plotly 按同一份计划画。顺序变为：接上 `Group`、共用取数 → 分组绘图计划 → matplotlib 按计划画 → Plotly 按计划画（即第 3 步）→ 其余模式。
 对应 `STRUCTURE_REVIEW.md` 步骤 5、6。
 
+**2026-11-19 调整（用户提出）：先建 backend，再加新功能。** Plotly 按组翻页（原 STRUCTURE_REVIEW 6.4）要动「一个 Figure 画多页」「结果存哪」，
+正是建 backend 时要定的接口，先写会被重写。backend 的接口就是计划，所以顺序为：
+计划补全并定型（Y-Y、双 Y 轴、图层面的单位 / neglog / 版式；6.4）→ 统一结果形状与清理（6.5）→ matplotlib backend（6.6）→
+Plotly backend，删除 `InteractivePlotter`（6.7）→ Plotly 按组翻页（6.8）。同时定下：
+- 唯一入口 `DataPlotter(..., backend=...)`，`InteractivePlotter` 删除；
+- 外观参数（字号、线宽、图例字号、`figsize`）是公共参数，各 backend 翻译（原则 4）：matplotlib → `rc_params`，Plotly → 模板，`figsize` 英寸 × 100 成像素；
+- formatter 统一为 `axes_formatter / lines_formatter / legend_formatter` 三个名字，各 backend 用原生对象调用（matplotlib 传 `ax, fig` / `lines` / `legends`，Plotly 都传 `fig`），
+  `figure_formatter` 去掉；
+- 滑块只属于 Plotly（原则 3），matplotlib backend 调用时明确报错（原则 5）。
+
 ## 5. 进度
 
 | 步骤 | 内容 | 状态 |
@@ -148,8 +159,8 @@ matplotlib 的分组模式就是那份「具体实现」。因此第 3 步不再
 | 0 | 恢复测试基线；稀疏样品号的稳定配色 | ✅ 配色于 2026-11-17 完成：`plot_common.color_positions`，两个绘图器共用 |
 | 1 | `plot_plotly_object(figure_formatter=...)`、`add_slider(slider_formatter=...)` 两个回调入口 | ✅ |
 | 2 | 格式化器收进 `formatters.py` | ✅ 三个工厂支持 `backend="plotly"`，另有 `combine_formatters`；滑块 formatter 工厂暂未做 |
-| 3 | 交互绘图补分组模式：`InteractivePlotter` 接上 `Group`（STRUCTURE_REVIEW 5.1）；按与 matplotlib **同一份绘图计划**画分组（6.3，✅ 合并模式 `plot_plotly_group`）；分离模式 = 一张图按组翻页，每页是计划里的一张 `FigureSpec`（6.4） | ⏳ |
-| 4 | 提取公共部分为绘图计划：共用取数（5.2，✅ `plot_common.get_xy_data`）→ **从分组模式开始**抽计划（6.1，✅ `plot_common.plan_figures`）→ matplotlib 按计划画（6.2，✅ `DataPlotter._draw_figure`）→ 其余模式与结果形状（6.5）；创建图、绘制、默认格式、原生回调交给 backend。分组部分先于第 3 步完成 | ⏳ |
+| 3 | 交互绘图补分组模式：`InteractivePlotter` 接上 `Group`（STRUCTURE_REVIEW 5.1）；按与 matplotlib **同一份绘图计划**画分组（6.3，✅ 合并模式 `plot_plotly_group`）；6.7 ✅ `DataPlotter(backend='plotly')` 五种画法与 matplotlib 对照一致；分离模式 = 一张图按组翻页，每页是计划里的一张 `FigureSpec`（6.8） | ⏳ |
+| 4 | 提取公共部分为绘图计划：共用取数（5.2，✅ `plot_common.get_xy_data`）→ **从分组模式开始**抽计划（6.1，✅ `plot_common.plan_figures`，6.4 后改名 `plan_multiline_figures`）→ matplotlib 按计划画（6.2，✅ `DataPlotter._draw_figure`）→ Plotly 按计划画（6.3，✅）→ 计划补全：xy（原 Y-Y）、双 Y 轴、图层面信息（6.4，✅ 四种绘图方法全部按计划画）→ 结果形状（6.5，✅ `figures = {key: DrawnFigure}`，颜色一次赋值）→ 建 `backends/`（6.6 matplotlib，✅ 6.6a `MatplotlibBackend.draw(spec) -> DrawnFigure`、`DataPlotter(backend=...)`；✅ 6.6b 排版预设 `layouts.py`，两个后端共读；✅ 6.7 `PlotlyBackend`，删除 `InteractivePlotter`）；创建图、绘制、默认格式、原生回调交给 backend。分组部分先于第 3 步完成 | ✅ |
 
 第 3 步验收：相同选列与分组配置下，两个 backend 得到相同的数据、标签和分组顺序（同一份计划交给两个 backend）。
 第 4 步验收：旧的 matplotlib 测试行为不变；切换 backend 后曲线数量、数据、标签、顺序一致。
@@ -174,7 +185,9 @@ matplotlib 的分组模式就是那份「具体实现」。因此第 3 步不再
   `plot_data_groups` 只保存不使用。要按 2.1 节的绘图器约定改：删掉第一个参数，改为可选的 `groups: Group | None`，三种情况的检查与 `DataPlotter` 相同；
   届时把检查移进 `plot_common.py`（如 `resolve_groups(groups, dataset) -> Group`），两个绘图器共用。随之更新测试中 12 处 `InteractivePlotter(None, ...)`、
   `scripts/piezo_interactive.py` 和 README。
-- **分组样式只对折线生效**（2026-11-18 记录）：scatter / bar 写了 linestyle / marker / color 也不应用（scatter 创建后改不了 marker，bar 没有 `set_color`）。
+- **matplotlib 的 axes formatter 写死刻度宽 3**（2026-11-20 记录）：`make_axes_formatter` 里 `tick_params(width=3)` 不读 `Appearance.tick_width`。
+- **功能待办（不影响结构）**：formatter 工厂的「目标轴」参数（右轴回调）；`combine_formatters` 两个后端通用；Plotly 的上轴 `x2`；参照脚本做「前端模板」；Plotly 分离模式按组翻页（STRUCTURE_REVIEW 6.8）。
+- **分组样式只对折线生效**（2026-11-18 记录；2026-11-19 STRUCTURE_REVIEW 6.5 起颜色已对所有画法生效，下面说的是线型、标记）：scatter / bar 写了 linestyle / marker / color 也不应用（scatter 创建后改不了 marker，bar 没有 `set_color`）。
   按原则 5 以后应改为明确报错或在创建时传入。数据点很密时标记会糊成一片，以后可能需要 `markevery` 类参数。
 - **图例显示样品名，不显示分组名**（2026-11-18 记录）：分组绘图的图例来自列名（样品名）。绘图计划的曲线带 `group_name`，是否改为显示组名在 STRUCTURE_REVIEW 6.1 由用户定。
 - **作用在绘图计划上的样式调整**（2026-11-18 记录，方向）：有了计划后，可在画之前按标准写法改某条曲线的样式，两个 backend 都生效；

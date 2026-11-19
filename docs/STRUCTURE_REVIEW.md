@@ -4,9 +4,9 @@
 > 评估范围：`src/`、`scripts/` 逐行阅读；`tools/`、`gui/`、`tests/`、配置与文档看了结构和接口。
 > 本文分三部分：A 评估结论与问题清单（背景）；**B 分步开发指南（当前要做的）**；C 整理工作的记录（已完成）。
 > **状态**：C 部分已全部完成并提交（`92bbde6`，206 passed）。接下来由执行者（Opus 5.5）按 B 部分**指导用户**一步步做，先读 B.0。
-> **进度（2026-11-18）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已提交（`815634e`）；步骤 6.1 已提交（`2d87f86`）；步骤 6.2 已完成（未提交；374 passed）。**下一步是步骤 6.3「Plotly 按同一份计划画」**。
+> **进度（2026-11-19）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已提交（`815634e`）；步骤 6.1 已提交（`2d87f86`）；步骤 6.2 已提交（`d6f7af6`；374 passed）。**下一步是步骤 6.3「Plotly 按同一份计划画」，先读 6.3 小节开头的「开始前必读」**。
 > **2026-11-18 路线调整**：步骤 5、6 按「先抽绘图计划、两个后端按同一份计划画」重排，不再先在 Plotly 里复制一份 `group_plotter`（理由见步骤 5 的「讲」）。
-> 4.3 引入了标准样式写法（`src/plotlib/style.py`，见 4.3 执行记录）。步骤 5 开始时注意 4.2 推迟过来的 `InteractivePlotter` 改动（见 4.2 执行记录第 5 条）。
+> 4.3 引入了标准样式写法（`src/plotlib/style.py`，见 4.3 执行记录）。6.1 起绘图规则集中在 `plot_common.plan_figures`，两个后端只按计划画。
 > 新文件 `src/plotlib/style.py`、`tests/test_style.py` 提交时需要 `git add`。
 > A 部分描述的是基线提交时的状态，文件路径按当时的 `src/xxx.py` 书写，这些文件现在位于 `src/plotlib/xxx.py`；
 > 其中的行号、以及 A.2、A.3、A.5 里已经解决的条目，不代表现状。
@@ -638,6 +638,20 @@ CurveSpec(sample_idx, x, y, label, color_position, group_name,
 
 #### 6.3 Plotly 按同一份计划画（原步骤 5 的目标）
 
+**开始前必读（2026-11-19 记录，6.2 提交后的现状）：**
+- **计划**：`plot_common.plan_figures(dataset, groups, channel_x, channel_y, *, merge_groups, plotrange, neglog_x, neglog_y) -> list[FigureSpec]`。
+  `FigureSpec(key, curves)`；`CurveSpec(sample_idx, x, y, label, x_unit, y_unit, group_name, color_position, style)`。
+  颜色是色带位置（合并模式已是组首位置），`style` 是标准写法、只含写了的字段；数据已按 neglog 取过绝对值。规则全在计划里（`tests/test_plot_plan.py`）。
+- **matplotlib 对照**：`DataPlotter._draw_figure`（建图 → 画线 → 折线应用 `_native_style(curve.style)` → 默认格式 → formatter → neglog，返回 `(fig, ax, {样品号: artist})`），
+  `group_plotter` 只剩「空分组转交 `plot_objects`；生成计划 → 循环画」。Plotly 一侧照这个形状写 `_draw_figure` 的对应物，**后端只读计划、不读 `Group`**。
+- **Plotly 现状**（`interactive.py`）：`plot_plotly_object(figure_formatter)` 自己按样品循环画（颜色 `_get_color(i)` = `sample_colorscale(cmap, [color_positions[i]])`），
+  只产出一个 `self.asset: go.Figure`；`self.plot_artists` 是 trace 列表（`test_interactive.py` 有 3 处断言）；`add_slider` 按 **trace 位置** 控制显隐（6.4 改为按分组）。
+  `self.groups` 已接上（5.1）但没用。模板 `_create_template` 里 Scatter 线宽 3 —— 翻译自定义虚线 `translate_linestyle(v, 'plotly', linewidth=3)` 要传线宽。
+- **样式翻译**：Plotly 写在 trace 上：`line=dict(color=..., dash=...)`、`marker=dict(symbol=...)`；分组写了 marker 时折线 `mode` 要变成 `'lines+markers'`。
+  可仿照 `DataPlotter._native_style` 写一个 Plotly 版（`style.translate_*(v, 'plotly')`）。分组样式仍只对折线生效（与 matplotlib 一致）。
+- **建议的第一步**：先让 `plot_plotly_object` 改为「`plan_figures(dataset, None, …)` → 按计划画」，旧测试全过（与 6.2 的 `plot_objects` 同一手法）；再加分组入口（合并模式）。
+- **用户习惯**：喜欢先看清整体流程再动手；累了会让执行者直接改、自己看 diff。测试期望由执行者先列好、用户确认。
+
 **定。**
 
 | # | 要定的事                   | 建议                                                                                                                 |
@@ -645,7 +659,7 @@ CurveSpec(sample_idx, x, y, label, color_position, group_name,
 | 1 | 先做哪种模式               | 合并模式。它对应一个 Figure，和现有的 `self.asset` 吻合                                                            |
 | 2 | 分离模式在 Plotly 里是什么 | 两个选项：返回 `{分组名: Figure}`；或一张图加「按分组切换」的滑块。后者是 `BACKEND_PLAN.md` 里写的方向，建议采用 |
 
-样式用 `style.translate_*(value, 'plotly')` 翻译（自定义虚线要传线宽）；`DataPlotter._group_style` 是 matplotlib 一侧的对照。
+样式用 `style.translate_*(value, 'plotly')` 翻译（自定义虚线要传线宽）；`DataPlotter._native_style` 是 matplotlib 一侧的对照（`_group_style` 已在 6.2 删除）。
 
 **测。** `BACKEND_PLAN.md` 第 3 步的验收：相同的选列和分组配置下，两个后端得到相同的数据、标签和分组顺序。
 写成一组对照测试，**同一个 `Group` 对象**分别交给两个绘图器（两者用同一个数据集），再比较。重叠样品只出现一次、组首色、线型各一条测试。
@@ -751,7 +765,7 @@ CurveSpec(sample_idx, x, y, label, color_position, group_name,
 | 4.4 结果带分组名           | 完成   | 2026-11-18 | 不传 `naming` 时结果名为「组名_函数名」；「组间计算」改名为「分组计算」（见执行记录）。基线 355 |
 | 4.5 结果配新 Group         | 取消   | 2026-11-18 | 计算结果很少再分组；需要时手动套 `Group`（见 4.5）。步骤 4 已验收 |
 | 5 交互图接上 Group、共用取数 | 完成   | 2026-11-18 | 路线调整：原步骤 5 的分组绘图移到 6.3。5.1、5.2 全按建议；`_ensure_ready` 删除不搬（见 5.2 执行记录）。基线 364 |
-| 6 绘图计划（从分组模式开始） | 进行中 |          | 6.1 完成：重复样品保持先到先得、归属单独一步；拆成三个内部函数（用户提出）。6.2 完成：合并模式柱状图改为组首色（选 A）；新增 `figsize`；删除 `plot_artists`。基线 374 |
+| 6 绘图计划（从分组模式开始） | 进行中 |          | 6.1（`2d87f86`）、6.2（`d6f7af6`）已提交；下一步 6.3。6.1 完成：重复样品保持先到先得、归属单独一步；拆成三个内部函数（用户提出）。6.2 完成：合并模式柱状图改为组首色（选 A）；新增 `figsize`；删除 `plot_artists`。基线 374 |
 | 7.1 `Dataloader` 接口    | 未开始 |          |                                |
 | 7.2 逐样品变换             | 未开始 |          |                                |
 | 7.3 公开的列排序           | 未开始 |          |                                |

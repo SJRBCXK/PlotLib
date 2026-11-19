@@ -287,6 +287,8 @@ write_fit_html(fig, "plot.html", title="压电极化测试")
 
 - **滑块** `add_slider(mode=...)`：`"single"` 每档只显示当前一条曲线；`"cumulative"`（默认）显示第一条到当前一条。
   拖动时标题变为当前曲线名；档位名称太长、放不下时，滑块的刻度标签自动隐藏。
+- **分组绘图** `plot_plotly_group(figure_formatter=...)`：按 `groups` 把所有分组画在一张图里（与 `group_plotter(merge_groups=True)` 相同的规则：
+  重叠样品只画一次、同组用组首色、分组写了 `linestyle` / `marker` / `color` 就应用）；不传 `groups` 时等同 `plot_plotly_object`。按组翻页的分离模式尚未提供。
 - **自定义外观**：`plot_plotly_object(figure_formatter=fn)` 中 `fn(fig)` 原地修改 Figure；
   `add_slider(slider_formatter=fn)` 中 `fn(slider)` 原地修改滑块。多个 Plotly 回调可用 `combine_formatters(...)` 合成一个。
 - **Plotly 版格式化器的限制**：不支持 `xscaler` / `yscaler`；坐标轴只支持 `'linear'` 和 `'log'`；

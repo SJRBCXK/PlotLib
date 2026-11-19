@@ -3,7 +3,7 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**374 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**385 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
 
 > 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各样品都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
@@ -50,6 +50,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `test_plotter.py` | `src/plotlib/plotter.py` | 四种绘图方法画出的线、标签、样式正确 |
 | `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
 | `test_interactive.py` | `src/plotlib/interactive.py` | Plotly 曲线的数据与标签、滑块档位（single / cumulative）与默认外观、报错 |
+| `test_plotly_groups.py` | `src/plotlib/interactive.py` 的按计划绘图 | Plotly 按绘图计划画：不分组与计划一致；分组（合并模式）与 matplotlib 对照、组首色、分组样式翻译 |
 | `test_html_export.py` | `src/plotlib/html_export.py` | 导出页面的画框尺寸、侧边面板位置、占位符全部填写、不修改 Figure |
 | `test_data_reorder_app.py` | `tools/data_reorder_app.py`（Tk 版） | 直接改序号插入并保留勾选、非法输入不移动、取消与失焦；没有显示环境时跳过 |
 | `test_data_reorder_qt.py` | `tools/data_reorder_qt.py`（Qt 版） | 插入与勾选保留、中点吸附、改序号、鼠标拖动；没装 PySide6 时跳过 |
@@ -251,6 +252,14 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 滑块：`single` 每档只显示当前曲线，`cumulative` 显示第一条到当前一条；初始可见性与第 0 档一致；档位标签和标题都是样品名；重复添加只保留一个滑块
 - 滑块默认外观：初始标题为第 0 档的名字；短标签可见，名称太长（如 33 条 `Mg10-back-1mm-relax-i`）时隐藏刻度标签、保留当前值文字；`slider_formatter` 可覆盖默认值
 - 报错：未绘图就加滑块、图中没有曲线 → `RuntimeError`；`mode` 写错 → `ValueError`，且不改动已有的图；空数据集 → 明确的 `RuntimeError`
+
+### Plotly 按计划画 — `test_plotly_groups.py`
+- `plot_plotly_object`：每条 trace 与不分组计划的曲线一一对应（顺序、名字、数据）
+- `plot_plotly_group`（合并模式）：**同一个 `Group`** 交给 `DataPlotter.group_plotter(merge_groups=True)`，曲线条数、顺序、标签、数据一致；重叠样品只画一次
+- 组首色：样品 0、1 归 A（位置 0），样品 2 归 B、用 B 的组首样品 1 的位置 1/3
+- 分组样式翻译到 trace：`'dash'` → `line.dash`；`(3, 5)` → `'9px,15px'`（按线宽 3 换算）；`'square'` → `marker.symbol`，`mode` 变为 `'lines+markers'`；
+  RGB → `'rgb(255,0,0)'`；不写样式 → `mode` 保持 `'lines'`；写了 marker 时点色等于线色
+- 空分组：`plot_plotly_group` 与 `plot_plotly_object` 画出相同的曲线；`figure_formatter` 调用一次，收到的就是 `self.asset`
 
 ### HTML 导出 — `test_html_export.py`
 - 图的尺寸先取 layout、再取模板，layout 优先；两处都没有固定宽高 → `ValueError`

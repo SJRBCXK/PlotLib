@@ -5,7 +5,8 @@ from typing import Literal, Self, cast
 import plotly.graph_objects as go
 from .group import Group
 from .dataset import DataSet
-from .plot_common import color_positions, get_xy_data, resolve_groups
+from .plot_common import FigureSpec, color_positions, plan_figures, resolve_groups
+from .style import translate_color, translate_linestyle, translate_marker
 import plotly.colors as plyc
 
 # 滑块模式：single 每档只显示一条曲线；cumulative 每档累加显示到当前曲线。
@@ -19,6 +20,7 @@ class InteractivePlotter:
     """沿用 DataPlotter 的数据准备方式，绘图与格式化部分逐步手动迁移。"""
 
     _SLIDER_FONT_SIZE = 16  # 滑块档位标签字号；也用于估算标签是否放得下
+    _LINE_WIDTH = 3         # 模板线宽；自定义虚线的段长按它换算成像素，两处必须一致
 
     def __init__(
         self,
@@ -61,11 +63,50 @@ class InteractivePlotter:
 
     # 取数（按样品号 + 通道号取 X、Y）与 DataPlotter 共用：plot_common.get_xy_data
 
-    def _get_color(self, sample: int):
-        """返回样品在色带上对应位置的颜色（只取这一个位置）。"""
-        return plyc.sample_colorscale(self.cmap, [self.color_positions[sample]])[0]
+    def _draw_figure(self, spec: FigureSpec, plot_kind: str = "line",
+                     figure_formatter: Callable[[go.Figure], object] | None = None):
+        """
+        按一张 FigureSpec 画出一张图，返回 (fig, {样品号: trace})。对照 DataPlotter._draw_figure。
 
-    
+        只读计划，不读 Group：画哪些线、颜色（色带位置）、样式都由计划决定（plot_common.plan_figures）。
+        顺序：建图（模板）→ 画线（色带色）→ 分组样式（仅折线，覆盖色带色）→ 轴标题 → 用户 formatter（优先级最高）。
+        """
+        fig = go.Figure(layout=dict(template=self._create_template()))
+        artists = {}    # {样品号: trace}
+
+        for curve in spec.curves:
+            # 色带位置 → 颜色（对照 matplotlib 的 self.cmap(curve.color_position)）；
+            # 线和点都写上，否则点会用 Plotly 默认配色
+            color = plyc.sample_colorscale(self.cmap, [curve.color_position])[0]
+            artist = self._plot_data_plotly(fig, curve.x, curve.y, plot_kind, name=curve.label,
+                                            line=dict(color=color), marker=dict(color=color))
+            if plot_kind == 'line' and curve.style:
+                artist.update(**self._native_style(curve.style))    # 对照 matplotlib 的 artist.set(...)
+            artists[curve.sample_idx] = artist
+
+        units = spec.curves[-1]     # 同一通道的单位在各样品间一致（DataSet 已检查），取任意一条都行
+        self._apply_layout(fig, units.x_unit, units.y_unit)
+        if figure_formatter is not None:
+            figure_formatter(fig)
+        return fig, artists
+
+    def _native_style(self, style: dict) -> dict:
+        """
+        分组写了的样式（标准写法）→ Plotly trace 的属性，交给 trace.update(...)。对照 DataPlotter._native_style。
+
+        只翻译写了的字段：{'line_color', 'marker_color', 'line_dash', 'marker_symbol', 'mode'}。
+        写了 marker 时折线要改成 'lines+markers' 才显示点（matplotlib 不需要这一步）。
+        """
+        native = {}
+        if 'color' in style:
+            native['line_color'] = native['marker_color'] = translate_color(style['color'], 'plotly')
+        if 'linestyle' in style:
+            native['line_dash'] = translate_linestyle(style['linestyle'], 'plotly', linewidth=self._LINE_WIDTH)
+        if 'marker' in style:
+            native['marker_symbol'] = translate_marker(style['marker'], 'plotly')
+            native['mode'] = 'lines+markers'
+        return native
+
 
     # 外观：模板提供通用默认值，layout 配置本次图，不照搬“线 / 轴 / 图”分类。
     def _create_template(self) -> go.layout.Template:
@@ -146,7 +187,7 @@ class InteractivePlotter:
                 # 不指定颜色，让不同样品保留各自的配色。
                 scatter=[
                     go.Scatter(
-                        line_width=3,
+                        line_width=self._LINE_WIDTH,
                         line_dash="solid",
                         marker_size=8,
                         marker_symbol="circle",
@@ -278,41 +319,41 @@ class InteractivePlotter:
             fig = plot.plot_plotly_object(figure_formatter=fmt).add_slider("single")
             fig.show()
         """
-        # 流程：
-        # ① 检查数据。
-        # ② 用 _create_template() 的模板创建 Figure。
-        # ③ 遍历样品号，用 get_xy_data() 取 X/Y 和标签、单位。
-        # ④ 用 _plot_data_plotly() 添加曲线，同时传入 name 等身份信息。
-        # ⑤ 用 _apply_layout() 设置本次图；各样品的轴单位应一致。
-        # ⑥ 应用可选的用户格式回调，保存到 self.asset 并返回 self。不在这里 show()。
-        sample_ids = sorted(set(self.sample_idx))
-        if not sample_ids or self.data.size == 0:
+        # 流程：检查数据 → 不分组的计划（一张 'main' 图）→ 按计划画 → 保存。不在这里 show()。
+        if len(self.sample_idx) == 0 or self.data.size == 0:
             raise RuntimeError("数据集为空，无法绘图")
-        fig = go.Figure(
-            layout = dict(template=self._create_template())
-        )
-        artists = []
 
-        for i in sample_ids:
-            Row_x, Row_y, _, y_label, x_unit, y_unit = get_xy_data(self.dataset, plotrange=self.plotrange,
-                    sample_idx=i,
-                    channel_x=self.plotdataRowNum_x,
-                    channel_y=self.plotdataRowNum_y,
-                )
+        [spec] = plan_figures(self.dataset, None, self.plotdataRowNum_x, self.plotdataRowNum_y,
+                              plotrange=self.plotrange)
+        return self._store(*self._draw_figure(spec, figure_formatter=figure_formatter))
 
-            color = self._get_color(i)
-            
-            artist = self._plot_data_plotly(
-                fig, Row_x, Row_y, name=y_label, line=dict(color=color))
-            artists.append(artist)
+    def plot_plotly_group(
+        self,
+        figure_formatter: Callable[[go.Figure], object] | None = None,
+    ) -> Self:
+        """按 self.groups 分组绘图（合并模式：所有分组画在一张图里）。对照 DataPlotter.group_plotter。
 
-        self._apply_layout(fig, x_unit, y_unit)
-        # 用户回调原地修改 Figure，覆盖默认格式。
-        if figure_formatter is not None:
-            figure_formatter(fig)
+        分组规则与 matplotlib 相同，都在计划里（plot_common.plan_figures）：
+        被多个分组引用的样品只画一次，归第一个包含它的分组；同组统一用组首色；
+        分组写了 linestyle / marker / color 就应用。分离模式（按组翻页）见 STRUCTURE_REVIEW 6.4。
 
-        self.plot_artists = artists
+        Args:
+            figure_formatter: 同 plot_plotly_object。
+
+        Returns:
+            self；Figure 保存在 self.asset，trace 按画线顺序存在 self.plot_artists。
+        """
+        if not self.groups.names:
+            return self.plot_plotly_object(figure_formatter=figure_formatter)
+
+        [spec] = plan_figures(self.dataset, self.groups, self.plotdataRowNum_x, self.plotdataRowNum_y,
+                              merge_groups=True, plotrange=self.plotrange)
+        return self._store(*self._draw_figure(spec, figure_formatter=figure_formatter))
+
+    def _store(self, fig: go.Figure, artists: dict) -> Self:
+        """保存一次绘图的结果：Figure 存 self.asset，trace 按画线顺序存 self.plot_artists。"""
         self.asset = fig
+        self.plot_artists = list(artists.values())
         return self
 
 

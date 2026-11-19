@@ -95,7 +95,7 @@ src/plotlib/
 - 配色用 `plot_common.color_positions(dataset.sample_idx)`，按整个数据集排名一次，同一样品在各张图里颜色一致；合并模式的组首色 = `sample_ids(name)[0]` 的颜色。
 - 分组样式写了就应用（两种模式一样，目前仅折线）；`color` 写了时整组同色。没写线型用 `plot_style`。优先级：默认样式 < 分组样式 < `lines_formatter`。
 - 现状：两个绘图器都按此接收 `groups`（属性 `self.groups`），三种情况的检查共用 `plot_common.resolve_groups`；
-  `DataPlotter` 已按此分组绘图（翻译见 `_group_style`），`InteractivePlotter` 只保存，分组绘图见 STRUCTURE_REVIEW 6.3。
+  两个绘图器都按同一份绘图计划（`plot_common.plan_figures`）分组绘图，样式翻译各自在 `_native_style`；`InteractivePlotter` 目前只有合并模式（`plot_plotly_group`，STRUCTURE_REVIEW 6.3），分离模式（按组翻页）见 6.4。
 
 字段拼写不检查（2026-11-18 用户决定：`options` 返回全部字段，写错时一眼能看出来）。
 
@@ -148,7 +148,7 @@ matplotlib 的分组模式就是那份「具体实现」。因此第 3 步不再
 | 0 | 恢复测试基线；稀疏样品号的稳定配色 | ✅ 配色于 2026-11-17 完成：`plot_common.color_positions`，两个绘图器共用 |
 | 1 | `plot_plotly_object(figure_formatter=...)`、`add_slider(slider_formatter=...)` 两个回调入口 | ✅ |
 | 2 | 格式化器收进 `formatters.py` | ✅ 三个工厂支持 `backend="plotly"`，另有 `combine_formatters`；滑块 formatter 工厂暂未做 |
-| 3 | 交互绘图补分组模式：`InteractivePlotter` 接上 `Group`（STRUCTURE_REVIEW 5.1）；按与 matplotlib **同一份绘图计划**画分组（6.3），不另写分组规则；保存“样品号 → traces”映射，滑块按分组控制（6.4） | ⏳ |
+| 3 | 交互绘图补分组模式：`InteractivePlotter` 接上 `Group`（STRUCTURE_REVIEW 5.1）；按与 matplotlib **同一份绘图计划**画分组（6.3，✅ 合并模式 `plot_plotly_group`）；分离模式 = 一张图按组翻页，每页是计划里的一张 `FigureSpec`（6.4） | ⏳ |
 | 4 | 提取公共部分为绘图计划：共用取数（5.2，✅ `plot_common.get_xy_data`）→ **从分组模式开始**抽计划（6.1，✅ `plot_common.plan_figures`）→ matplotlib 按计划画（6.2，✅ `DataPlotter._draw_figure`）→ 其余模式与结果形状（6.5）；创建图、绘制、默认格式、原生回调交给 backend。分组部分先于第 3 步完成 | ⏳ |
 
 第 3 步验收：相同选列与分组配置下，两个 backend 得到相同的数据、标签和分组顺序（同一份计划交给两个 backend）。

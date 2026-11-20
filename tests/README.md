@@ -3,7 +3,7 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**428 个全部通过**，`plotlib` 包语句覆盖率 95%。曾记录的 13 个 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**520 个全部通过**（2026-11-20 样式对象化之后）。曾记录的 bug 已全部修复（见文末「已修复的 bug」）。
 
 > 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各样品都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
@@ -87,14 +87,15 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - **csv、xlsx、txt 三种格式读出完全相同的结果**
 - 空单元格读成 NaN，不影响其他数值
 - txt 中多个空格、制表符混用都当作一个分隔符（pandas 3 兼容的回归测试）
-- 列数不是每个样品列数的整数倍 → `ValueError`；不支持的扩展名 → `RuntimeError`
+- 列数不是每个样品列数的整数倍 → `ValueError`；不支持的扩展名 → `ValueError`，信息里有文件名
+- 每样品 49 列时两个样品都读到（样品数用整数除法）；同一个 loader 读成功后再读不支持的后缀 → 报错，不返回上一份数据
 - 不给文件路径时走「选择文件」对话框（测试中用 `monkeypatch` 替换掉弹窗）
 
 ### 数据容器 — `test_dataset.py`
 - `form_array`：自动补全样品号、通道号、father/initial 索引；标量和一维数组转成二维
 - 未指定样品号（None）的列共用一个新样品（已有最大样品号 + 1），样品数与通道号与之一致
 - 元数据长度与数据列数不一致 → `RuntimeError`
-- `expandata`：横向拼接列和元数据；行数不同时短的一方补 NaN
+- `expandata`：横向拼接列和元数据；行数不同时短的一方补 NaN；零行样品（有列、没有行）照常拼接；拼接失败后原对象不变、还能继续拼接
 - 同一通道在不同样品里单位不同 → `RuntimeError`
 - `column[i]` 是视图：改名字、单位、数据都直接写回 DataSet；`to_dict()` 是副本
 - 通过 `column[i].sample_idx` 改样品号：样品数、通道号随之更新；破坏单位约束时报错并回滚
@@ -174,12 +175,16 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 不分组：一张 `'main'` 图，全部样品按样品号排序，色带位置 0、1/3、2/3，没有分组名和样式
 - 分离模式：每个分组一张图（key 为分组名），同一样品可出现在两张图里，颜色按样品，样式只属于写了它的分组
 - 合并模式：同一样品只画一次、归第一个包含它的分组（先到先得）；书写顺序即优先级（B 写在前面，重叠样品就归 B）；同组用组首色——组首按本组配置，即使组首样品已归别的组
-- 曲线的数据、标签、单位与 `get_xy_data` 一致，`plotrange`、`neglog` 照样传下去；分组样式按标准写法原样带入，不翻译
+- 曲线的数据、标签、单位与 `get_xy_data` 一致，`plotrange`、`neglog` 照样传下去；分组样式按标准写法原样装进 `LineStyle`，不翻译（没写样式是 `LineStyle()`）
 - 样品号 0、5、9：色带位置按整个数据集排名；分离模式各样品各自的位置（1/3、2/3），合并模式统一为组首位置 1/3（回归：组首色曾取 `cmap(5/3)` 被截断）
 - 生成计划只读分组：前后 `groups.to_config()` 不变（后端不读 `Group`，所以只在这里测）
 - 图层面的信息（6.4）：三种多线 / 分组计划的图都带 `x_unit`、`y_unit`（`y2_unit` 为 None）、`layout='multiline'`；线默认 `kind='line'`、`axis='left'`，曲线上不再有单位；`kind` 原样传到每条线，`neglog` 记在图上（如 `{'x'}`）
 - xy 计划：每个样品一张图、一条线，key 是样品号，`layout='xy'`；色带位置为 `None`（用后端默认色）；`neglog_y` 时 Y 取绝对值、图上记 `{'y'}`
-- 双 Y 轴计划：每个样品一张图、两条线；左线挂左轴（红）、右线挂右轴（蓝），色带位置为 `None`，两侧 `kind` 可不同；图的单位为左 X、左 Y、右 Y，`layout='dual_y'`；`neglog_x2` 只把右线的 X 取绝对值、图上记 `{'x2'}`
+- 双 Y 轴计划：每个样品一张图、两条线；左线挂左轴（红）、右线挂右轴（蓝），色带位置为 `None`，两侧 `kind` 可不同；图的单位为左 X、左 Y、右 Y，`layout='dual_y'`；`neglog_x2` 只把右线的 X 取绝对值、图上记 `{'x2'}`；
+  两条线的标签是各自的单位，图例标题是样品名（2026-11-20）
+- 每张图自己的名字 `FigureSpec.name`（6.8）：xy / 双 Y 轴是样品名，分离模式是组名，只有一张图时 `None`
+- 图例标题 `legend_title`：多线、分组、xy 默认 `None`，双 Y 轴默认样品名；`'{name}'` 在 xy / 双 Y 轴换成样品名、分离模式换成组名，前后可加文字；
+  只有一张图（不分组、合并）时自由文字照用，`'{name}'` 不替换也不报错（用户定：不给单图加限制）
 
 ### 样式标准写法 — `test_style.py`
 - 合法：线型 `'solid'` / `'dash'` / `'dot'` / `'dashdot'` 与自定义虚线 `(3, 5)`、`[3, 5]`；7 个标记名；
@@ -190,7 +195,14 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 翻译：四种线型、七种标记到两个后端的原生值；自定义虚线到 matplotlib 补偏移量 `(0, (3, 5))`、到 Plotly 按线宽换算像素 `'9px,15px'`；
   颜色名和色号原样，RGB 到 matplotlib 为 0~1、到 Plotly 为 `'rgb(255,0,0)'`
 - 翻译前先校验（非标准写法不能绕过）；未知 backend → `ValueError`
-- 翻译层（6.7）：刻度格式 `'{x:.2f}'` → matplotlib 格式函数 / Plotly `'.2f'`（Plotly 对应不了的报错）；图例位置 → 两个后端的参数；磅、英寸按显式 dpi 换算（matplotlib 原样，Plotly：磅 × dpi / 72、英寸 × dpi）
+- 翻译层（6.7）：刻度格式 `'{x:.2f}'` → matplotlib 格式函数 / Plotly `'.2f'`（Plotly 对应不了的报错）；图例位置（含图外上方 `'outside top right'`）→ 两个后端的参数；磅、英寸按显式 dpi 换算（matplotlib 原样，Plotly：磅 × dpi / 72、英寸 × dpi）
+- 刻度 `TickStyle`（2026-11-20）：默认 `DEFAULT_TICKS`（朝外、主 6 × 3、显示次刻度 3 × 3、次刻度不写文字），`Appearance().ticks` 是空的一层；`updated` 按层叠加（写了的覆盖）；
+  翻译成 matplotlib 的主 / 次 `tick_params`、次刻度开关和文字写法（次刻度文字没单独写时同主刻度），翻译成 Plotly 的轴配置（磅 × dpi / 72，`minor.ticks` 关掉为 `''`，
+  `minor_labels` → `minorloglabels`）；只出现写了的字段；Plotly 下单独设次刻度文字的字体 / 字号 / 间距 → `ValueError`；`'inout'`、未知写法、非正长度、非布尔开关 → 报错
+- 样式对象化（2026-11-20）：库默认（线宽 3 实线、标记 6；**无框**、轴线宽 3；图例字号 10、无边框）；`Appearance()` 各样式是空的一层；
+  叠加顺序 库默认 < 版式预设 < 全局（全局写了的图例位置盖过预设，没写的拖动仍用预设；双 Y 轴预设完整的框，全局 `top=False` 盖过它）；
+  `LineStyle` → Line2D 属性 / Plotly 扁平写法（磅 → 像素，点跟着线色）；`AxisStyle` → 刻度类型、范围、格式函数（× scaler）、着色 / Plotly 轴配置，
+  Plotly 的 `scaler`、`symlog` 报错，对数轴边界 ≤ 0 报错；`FrameStyle` → 线宽与上 / 右边；`LegendStyle` → 两个后端的图例参数，位置同一张表，写错报错
 
 ### 绘图 — `test_plotter.py`
 分组规则不在这里测（见 `test_plot_plan.py`）；这里只测 matplotlib 把计划画对，以及它独有的功能。
@@ -198,16 +210,17 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 **`plot_multiline`**
 - 每个样品一条线，全部在一张图上；X/Y 轴标题是单位，图例是样品名
 - `plotrange` 限制绘制点数
-- `neglog_x` / `neglog_y`：数据取绝对值，刻度文字带负号；两轴同时启用时各保留自己的格式
+- `neglog_x` / `neglog_y`：数据取绝对值，刻度文字带负号；两轴同时启用时各保留自己的格式；
+  **渲染后**默认刻度格式也是「一个负号 + 数字」（xy 的 X、双 Y 轴的左 Y；双 Y 轴共用的 X 轴只加一次负号）
 - `plot_kind` 为 line / scatter / bar 时生成对应类型的对象，且点 / 柱的数据正确；不支持的类型报错
 - `axes_formatter` / `lines_formatter` / `legend_formatter` 都会被调用，拿到正确的对象
-- `lines_formatter` 改线型后，图例同步更新
+- `lines_formatter` 改线型后，图例同步更新；**渲染后**图例位置和能否拖动不变（图外右侧、图内右下两种）
 - `figsize`：不传时 `plot_multiline` 为 (10, 8)、`plot_groups` 为 (16, 12)、`plot_xy` / `plot_dual_y` 为 (12, 8)；传了则所有绘图方法都用它（xy、双 Y 轴以前忽略它）
 
 **`plot_groups`**
 - 计划里每张 `FigureSpec` 画成一张图：分离模式 `figures` 的键是 `'A'`、`'B'`，合并模式是 `'main'`；每张图的线与计划的曲线一一对应
 - 分组样式翻译成 matplotlib 原生值：`'dash'` → `'--'`、`'circle'` → `'o'`、RGB 和色号 → 对应颜色；没写样式时实线、无标记
-- 分组没写线型时用 `linestyle`（经 `rc_context` 生效）；`linestyle` 默认 `'solid'`，只收标准写法
+- 分组没写线型时用全局的 `lines=LineStyle(linestyle=...)`（经 `rc_context` 生效）；默认实线、线宽 3，只收标准写法；`lines` 不收颜色
 - 优先级：`lines_formatter` 最后执行，能覆盖分组线型
 - 没有分组时退回 `plot_multiline`
 
@@ -219,13 +232,24 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 **matplotlib 后端（6.6）**
 - 后端只读计划：手工写一张 `FigureSpec`（不经过数据集、分组）交给 `MatplotlibBackend.draw`，画出的数据、标签、颜色、轴标题、尺寸就是计划写的
 - `backend` 参数：默认 `'matplotlib'`；`'plotly'` → `NotImplementedError`（6.7）；写错 → `ValueError` 并列出可选值
-- 外观（`Appearance`，后端无关）由后端翻译成 `rc_params`：`font_size=30` → `font.size`，`linestyle='dash'` → `'--'`
+- 外观（`Appearance`，后端无关）由后端翻译成 `rc_params`：`font_size=30` → `font.size`，`LineStyle(linestyle='dash')` → `'--'`；
+  样式对象按「库默认 < 用户写的那一层」叠加（只写线型时线宽仍是 3），边框宽、图例字号（含标题）也进 rc
 
 **默认排版（6.6b 起由 `layouts.py` 的排版预设决定）**
-- 图例：多线图在图外右侧、可拖动；xy、双 Y 轴在右下角；双 Y 轴只有左轴有图例
+- 图例：多线图在图外右侧、可拖动；xy 在右下角；一张图只有一个图例，建在左轴上
+- 双 Y 轴图例（2026-11-20，参照 Origin 图，**渲染后**断言）：左右两条线都在（红、蓝），写各自的单位，标题是样品名；
+  在绘图区上方、右边对齐、不超出画布；右轴 `lines_formatter` 改色后图例跟着变，左轴 `legend_formatter` 设的字号和标题不被重建冲掉
 - 刻度格式：多线图 x、y 两位小数；xy 的 y、双 Y 轴的右轴四位小数
-- 边距：多线图右 0.75、xy 左 0.15、双 Y 轴右 0.85
+- 边距：多线图右 0.75、xy 左 0.15、双 Y 轴右 0.85、上 0.85（给图例让位）
 - 双 Y 轴：左轴（标题、刻度文字、轴线）和左线红，右轴和右线蓝（计划里不写颜色，由预设给）
+- 边框（样式对象化，2026-11-20）：多线、xy 默认无框；双 Y 轴完整的框，右边是右轴自己的蓝色轴线，右轴的左边不画（不盖住左轴的红线）
+- 全局样式盖过预设：`DataPlotter(frame=FrameStyle(top=True), legend=LegendStyle(position='upper left'))` 照全局画，没写的（拖动）仍用预设
+- 轴工厂只改写了的：只把 X 轴改成对数，Y 轴仍是预设的两位小数（回归：曾总调用 `set_yscale` 冲掉预设格式）
+
+**刻度 TickStyle（2026-11-20，渲染后断言）**
+- 默认主刻度 6 × 3 磅、线性轴也有次刻度、次刻度不写文字；`DataPlotter(ticks=...)` 只写要改的，其余沿用默认（长 10、宽仍 3；文字 12 磅 serif）
+- 关掉次刻度后，轴工厂把 X 轴改成对数也不冒出次刻度（改刻度类型会重置次刻度，后端在回调之后只补还是默认值的）
+- 对数轴次刻度文字：`none` 不写、`short` 只写 2 ~ 9、`full` 每个都写；线性轴 `full` 也能写且可单独设字号，`short` 不写
 
 **配色**
 - 样品号 0、5、9：三条线依次取 plasma 色带 0、1/3、2/3 处的颜色（回归：5、9 曾被截断成同一个末端色）
@@ -237,21 +261,29 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 双 Y 轴：左右两侧各用自己的 X、Y 列；左轴红、右轴蓝，两轴共享 X 轴，`twinx` 不新开图窗；整图回调 `figure_formatter(fig, axes)` 每个样品调用一次
 
 ### 格式化器 — `test_formatters.py`
+样式对象化（2026-11-20）起参数都是样式对象：`make_axes_formatter(x=AxisStyle, y=AxisStyle, frame=FrameStyle, ticks=TickStyle, custom=)`、
+`make_lines_formatter(LineStyle, custom=)`、`make_legend_formatter(LegendStyle, custom=)`；没写的字段不改。
+
 **matplotlib（默认 backend）**
-- axes：默认线性刻度、隐藏上/右边框；不传 `x_format` / `y_format` 时保留 matplotlib 默认的刻度格式器
-- axes：可设对数刻度、坐标范围、刻度格式与换算倍数（`xscaler`）；只给 `xscaler` 不给格式时按 `{x:g}` 显示换算后的值
-- axes：`custom_formation` 里的函数以 `(ax, fig)` 调用；可直接交给 `DataPlotter` 使用
-- lines：线宽、颜色、线型、marker 与大小（标准写法，翻译成 matplotlib 原生值；RGB 换成 0~1）；不传 marker 时保持无标记；`custom_formations` 逐条线调用
+- axes：什么都不给就什么都不改——刻度类型、已有的刻度格式（如预设的两位小数）、边框保持原样
+  （回归：以前刻度类型默认 `'linear'` 且总调用 `set_*scale`，会重置已有格式；边框默认隐藏上 / 右边）
+- axes：可设对数刻度、坐标范围、刻度格式与换算倍数（`AxisStyle.scaler`）；只给 `scaler` 不给格式时按 `{x:g}` 显示换算后的值
+- axes：`frame=FrameStyle(...)` 只改写了的（上边、线宽）；`custom` 里的函数以 `(ax, fig)` 调用；可直接交给 `DataPlotter` 使用
+- lines：线宽、颜色、线型、marker 与大小（标准写法，翻译成 matplotlib 原生值；RGB 换成 0~1）；没写 marker 时保持无标记；`custom` 逐条线调用
 - lines：后端写法（`'--'`、`'o'`、`'tab:red'`）在创建 formatter 时就报错，两个 backend 一样
-- legend：字号、边框、可拖拽、位置；可直接交给 `DataPlotter` 使用
+- legend：字号、边框、可拖拽、位置（与预设同一张位置表）；可直接交给 `DataPlotter` 使用
 
 **Plotly（`backend="plotly"`）**
 - 不传刻度格式时不写 `tickformat`（保留 Plotly 自动格式）；传入时翻译成 d3 格式（如 `'{x:.1e}'` → `.1e`）
-- 坐标轴边界：两侧都给时固定 `range`；只给一侧时用 `autorangeoptions.minallowed` / `maxallowed`，另一侧自动；对数轴边界取 log10；只影响设置了边界的那根轴
+- 坐标轴边界：两侧都给时固定 `range`；只给一侧时用 `autorangeoptions.minallowed` / `maxallowed`，另一侧自动；对数轴边界取 log10；只影响设置了边界的那根轴（没写的轴根本不写）
 - 渲染测试（标记 `render`）：用 kaleido 调真实的 Plotly.js，断言实际画出的坐标范围。
   回归：只给一侧边界时曾用 `autorange="min"/"max"`，模板开了 automargin，扩边重绘后被重置成完全自动，边界失效
-- lines：标准写法翻译成 Plotly 的 `line.dash` / `marker.symbol` / `line.color`；自定义虚线按 `linewidth` 换算像素
-- `combine_formatters`：按传入顺序调用，跳过 `None`
+- 三种回调与 matplotlib 形状对应：axes `(轴名, fig)`，Y 轴设置只写到这根轴、X 轴写到共用的 `xaxis`，`custom` 也收 `(轴名, fig)`；
+  lines 收 trace 列表；legend 收 `[fig.layout.legend]`
+- lines：标准写法翻译成 Plotly 的 `line.dash` / `marker.symbol` / `line.color`；线宽是磅、按 dpi 换成像素，自定义虚线按换算后的线宽算像素；
+  颜色点也一起改（回归：纯散点曾只改了隐藏的线色）
+- legend：字号是磅、按 dpi 换成像素；图内位置离边 0.02；`draggable=True` → 创建时报错并提示在显示时设置
+- `combine_formatters`：按传入顺序调用、跳过 `None`、参数原样转交（两个后端通用，只合并同一种回调）
 
 ### Plotly 后端 — `test_plotly_backend.py`
 分组规则不在这里测（见 `test_plot_plan.py`）；翻译（字号、尺寸、图例位置、刻度格式）在 `test_style.py`。这里只测 Plotly 把计划画对、把排版预设和外观应用上。
@@ -266,20 +298,44 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 空数据集 → 明确的 `RuntimeError`（`数据集为空`）
 
 **排版与外观**
-- 双 Y 轴：右轴 `yaxis2` 叠在左轴上、放在右侧，右线 `yaxis='y2'` 且不进图例；左红右蓝（线和轴标题）；右轴四位小数
+- 双 Y 轴：右轴 `yaxis2` 叠在左轴上、放在右侧，按自己的数据选刻度（`tickmode='auto'`，Plotly 默认 `'sync'` 对齐左轴会让刻度值不整齐），
+  右线 `yaxis='y2'`；左红右蓝（线和轴标题）；右轴四位小数；
+- 边框：多线图默认不镜像；双 Y 轴上边是 X 轴镜像、左 Y 轴不镜像（右边是右轴的线）；全局 `frame` 盖过预设
+- 全局线宽、图例字号（磅 → 像素）写进模板 / 图例；全局图例位置盖过预设
+  图例（2026-11-20）两条线都在、trace 名是单位、标题是样品名，图外上方右对齐
 - 排版预设：多线图图例在图外右侧、坐标两位小数；xy 纵轴四位小数、图例在右下角
 - 外观按显式 dpi 换成像素：字号 22 磅 → 22 × 100 / 72 像素；dpi 加倍像素也加倍；模板关闭对数轴的小号次刻度标签
+- 刻度写进模板（磅 → 像素）：默认朝外、主 6 × 3、次刻度显示 3 × 3、`minorloglabels='none'`；改了的照改、没写的沿用默认；
+  全局或单轴设了次刻度文字字号 → 创建时 `ValueError`
 - 负对数：对应的轴 `tickprefix='-'`
 
 **回调与滑块**
-- 三种回调都收 `fig`；双 Y 轴的整图回调拿到 Plotly 配置里的轴名（用 `fig.layout['yaxis2']` 改右轴）
-- `DataPlotter.add_slider`：`single` / `cumulative` 的档位与可见性、档位标签和标题是样品名、重复添加只保留一个；默认外观与 `slider_formatter` 覆盖；名称太长时隐藏刻度标签
-- 报错：未绘图、图中没有曲线、`mode` 写错（不改动已有的图）、多张图、matplotlib 后端
+- 按轴回调只拿到这根轴的东西：左右轴回调分别收 `('yaxis', fig)`、`('yaxis2', fig)`，线回调只有这根轴上的 trace，
+  图例回调 `[fig.layout.legend]`（回归：三种回调曾都只收 `fig`）；双 Y 轴的整图回调拿到 Plotly 配置里的轴名（用 `fig.layout['yaxis2']` 改右轴）
+- `DataPlotter.add_slider`：`single` / `cumulative` 的档位与可见性、档位标签和标题是样品名（标题用带点的路径 `'title.text'`）、重复添加只保留一个；默认外观与 `slider_formatter` 覆盖；名称太长时隐藏刻度标签
+- 报错：未绘图、图中没有曲线、`mode` 写错（不改动已有的图）、matplotlib 后端
+
+**多页与翻页滑块（6.8）**
+- 分组分离模式：两页共用一个 Figure、共 4 条 trace，每页的 `artists` 只有自己那页的；刚画完只显示第一页
+- 每页就是那张计划：同一样品在 A、B 两页是两条 trace，各用各组的样式，颜色按样品（两页同色）
+- xy、双 Y 轴每个样品一页（后端只认计划，不认绘图方法）；只有一张计划的多线图不分页、全部显示
+- 多页时按轴回调、整图回调对整个 Figure 只调一次，线回调拿到这根轴上所有页的 trace
+- `add_page_slider`：每页一档，档位标签是组名 / 样品名；翻页时 `'title.text'`、`'legend.title.text'` 换成这一页的；
+  `single`（默认）/ `cumulative` 两种模式；当前值默认不加前缀；重复添加只保留一个；`slider_formatter` 最后执行
+- 两种滑块用错 → `RuntimeError` 并提示该用哪个；`mode` 写错 → `ValueError`；未绘图 → `RuntimeError`；matplotlib → `NotImplementedError`
 
 ### 两个后端对照 — `test_backend_parity.py`
 - 分组参数（两个后端各测一遍）：只接受 `Group` 对象，传字典 → `TypeError`；基于别的数据集的 `Group` → `ValueError`；不传时是建在本数据集上的空 `Group`
 - 计划里的版式、画法写错时，两个后端都明确报错（`ValueError`）
-- **同一个入口、同一个 `Group`，换后端**：多线、合并、分离、xy、双 Y 轴五种画法，图的 key 相同，每张图的曲线条数、顺序、标签、数据相同
+- **同一个入口、同一个 `Group`，换后端**：多线、合并、分离、xy、双 Y 轴五种画法，图的 key 相同，每张图（Plotly 是每页）的曲线条数、顺序、标签、数据相同；
+  按页比较，不比 Figure 个数（多张计划时 Plotly 是一个 Figure 多页）
+- 按轴回调只作用在自己那根轴上（第三方审查 E）：只给右轴配范围和线色，左轴范围、左线颜色不变；
+  给右轴配图例回调 → `ValueError`（一张图一个图例，归左轴）
+- 轴工厂没给 `ticks` 时不改刻度，仍是 `DataPlotter(ticks=TickStyle(width=5))` 的全局设置（回归：两个工厂曾写死 3；matplotlib 渲染后断言）
+- 单轴刻度覆盖：右轴回调里的 `ticks` 只改右侧 Y 轴（长 12、关掉次刻度），左轴仍是默认；Plotly 在 `dpi=200` 下按 `fig.layout.meta` 的 dpi 换算
+- `combine_formatters` 合并同一种回调，两个后端都能接进绘图器
+- 分组 `marker` 对散点图也生效（Plotly 散点仍是 `'markers'`）
+- 图例标题：四种方法、六种情况，每张图画出的标题与计划一致（没有就不画）
 - 颜色不在这里比：两个库的色带实现不同，各自「位置 → 颜色」分别在 `test_plotter.py`、`test_plotly_backend.py` 里测
 
 ### HTML 导出 — `test_html_export.py`
@@ -309,6 +365,15 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | 分组 `num` 解析（原 `resolve_num`，现为 `Group` 的创建时校验） | `[1.9]` 被截成 `[1]` | 元素必须是整数，否则 `TypeError` |
 | `make_lines_formatter` | 不传 marker 就崩（`set_marker(None)`） | 只在指定 marker 时设置 |
 | `make_legend_formatter` | 一调用就崩（`set_fontsize`、`set_frameon` 都不存在） | 逐个设置图例文字字号；改用 `set_frame_on` |
+| `Dataloader` 样品数（第三方审查 A） | `int(98 * (1/49))` 得 1，静默丢样品 | 列数整除每样品列数 |
+| `Dataloader` 未知后缀（第三方审查 A） | 沿用上一次读到的表「成功」返回 | 读进局部变量；未知后缀 `ValueError` |
+| `DataSet.expandata`（第三方审查 B） | 零行样品被当成空容器而替换矩阵；失败时原对象已被改 | 看列数判断空；校验失败恢复原状 |
+| matplotlib 负号刻度（第三方审查 C） | 渲染后只剩 `'-'`（包装的格式器收不到刻度位置）；双 Y 轴共用 X 轴负号加两次 | `_NegativeFormatter` 转交刻度位置；X 只在左轴加，`'x2'` 跳过 |
+| matplotlib 重建图例（第三方审查 D） | 锚点被换算两次，图例移到画布外 | 按排版预设重建（`_make_legend`），不复制旧锚点 |
+| matplotlib 轴工厂（样式对象化时修） | 总调用 `set_*scale`，冲掉预设的刻度格式 | `AxisStyle.scale` 没写就不调用 |
+| Plotly 双 Y 轴右轴刻度（样式对象化时渲染发现） | 叠加轴默认 `tickmode='sync'`，刻度值成了 1.0007、0.9022 | 右轴 `tickmode='auto'` |
+| Plotly 按轴回调（第三方审查 E） | 回调都只收 `fig`，右轴回调改了左轴和左线；matplotlib 右轴图例回调收到 `None` | 后端按轴交出轴名 / trace / 图例（做法 2）；没有图例的轴报 `ValueError` |
+| 轴工厂刻度宽、分组 marker、Plotly `linecolor`（第三方审查 G） | 刻度宽写死 3；散点忽略分组 marker；纯散点只改隐藏线色 | 不写刻度宽；`STYLE_FIELDS_BY_KIND`；点也一起改色 |
 
 **项目配置**：`pyproject.toml` 的 `requires-python` 已从 `>=3.8` 改为 `>=3.14`
 （`match` 语法需 3.10+；类内不加引号的自引用类型标注在 3.14 之前导入即报错）。
@@ -335,6 +400,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 4. **多组输入**用 `@pytest.mark.parametrize`，并加 `ids` 让输出可读。
 5. **报错**用 `pytest.raises(..., match=...)`，一个 `with` 只包一次调用。
 6. **绘图**检查 `figures` 里对象的属性（数据、线型、颜色、标签），不比对图片；取线用 `figures[key].artist(样品号)`。
+   **刻度文字、图例位置**这类画出来才确定的结果，先 `fig.canvas.draw()` 再断言（2026-11-20，第三方审查：只看属性漏掉了负号刻度和图例位置两个 bug）。
 7. **弹窗、文件对话框**等交互用 `monkeypatch.setattr` 临时替换掉。
 8. **修 bug**：先写一个会失败的测试复现它（标 `xfail(strict=True)`），修好后删掉标记，留作回归测试。
 9. 新增或删除测试后，顺手更新本文件的「测试清单」和「已知 bug」。

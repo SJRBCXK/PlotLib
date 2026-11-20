@@ -8,12 +8,15 @@
 """
 from collections.abc import Callable
 from functools import partial
+from typing import Literal
 
 import numpy as np
 
 from .dataset import DataSet
 from .group import Group
-from .plot_spec import Axis, CurveKind, CurveSpec, FigureSpec
+from .plot_spec import Axis, CurveKind, CurveSpec, FigureSpec, LineStyle
+
+NO_STYLE = LineStyle()      # 不分组的线：没有分组样式
 
 
 def color_positions(sample_idx):
@@ -63,6 +66,14 @@ def get_column_data(dataset: DataSet, sample_idx: int, channel_idx: int, plotran
     raise RuntimeError("未找到对应的列数据")
 
 
+def sample_name(dataset: DataSet, sample_idx: int) -> str:
+    """样品名：同一样品的各列名称相同（Dataloader 按样品展开），取第一列即可。"""
+    for column in dataset.column:
+        if column.sample_idx == sample_idx:
+            return column.name
+    raise RuntimeError("未找到对应的列数据")
+
+
 def channel_unit(dataset: DataSet, channel_idx: int) -> str:
     """通道的单位。同一通道在所有样品里单位相同（DataSet._channel_units_unify_check），取第一列即可。"""
     for column in dataset.column:
@@ -79,15 +90,15 @@ def channel_unit(dataset: DataSet, channel_idx: int) -> str:
 # ============================================================================
 
 # make_curve 的类型：给出「样品号、分组名、色带位置、样式」，返回一条线
-type MakeCurve = Callable[[int, str | None, float | None, dict], CurveSpec]
-# make_figure 的类型：给出「key、线」，返回一张图（单位、neglog、版式已绑定）
-type MakeFigure = Callable[[str | int, list[CurveSpec]], FigureSpec]
+type MakeCurve = Callable[[int, str | None, float | None, LineStyle], CurveSpec]
+# make_figure 的类型：给出「key、线、这张图自己的名字」，返回一张图（单位、neglog、版式、图例标题写法已绑定）
+type MakeFigure = Callable[[str | int, list[CurveSpec], str | None], FigureSpec]
 
 
 def plan_multiline_figures(dataset: DataSet, groups: Group | None, channel_x: int, channel_y: int, *,
                  merge_groups: bool = False, plotrange: int | None = None,
                  neglog_x: bool = False, neglog_y: bool = False,
-                 kind: CurveKind = 'line') -> list[FigureSpec]:
+                 kind: CurveKind = 'line', legend_title: str | None = None) -> list[FigureSpec]:
     """
     生成多线图 / 分组绘图计划（DataPlotter.plot_multiline、plot_groups）。规则：
 
@@ -96,6 +107,7 @@ def plan_multiline_figures(dataset: DataSet, groups: Group | None, channel_x: in
     - 合并模式：一张 'main' 图；同一样品只画一次，归第一个包含它的分组（先到先得）；
       同组的线统一用组首色（该组写在第一位的样品的位置，只看本组配置，与其他分组无关）。
 
+    legend_title：图例标题，默认不加；'{name}' 在分离模式换成组名，只有一张图时没有名字可换、原样保留。
     groups 的检查与绘图器相同（resolve_groups）：None 表示不分组。
     """
     _check_not_empty(dataset)
@@ -106,8 +118,8 @@ def plan_multiline_figures(dataset: DataSet, groups: Group | None, channel_x: in
     # 调用时只传 (样品号, 分组名, 色带位置, 样式)。带过去哪些变量，就是这一行列出的这些。
     make_curve = partial(_make_curve, dataset=dataset, channel_x=channel_x, channel_y=channel_y,
                          plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=kind)
-    # 同理：一次计划里每张图的单位、neglog、版式都一样，三个函数只传 (key, 线)
-    make_figure = partial(FigureSpec,
+    # 同理：一次计划里每张图的单位、neglog、版式、图例标题写法都一样，三个函数只传 (key, 线, 这张图的名字)
+    make_figure = partial(_make_figure, legend_title=legend_title,
                           x_unit=channel_unit(dataset, channel_x), y_unit=channel_unit(dataset, channel_y),
                           neglog=_neglog_axes(x=neglog_x, y=neglog_y), layout='multiline')
 
@@ -120,18 +132,19 @@ def plan_multiline_figures(dataset: DataSet, groups: Group | None, channel_x: in
 
 def plan_xy_figures(dataset: DataSet, channel_x: int, channel_y: int, *,
                     plotrange: int | None = None, neglog_x: bool = False, neglog_y: bool = False,
-                    kind: CurveKind = 'line') -> list[FigureSpec]:
+                    kind: CurveKind = 'line', legend_title: str | None = None) -> list[FigureSpec]:
     """
     xy 单线图计划（DataPlotter.plot_xy）：每个样品一张图、一条线，key 是样品号。
     一张图只有一条线，不靠颜色区分样品：色带位置为 None，用后端默认色。
+    legend_title：图例标题，默认不加；'{name}' 换成每张图的样品名。
     """
     _check_not_empty(dataset)
     make_curve = partial(_make_curve, dataset=dataset, channel_x=channel_x, channel_y=channel_y,
                          plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=kind)
-    make_figure = partial(FigureSpec,
+    make_figure = partial(_make_figure, legend_title=legend_title,
                           x_unit=channel_unit(dataset, channel_x), y_unit=channel_unit(dataset, channel_y),
                           neglog=_neglog_axes(x=neglog_x, y=neglog_y), layout='xy')
-    return [make_figure(sample, [make_curve(sample, None, None, {})])
+    return [make_figure(sample, [make_curve(sample, None, None, NO_STYLE)], sample_name(dataset, sample))
             for sample in sorted(set(dataset.sample_idx))]
 
 
@@ -139,26 +152,28 @@ def plan_dual_y_figures(dataset: DataSet, left: tuple[int, int], right: tuple[in
                         plotrange: int | None = None,
                         neglog_x: bool = False, neglog_y: bool = False,
                         neglog_x2: bool = False, neglog_y2: bool = False,
-                        kinds: tuple[CurveKind, CurveKind] = ('line', 'line')) -> list[FigureSpec]:
+                        kinds: tuple[CurveKind, CurveKind] = ('line', 'line'),
+                        legend_title: str | None = '{name}') -> list[FigureSpec]:
     """
     双 Y 轴图计划（DataPlotter.plot_dual_y）：每个样品一张图、两条线，key 是样品号。
     left / right 各是 (X 通道, Y 通道)：左线挂左轴、右线挂右轴，两侧共用 X 轴（X 轴标题取左侧的单位）。
     两条线不带颜色（style 为空、色带位置为 None）：左红右蓝属于呈现，由排版预设 layouts.LAYOUTS['dual_y'] 决定（6.6b）。
+    两条线是同一个样品的两个变量：线的标签是各自的单位，样品名放在图例标题里（默认 '{name}'，2026-11-20 用户选定）。
     """
     _check_not_empty(dataset)
     left_curve = partial(_make_curve, dataset=dataset, channel_x=left[0], channel_y=left[1],
                          plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y,
-                         kind=kinds[0], axis='left')
+                         kind=kinds[0], axis='left', label_from='unit')
     right_curve = partial(_make_curve, dataset=dataset, channel_x=right[0], channel_y=right[1],
                           plotrange=plotrange, neglog_x=neglog_x2, neglog_y=neglog_y2,
-                          kind=kinds[1], axis='right')
-    make_figure = partial(FigureSpec,
+                          kind=kinds[1], axis='right', label_from='unit')
+    make_figure = partial(_make_figure, legend_title=legend_title,
                           x_unit=channel_unit(dataset, left[0]), y_unit=channel_unit(dataset, left[1]),
                           y2_unit=channel_unit(dataset, right[1]),
                           neglog=_neglog_axes(x=neglog_x, y=neglog_y, x2=neglog_x2, y2=neglog_y2),
                           layout='dual_y')
-    return [make_figure(sample, [left_curve(sample, None, None, {}),
-                                 right_curve(sample, None, None, {})])
+    return [make_figure(sample, [left_curve(sample, None, None, NO_STYLE), right_curve(sample, None, None, NO_STYLE)],
+                        sample_name(dataset, sample))
             for sample in sorted(set(dataset.sample_idx))]
 
 
@@ -173,28 +188,43 @@ def _neglog_axes(**flags: bool) -> frozenset[str]:
     return frozenset(axis for axis, on in flags.items() if on)
 
 
-def _make_curve(sample: int, group_name: str | None, color_position: float | None, style: dict, *,
+def _make_curve(sample: int, group_name: str | None, color_position: float | None, style: LineStyle, *,
                 dataset: DataSet, channel_x: int, channel_y: int, plotrange: int | None,
                 neglog_x: bool, neglog_y: bool,
-                kind: CurveKind = 'line', axis: Axis = 'left') -> CurveSpec:
+                kind: CurveKind = 'line', axis: Axis = 'left',
+                label_from: Literal['name', 'unit'] = 'name') -> CurveSpec:
     """生成一条线：取数，再连同分组名、色带位置、样式装进 CurveSpec。
-    * 之后的取数设置、画法、所在轴由各 plan_* 用 partial 绑定；调用方只传前四个。"""
-    x, y, _, label, _, _ = get_xy_data(
+    * 之后的取数设置、画法、所在轴、标签取样品名还是 Y 的单位，由各 plan_* 用 partial 绑定；调用方只传前四个。"""
+    x, y, _, name, _, unit = get_xy_data(
         dataset, sample, channel_x, channel_y,
         neglog_x=neglog_x, neglog_y=neglog_y, plotrange=plotrange,
     )
+    label = name if label_from == 'name' else unit
     return CurveSpec(sample_idx=sample, x=x, y=y, label=label,
                      group_name=group_name, color_position=color_position,
-                     style=dict(style),   # 每条线一份副本：以后改一条线的样式不影响同组其他线
+                     style=style,         # LineStyle 是冻结的，同组的线共用一个也不会互相影响
                      kind=kind, axis=axis)
+
+
+def _make_figure(key: str | int, curves: list[CurveSpec], name: str | None, *,
+                 legend_title: str | None, **figure_info) -> FigureSpec:
+    """
+    生成一张图。name 是这张图自己的名字（每个样品一张图时是样品名，分离模式是组名；只有一张图时为 None），
+    存进 FigureSpec.name（Plotly 翻页滑块的档位标签用它，6.8），并替换图例标题里的 '{name}'；
+    没有名字时不替换，标题照原样用（用户定：自由传参，不给单图加限制）。
+    * 之后的图例标题写法、单位、neglog、版式由各 plan_* 用 partial 绑定；调用方只传前三个。
+    """
+    if legend_title is not None and name is not None:
+        legend_title = legend_title.replace('{name}', name)
+    return FigureSpec(key=key, curves=curves, legend_title=legend_title, name=name, **figure_info)
 
 
 def _plan_all_samples(dataset: DataSet, positions: dict, make_curve: MakeCurve,
                       make_figure: MakeFigure) -> FigureSpec:
     """不分组：一张 'main' 图，全部样品按样品号排序，没有分组名和样式。"""
-    curves = [make_curve(sample, None, positions[sample], {})
+    curves = [make_curve(sample, None, positions[sample], NO_STYLE)
               for sample in sorted(set(dataset.sample_idx))]
-    return make_figure('main', curves)
+    return make_figure('main', curves, None)
 
 
 def _plan_separate(groups: Group, positions: dict, make_curve: MakeCurve,
@@ -205,7 +235,7 @@ def _plan_separate(groups: Group, positions: dict, make_curve: MakeCurve,
         style = _written_style(groups, name)
         curves = [make_curve(sample, name, positions[sample], style)
                   for sample in groups.sample_ids(name)]
-        figures.append(make_figure(name, curves))
+        figures.append(make_figure(name, curves, name))
     return figures
 
 
@@ -224,16 +254,9 @@ def _plan_merged(groups: Group, positions: dict, make_curve: MakeCurve,
     for sample, name in owner.items():
         head = groups.sample_ids(name)[0]
         curves.append(make_curve(sample, name, positions[head], _written_style(groups, name)))
-    return make_figure('main', curves)
+    return make_figure('main', curves, None)
 
 
-def _written_style(groups: Group, name: str) -> dict:
-    """该分组写了的样式，标准写法、不翻译；没写的字段不出现（对照 DataPlotter._group_style，那里会翻译）。"""
-    style = {}
-    if (linestyle := groups.linestyle(name)) is not None:
-        style['linestyle'] = linestyle
-    if (marker := groups.marker(name)) is not None:
-        style['marker'] = marker
-    if (color := groups.color(name)) is not None:
-        style['color'] = color
-    return style
+def _written_style(groups: Group, name: str) -> LineStyle:
+    """该分组写了的样式，装进 LineStyle（标准写法、不翻译；没写的字段为 None，样式对象化起不再是字典）。"""
+    return LineStyle(linestyle=groups.linestyle(name), marker=groups.marker(name), color=groups.color(name))

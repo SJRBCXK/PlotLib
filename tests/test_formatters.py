@@ -3,11 +3,12 @@
 
 make_xxx_formatter(...) 返回一个函数，交给 DataPlotter 的 axes_formatter /
 lines_formatter / legend_formatter 参数使用。测试直接在一张空图上调用它，再检查属性。
+2026-11-20 样式对象化：参数是样式对象（AxisStyle、FrameStyle、LineStyle、LegendStyle、TickStyle），没写的字段不改。
 """
 import matplotlib.pyplot as plt
 import pytest
 from matplotlib.colors import to_rgba
-from matplotlib.ticker import ScalarFormatter
+from matplotlib.ticker import FuncFormatter, ScalarFormatter
 
 from plotlib.formatters import (
     combine_formatters,
@@ -15,7 +16,10 @@ from plotlib.formatters import (
     make_legend_formatter,
     make_lines_formatter,
 )
+from plotlib.plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle
 from plotlib.plotter import DataPlotter
+
+PX = 100 / 72       # 默认 dpi 100 时 1 磅的像素数（Plotly 的线宽、字号按它换算；不是后端画的图用默认 dpi）
 
 
 @pytest.fixture
@@ -28,30 +32,35 @@ def fig_ax():
 # ══════════════════════════════════════════════
 # axes formatter
 # ══════════════════════════════════════════════
-def test_axes_defaults(fig_ax):
-    """不传 x_format/y_format 时不替换刻度格式器，保留 matplotlib 自动刻度。"""
+def test_axes_defaults_change_nothing(fig_ax):
+    """
+    什么都不给：什么都不改——刻度类型、已有的刻度格式（如排版预设的两位小数）、边框都保持原样。
+    回归（样式对象化时修）：以前刻度类型默认 'linear' 且总是调用 set_*scale，会把已有的刻度格式重置；边框默认隐藏上 / 右边。
+    """
     fig, ax = fig_ax
+    preset_format = FuncFormatter(lambda v, _: f"{v:.2f}")
+    ax.yaxis.set_major_formatter(preset_format)
     make_axes_formatter()(ax, fig)
 
     assert ax.get_xscale() == ax.get_yscale() == 'linear'
-    # set_xscale 会重建默认格式器，所以只检查类型，不比较对象身份。
+    assert ax.yaxis.get_major_formatter() is preset_format
     assert isinstance(ax.xaxis.get_major_formatter(), ScalarFormatter)
-    assert isinstance(ax.yaxis.get_major_formatter(), ScalarFormatter)
-    assert not ax.spines['top'].get_visible()
-    assert not ax.spines['right'].get_visible()
+    assert ax.spines['top'].get_visible() and ax.spines['right'].get_visible()
 
 
 def test_axes_scaler_without_format(fig_ax):
     """只给 scaler 时仍要换算显示值，按 '{x:g}' 输出。"""
     fig, ax = fig_ax
-    make_axes_formatter(xscaler=1000)(ax, fig)
+    make_axes_formatter(x=AxisStyle(scaler=1000))(ax, fig)
     assert ax.xaxis.get_major_formatter()(0.002, 0) == '2'
 
 
 def test_axes_scale_and_limits(fig_ax):
     fig, ax = fig_ax
-    make_axes_formatter(xscale_type='log', yscale_type='log',
-                        xlim_left=1, xlim_right=1000, ylim_bottom=0.5, ylim_top=5)(ax, fig)
+    make_axes_formatter(
+        x=AxisStyle(scale='log', limits=(1, 1000)),
+        y=AxisStyle(scale='log', limits=(0.5, 5)),
+    )(ax, fig)
 
     assert ax.get_xscale() == ax.get_yscale() == 'log'
     assert ax.get_xlim() == (1, 1000)
@@ -61,32 +70,35 @@ def test_axes_scale_and_limits(fig_ax):
 def test_axes_tick_format_and_scaler(fig_ax):
     """刻度文字 = format(刻度值 × scaler)，用于换算单位（如 s → ms）。"""
     fig, ax = fig_ax
-    make_axes_formatter(xscaler=1000, x_format='{x:.0f}', y_format='{y:.1e}')(ax, fig)
+    make_axes_formatter(
+        x=AxisStyle(format='{x:.0f}', scaler=1000),
+        y=AxisStyle(format='{y:.1e}'),
+    )(ax, fig)
 
     assert ax.xaxis.get_major_formatter()(2.0, 0) == '2000'
     assert ax.yaxis.get_major_formatter()(2.0, 0) == '2.0e+00'
 
 
-def test_axes_keep_spines(fig_ax):
+def test_axes_frame(fig_ax):
+    """FrameStyle：上 / 右边画不画、轴线宽，只改写了的。"""
     fig, ax = fig_ax
-    make_axes_formatter(hide_spines=False)(ax, fig)
-    assert ax.spines['top'].get_visible()
+    make_axes_formatter(frame=FrameStyle(top=False, width=5))(ax, fig)
+    assert not ax.spines['top'].get_visible()
+    assert ax.spines['right'].get_visible()                 # 没写 right：不改
+    assert {spine.get_linewidth() for spine in ax.spines.values()} == {5}
 
 
-def test_axes_custom_formation_receives_ax_and_fig(fig_ax):
-    """
-    custom_formation 里的函数以 (ax, fig) 调用。
-    注意：模块文档示例写的是 lambda ax: ...（单参数），按文档写会 TypeError。
-    """
+def test_axes_custom_receives_ax_and_fig(fig_ax):
+    """custom 里的函数以 (ax, fig) 调用（原 custom_formation，样式对象化时统一叫 custom）。"""
     fig, ax = fig_ax
     calls = []
-    make_axes_formatter(custom_formation=[lambda a, f: calls.append((a, f))])(ax, fig)
+    make_axes_formatter(custom=[lambda a, f: calls.append((a, f))])(ax, fig)
     assert calls == [(ax, fig)]
 
 
 def test_axes_formatter_works_with_plotter(eis_dataset):
     """集成：作为 axes_formatter 交给 DataPlotter（eis_bode.py 的用法）。"""
-    fmt = make_axes_formatter(xscale_type='log', x_format='{x:.1e}')
+    fmt = make_axes_formatter(x=AxisStyle(scale='log', format='{x:.1e}'))
     ax = DataPlotter(eis_dataset).plot_multiline(axes_formatter=fmt).figures['main'].axes['left']
     assert ax.get_xscale() == 'log'
 
@@ -98,8 +110,9 @@ def test_lines_style(fig_ax):
     """线型、标记、颜色用标准写法（style.py），由工厂翻译成 matplotlib 的原生值。"""
     _, ax = fig_ax
     line = ax.get_lines()[0]
-    make_lines_formatter(linewidth=5, linecolor='#ff0000', linestyle='dash',
-                         linemarker='circle', linemarkersize=9)([line])
+    make_lines_formatter(
+        LineStyle(width=5, color='#ff0000', linestyle='dash', marker='circle', marker_size=9),
+    )([line])
 
     assert line.get_linewidth() == 5
     assert line.get_color() == '#ff0000'
@@ -111,56 +124,70 @@ def test_lines_rgb_color(fig_ax):
     """RGB 写法 0~255，翻译成 matplotlib 的 0~1。"""
     _, ax = fig_ax
     line = ax.get_lines()[0]
-    make_lines_formatter(linecolor=(255, 0, 0))([line])
+    make_lines_formatter(LineStyle(color=(255, 0, 0)))([line])
     assert to_rgba(line.get_color()) == (1.0, 0.0, 0.0, 1.0)
 
 
 @pytest.mark.parametrize("backend", ["matplotlib", "plotly"])
 @pytest.mark.parametrize("kwargs", [
     dict(linestyle='--'),
-    dict(linemarker='o'),
-    dict(linecolor='tab:red'),
+    dict(marker='o'),
+    dict(color='tab:red'),
 ], ids=['mpl_linestyle', 'mpl_marker', 'mpl_color'])
 def test_lines_rejects_non_standard(backend, kwargs):
     """后端写法不是标准写法：创建 formatter 时就报错（两个后端一样），不等到画图。"""
     if backend == "plotly":
         pytest.importorskip("plotly.graph_objects")
     with pytest.raises(ValueError):
-        make_lines_formatter(backend=backend, **kwargs)
+        make_lines_formatter(LineStyle(**kwargs), backend=backend)
 
 
 def test_plotly_lines_style():
-    """Plotly：标准写法翻译成 Plotly 的原生值；自定义虚线按线宽换算成像素。"""
+    """Plotly：标准写法翻译成 Plotly 的原生值；线宽按 dpi 从磅换成像素，自定义虚线按换算后的线宽算像素。"""
     go = pytest.importorskip("plotly.graph_objects")
     fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
-    make_lines_formatter(backend="plotly", linestyle='dashdot', linemarker='triangle-up',
-                         linecolor=(255, 0, 0))(fig)
     trace = fig.data[0]
+    make_lines_formatter(
+        LineStyle(linestyle='dashdot', marker='triangle-up', color=(255, 0, 0)),
+        backend="plotly",
+    )([trace])         # 与 matplotlib 一样收线的列表
     assert trace.line.dash == 'dashdot'
     assert trace.marker.symbol == 'triangle-up'
     assert trace.line.color == 'rgb(255,0,0)'
 
-    make_lines_formatter(backend="plotly", linewidth=3, linestyle=(3, 5))(fig)
-    assert fig.data[0].line.dash == '9px,15px'
+    make_lines_formatter(LineStyle(width=3, linestyle=(3, 5)), backend="plotly")([trace])
+    assert trace.line.width == pytest.approx(3 * PX)
+    assert trace.line.dash == f"{3 * 3 * PX:g}px,{5 * 3 * PX:g}px"
+
+
+def test_plotly_lines_color_on_markers_only_trace():
+    """
+    纯散点（mode='markers'）看得见的是点：LineStyle 的 color 同时改点的颜色（与 matplotlib 的 set_color 一样，点跟着线色）。
+    回归（第三方审查 G）：曾只改隐藏的线色，点仍是原来的颜色。
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    trace = go.Figure(go.Scatter(x=[1, 2], y=[3, 4], mode='markers', marker_color='blue')).data[0]
+    make_lines_formatter(LineStyle(color='green'), backend="plotly")([trace])
+    assert trace.marker.color == 'green'
+    assert trace.mode == 'markers'
 
 
 def test_lines_custom_formations(fig_ax):
     _, ax = fig_ax
     line = ax.get_lines()[0]
     # 显式给 marker：不给时会触发下面 test_lines_without_marker 记录的 bug
-    make_lines_formatter(linemarker='circle',
-                         custom_formations=[lambda ln: ln.set_alpha(0.3)])([line])
+    make_lines_formatter(LineStyle(marker='circle'), custom=[lambda ln: ln.set_alpha(0.3)])([line])
     assert line.get_alpha() == 0.3
 
 
 def test_lines_without_marker(fig_ax):
     """
-    不传 linemarker 时不改 marker（保持默认无标记）。
+    没写 marker 时不改 marker（保持默认无标记）。
     回归：曾无条件调用 set_marker(None)，matplotlib 3.10 下直接报错。
     """
     _, ax = fig_ax
     line = ax.get_lines()[0]
-    make_lines_formatter(linecolor='red')([line])
+    make_lines_formatter(LineStyle(color='red'))([line])
     assert line.get_color() == 'red'
     assert line.get_marker() == 'None'
 
@@ -172,8 +199,9 @@ def test_legend_formatter(fig_ax):
     """回归：曾调用不存在的 Legend.set_fontsize，一调用就崩。"""
     _, ax = fig_ax
     legend = ax.legend()
-    make_legend_formatter(legend_fontsize=7, legend_location='upper left',
-                          legend_frameon=True, legend_draggable=False)([legend])
+    make_legend_formatter(
+        LegendStyle(font_size=7, position='upper left', frame=True, draggable=False),
+    )([legend])
     assert [t.get_fontsize() for t in legend.get_texts()] == [7]
     assert legend.get_frame_on()
     assert not legend.get_draggable()
@@ -184,27 +212,70 @@ def test_plotly_axes_keeps_auto_tickformat():
     """Plotly 默认不写 tickformat；显式传入时才翻译成 d3 格式。"""
     go = pytest.importorskip("plotly.graph_objects")
     fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
-    make_axes_formatter(backend="plotly")(fig)
+    make_axes_formatter(backend="plotly")('yaxis', fig)
     assert fig.layout.xaxis.tickformat is None
     assert fig.layout.yaxis.tickformat is None
 
-    make_axes_formatter(backend="plotly", x_format='{x:.1e}')(fig)
+    make_axes_formatter(x=AxisStyle(format='{x:.1e}'), backend="plotly")('yaxis', fig)
     assert fig.layout.xaxis.tickformat == '.1e'
     assert fig.layout.yaxis.tickformat is None
 
 
+def test_plotly_axes_formatter_targets_given_axis():
+    """
+    Plotly 的轴回调以 (轴名, fig) 调用（对应 matplotlib 的 (ax, fig)）：Y 轴设置只写到这根轴，
+    X 轴设置写到左右共用的 xaxis（对应 matplotlib twinx 共用 X 轴）；custom 同样收 (轴名, fig)。
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
+    calls = []
+    make_axes_formatter(
+        x=AxisStyle(limits=(1, 2)),
+        y=AxisStyle(limits=(0, 1)),
+        backend="plotly",
+        custom=[lambda axis, f: calls.append((axis, f))],
+    )('yaxis2', fig)
+
+    lay = fig.to_dict()["layout"]
+    assert lay['yaxis2']['range'] == [0, 1]
+    assert 'range' not in lay.get('yaxis', {})
+    assert lay['xaxis']['range'] == [1, 2]
+    assert len(calls) == 1 and calls[0][0] == 'yaxis2' and calls[0][1] is fig
+
+
+def test_plotly_legend_formatter():
+    """
+    Plotly 的图例回调与 matplotlib 一样收图例列表：[fig.layout.legend]。字号按 dpi 从磅换成像素；
+    位置与排版预设同一套写法（图内离边 0.02）。
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4], name='a'))
+    make_legend_formatter(
+        LegendStyle(font_size=11, position='upper left'),
+        backend="plotly",
+    )([fig.layout.legend])
+    assert fig.layout.legend.font.size == pytest.approx(11 * PX)
+    assert (fig.layout.legend.x, fig.layout.legend.xanchor) == (0.02, 'left')
+
+
+def test_plotly_legend_draggable_rejected():
+    """Plotly 的图例拖动是显示时的设置：图例回调里写 draggable=True → 创建时报错，提示怎么设。"""
+    pytest.importorskip("plotly.graph_objects")
+    with pytest.raises(ValueError, match='legendPosition'):
+        make_legend_formatter(LegendStyle(draggable=True), backend="plotly")
+
+
 @pytest.mark.parametrize("axis, kwargs, expected", [
     # 只给一侧：用 autorangeoptions，另一侧自动；对数轴边界取 log10
-    ("xaxis", dict(xlim_left=0.001, xscale_type='log'),
+    ("xaxis", dict(x=AxisStyle(scale='log', limits=(0.001, None))),
      dict(autorange=True, autorangeoptions={'minallowed': -3.0})),
-    ("xaxis", dict(xlim_right=5), dict(autorange=True, autorangeoptions={'maxallowed': 5})),
-    ("yaxis", dict(ylim_bottom=-2), dict(autorange=True, autorangeoptions={'minallowed': -2})),
-    ("yaxis", dict(ylim_top=100, yscale_type='log'),
+    ("xaxis", dict(x=AxisStyle(limits=(None, 5))), dict(autorange=True, autorangeoptions={'maxallowed': 5})),
+    ("yaxis", dict(y=AxisStyle(limits=(-2, None))), dict(autorange=True, autorangeoptions={'minallowed': -2})),
+    ("yaxis", dict(y=AxisStyle(scale='log', limits=(None, 100))),
      dict(autorange=True, autorangeoptions={'maxallowed': 2.0})),
     # 两侧都给：固定 range
-    ("xaxis", dict(xlim_left=1, xlim_right=1000, xscale_type='log'),
-     dict(range=[0.0, 3.0], autorange=False)),
-    ("yaxis", dict(ylim_bottom=-1, ylim_top=1), dict(range=[-1, 1], autorange=False)),
+    ("xaxis", dict(x=AxisStyle(scale='log', limits=(1, 1000))), dict(range=[0.0, 3.0], autorange=False)),
+    ("yaxis", dict(y=AxisStyle(limits=(-1, 1))), dict(range=[-1, 1], autorange=False)),
 ])
 def test_plotly_axis_bounds(axis, kwargs, expected):
     """
@@ -213,24 +284,24 @@ def test_plotly_axis_bounds(axis, kwargs, expected):
     """
     go = pytest.importorskip("plotly.graph_objects")
     fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
-    make_axes_formatter(backend="plotly", **kwargs)(fig)
+    make_axes_formatter(backend="plotly", **kwargs)('yaxis', fig)
     layout = fig.to_dict()["layout"]
     assert {k: layout[axis][k] for k in expected} == expected
     assert layout[axis].get("autorange") not in ("min", "max")
-    # 只设置了一根轴的边界，另一根轴不应被写入范围设置
-    other = layout["yaxis" if axis == "xaxis" else "xaxis"]
+    # 只设置了一根轴的边界，另一根轴不应被写入范围设置（样式对象化起没写的轴根本不写）
+    other = layout.get("yaxis" if axis == "xaxis" else "xaxis", {})
     assert not {"range", "autorangeoptions"} & other.keys()
 
 
 @pytest.mark.render
 @pytest.mark.parametrize("axis, kwargs, expected", [
     # expected = (低端, 高端)；None 表示该端自动，只检查它覆盖了数据
-    ("xaxis", dict(xscale_type='log', xlim_left=5), (5, None)),
-    ("xaxis", dict(xscale_type='log', xlim_left=0.1), (0.1, None)),   # 边界在数据之外也照用
-    ("xaxis", dict(xscale_type='log', xlim_right=50), (None, 50)),
-    ("yaxis", dict(ylim_bottom=15), (15, None)),
-    ("yaxis", dict(ylim_top=60), (None, 60)),
-    ("yaxis", dict(ylim_bottom=0, ylim_top=100), (0, 100)),
+    ("xaxis", dict(x=AxisStyle(scale='log', limits=(5, None))), (5, None)),
+    ("xaxis", dict(x=AxisStyle(scale='log', limits=(0.1, None))), (0.1, None)),   # 边界在数据之外也照用
+    ("xaxis", dict(x=AxisStyle(scale='log', limits=(None, 50))), (None, 50)),
+    ("yaxis", dict(y=AxisStyle(limits=(15, None))), (15, None)),
+    ("yaxis", dict(y=AxisStyle(limits=(None, 60))), (None, 60)),
+    ("yaxis", dict(y=AxisStyle(limits=(0, 100))), (0, 100)),
 ])
 def test_plotly_axis_bounds_after_render(eis_dataset, render, axis, kwargs, expected):
     """
@@ -257,24 +328,19 @@ def test_plotly_axis_bounds_after_render(eis_dataset, render, axis, kwargs, expe
         assert high == pytest.approx(want_high)
 
 
-def test_combine_formatters_runs_in_order_and_skips_none():
-    go = pytest.importorskip("plotly.graph_objects")
-    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4], name='a'))
+def test_combine_formatters_runs_in_order_and_skips_none(fig_ax):
+    """按传入顺序调用、跳过 None，每个都收到同样的参数（两个后端通用；接入绘图器的对照在 test_backend_parity.py）。"""
+    fig, ax = fig_ax
     calls = []
-    fmt = combine_formatters(
-        make_lines_formatter(backend="plotly", linewidth=5),
-        None,
-        make_legend_formatter(backend="plotly", legend_fontsize=11),
-        lambda f: calls.append(f),
-    )
-    fmt(fig)
-    assert fig.data[0].line.width == 5
-    assert fig.layout.legend.font.size == 11
-    assert calls == [fig]
+    combine_formatters(lambda a, f: calls.append(('first', a, f)), None,
+                       lambda a, f: calls.append(('second', a, f)))(ax, fig)
+    assert calls == [('first', ax, fig), ('second', ax, fig)]
 
 
 def test_legend_formatter_works_with_plotter(eis_dataset):
     """集成：作为 legend_formatter 交给 DataPlotter——修复前这条路径从没跑通过。"""
     ax = DataPlotter(eis_dataset).plot_multiline(
-        legend_formatter=make_legend_formatter(legend_fontsize=7)).figures['main'].axes['left']
+        legend_formatter=make_legend_formatter(
+            LegendStyle(font_size=7),
+        )).figures['main'].axes['left']
     assert all(t.get_fontsize() == 7 for t in ax.get_legend().get_texts())

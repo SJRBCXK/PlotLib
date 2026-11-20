@@ -17,9 +17,10 @@ dependencies = [
 
 # 可选依赖：pip install -e ".[interactive]" / pip install -e ".[test]"，可组合：".[interactive,gui]"
 [project.optional-dependencies]
-# Plotly 交互绘图（InteractivePlotter、formatter 的 backend="plotly"、html_export）。
-# 下限：autorangeoptions 需要 5.17+；与 kaleido 1.x 配合需要 6.1+。
-interactive = ["plotly>=6.1"]
+# Plotly 后端（DataPlotter(backend="plotly")、formatter 的 backend="plotly"、html_export）。
+# 下限：autorangeoptions 需要 5.17+；与 kaleido 1.x 配合需要 6.1+；
+# 模板里的 minorloglabels（对数轴不显示小号次刻度标签）从 6.3 起才有（第三方审查 F）。
+interactive = ["plotly>=6.3"]
 # Qt 界面：tools/ 下的 *_qt.py 工具和 PySide6 学习示例。
 gui = ["PySide6"]
 # 分析脚本用到的科学计算（scripts/eis_bode.py 的寻峰）。

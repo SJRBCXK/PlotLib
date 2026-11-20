@@ -13,6 +13,7 @@ from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
+from plotlib.plot_spec import AxisStyle
 from plotlib.group import Group
 
 plt.close('all')
@@ -50,17 +51,13 @@ data_groups = {
 # 格式化器配置
 # ============================================================
 Nyquist_formatter = make_axes_formatter(
-    xscale_type='log',
-    yscale_type='log',
-    x_format='{x:.1e}',
-    y_format='{y:.1e}'
+    x=AxisStyle(scale='log', format='{x:.1e}'),
+    y=AxisStyle(scale='log', format='{y:.1e}'),
 )
 
 NegLog_formatter = make_axes_formatter(
-    xscale_type='log',
-    yscale_type='log',
-    x_format='{x:.1e}',
-    y_format='{y:.1e}'
+    x=AxisStyle(scale='log', format='{x:.1e}'),
+    y=AxisStyle(scale='log', format='{y:.1e}'),
 )
 
 def Group_lines_formatter(lines):

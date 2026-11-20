@@ -17,6 +17,7 @@ plan_multiline_figures 只做「决定」，不碰任何绘图库：画几张图
 import pytest
 
 from plotlib.group import Group
+from plotlib.plot_spec import LineStyle
 
 
 def plan(dataset, config=None, **kwargs):
@@ -57,7 +58,7 @@ def test_no_groups_one_main_figure(eis_dataset):
     assert samples(main) == [0, 1, 2]
     assert positions(main) == pytest.approx([0, 1/3, 2/3])
     assert [c.group_name for c in main.curves] == [None] * 3
-    assert [c.style for c in main.curves] == [{}] * 3
+    assert [c.style for c in main.curves] == [LineStyle()] * 3
 
 
 def test_separate_mode_one_figure_per_group(eis_dataset):
@@ -71,8 +72,8 @@ def test_separate_mode_one_figure_per_group(eis_dataset):
     assert positions(a) == pytest.approx([0, 1/3])
     assert positions(b) == pytest.approx([1/3, 2/3])
     assert [c.group_name for c in a.curves + b.curves] == ['A', 'A', 'B', 'B']
-    assert [c.style for c in a.curves] == [{'linestyle': 'dash'}] * 2
-    assert [c.style for c in b.curves] == [{}] * 2
+    assert [c.style for c in a.curves] == [LineStyle(linestyle='dash')] * 2
+    assert [c.style for c in b.curves] == [LineStyle()] * 2
 
 
 def test_merge_mode_first_group_wins(eis_dataset):
@@ -84,7 +85,7 @@ def test_merge_mode_first_group_wins(eis_dataset):
     assert samples(main) == [0, 1, 2]
     assert [c.group_name for c in main.curves] == ['A', 'A', 'B']
     assert positions(main) == pytest.approx([0, 0, 1/3])
-    assert [c.style for c in main.curves] == [{'linestyle': 'dash'}] * 2 + [{}]
+    assert [c.style for c in main.curves] == [LineStyle(linestyle='dash')] * 2 + [LineStyle()]
 
 
 def test_merge_mode_writing_order_is_priority(eis_dataset):
@@ -98,7 +99,7 @@ def test_merge_mode_writing_order_is_priority(eis_dataset):
     assert samples(main) == [1, 2, 0]
     assert [c.group_name for c in main.curves] == ['B', 'B', 'A']
     assert positions(main) == pytest.approx([1/3, 1/3, 0])
-    assert [c.style for c in main.curves] == [{}, {}, {'linestyle': 'dash'}]
+    assert [c.style for c in main.curves] == [LineStyle(), LineStyle(), LineStyle(linestyle='dash')]
 
 
 # ──────────────────────────────────────────────
@@ -124,7 +125,7 @@ def test_group_style_kept_as_written(eis_dataset):
     config = {'A': {'num': [0, 1], 'marker': 'circle', 'color': (255, 0, 0)}}
     a = plan(eis_dataset, config)[0]
 
-    assert [c.style for c in a.curves] == [{'marker': 'circle', 'color': (255, 0, 0)}] * 2
+    assert [c.style for c in a.curves] == [LineStyle(marker='circle', color=(255, 0, 0))] * 2
     assert positions(a) == pytest.approx([0, 1/3])
 
 
@@ -208,7 +209,7 @@ def test_xy_one_figure_per_sample(eis_dataset):
         assert curve.x.tolist() == [10 * (k + 1), 20 * (k + 1), 30 * (k + 1)]
         assert curve.y.tolist() == [-1 * (k + 1), -2 * (k + 1), -3 * (k + 1)]
         assert curve.color_position is None
-        assert (curve.kind, curve.axis, curve.style) == ('line', 'left', {})
+        assert (curve.kind, curve.axis, curve.style) == ('line', 'left', LineStyle())
 
 
 def test_xy_neglog(eis_dataset):
@@ -236,8 +237,8 @@ def test_dual_y_two_curves_per_sample(eis_dataset):
     assert (figure.x_unit, figure.y_unit, figure.y2_unit) == (UNITS[FREQ], UNITS[ZS_RE], UNITS[ZS_IM])
 
     left, right = figure.curves
-    assert (left.axis, left.kind, left.style) == ('left', 'line', {})
-    assert (right.axis, right.kind, right.style) == ('right', 'scatter', {})
+    assert (left.axis, left.kind, left.style) == ('left', 'line', LineStyle())
+    assert (right.axis, right.kind, right.style) == ('right', 'scatter', LineStyle())
     assert left.color_position is None and right.color_position is None
     assert left.x.tolist() == [1, 10, 100] and left.y.tolist() == [10, 20, 30]
     assert right.x.tolist() == [10, 20, 30] and right.y.tolist() == [-1, -2, -3]
@@ -252,3 +253,75 @@ def test_dual_y_neglog_per_axis(eis_dataset):
     assert left.x.tolist() == [1, 10, 100]
     assert right.x.tolist() == [1, 2, 3]
     assert figure.neglog == {'x2'}
+
+
+def test_dual_y_labels_are_units(eis_dataset):
+    """
+    双 Y 轴两条线是同一个样品的两个变量：图例里每条线写自己的单位，样品名放在图例标题里
+    （2026-11-20 用户选定，参照 Origin 图）。
+    """
+    from plotlib.plan import plan_dual_y_figures
+
+    figure = plan_dual_y_figures(eis_dataset, left=(FREQ, ZS_RE), right=(FREQ, ZS_IM))[0]
+    assert [c.label for c in figure.curves] == [UNITS[ZS_RE], UNITS[ZS_IM]]
+    assert figure.legend_title == 'S0'
+
+
+# ──────────────────────────────────────────────
+# 图例标题（2026-11-20 用户提出）：四种绘图方法都能设；'{name}' 换成每张图自己的名字
+#   每个样品一张图（xy、双 Y 轴）→ 样品名；分离模式每组一张图 → 组名；
+#   只有一张图（多线、合并）没有自己的名字 → '{name}' 不替换；其余文字在任何图里都照用
+# ──────────────────────────────────────────────
+def test_legend_title_defaults(eis_dataset):
+    """默认：多线、分组（分离 / 合并）、xy 不加图例标题；双 Y 轴用样品名。"""
+    from plotlib.plan import plan_dual_y_figures, plan_xy_figures
+
+    for figures in (plan(eis_dataset), plan(eis_dataset, overlap_config()),
+                    plan(eis_dataset, overlap_config(), merge_groups=True),
+                    plan_xy_figures(eis_dataset, ZS_RE, ZS_IM)):
+        assert {f.legend_title for f in figures} == {None}
+    dual = plan_dual_y_figures(eis_dataset, left=(FREQ, ZS_RE), right=(FREQ, ZS_IM))
+    assert [f.legend_title for f in dual] == ['S0', 'S1', 'S2']
+
+
+def test_legend_title_name_placeholder(eis_dataset):
+    """'{name}' 换成每张图自己的名字，前后可以加文字；None 表示不加。"""
+    from plotlib.plan import plan_dual_y_figures, plan_xy_figures
+
+    separate = plan(eis_dataset, overlap_config(), legend_title='Group {name}')
+    assert [f.legend_title for f in separate] == ['Group A', 'Group B']
+    xy = plan_xy_figures(eis_dataset, ZS_RE, ZS_IM, legend_title='{name}')
+    assert [f.legend_title for f in xy] == ['S0', 'S1', 'S2']
+    dual = plan_dual_y_figures(eis_dataset, left=(FREQ, ZS_RE), right=(FREQ, ZS_IM),
+                               legend_title='Sample: {name}')
+    assert [f.legend_title for f in dual] == ['Sample: S0', 'Sample: S1', 'Sample: S2']
+    untitled = plan_dual_y_figures(eis_dataset, left=(FREQ, ZS_RE), right=(FREQ, ZS_IM), legend_title=None)
+    assert {f.legend_title for f in untitled} == {None}
+
+
+def test_figure_name(eis_dataset):
+    """
+    每张图自己的名字（6.8；Plotly 翻页时档位标签用它，'{name}' 也换成它）：
+    每个样品一张图（xy、双 Y 轴）→ 样品名；分离模式 → 组名；只有一张图（不分组、合并）→ None。
+    """
+    from plotlib.plan import plan_dual_y_figures, plan_xy_figures
+
+    assert [f.name for f in plan(eis_dataset)] == [None]
+    assert [f.name for f in plan(eis_dataset, overlap_config(), merge_groups=True)] == [None]
+    assert [f.name for f in plan(eis_dataset, overlap_config())] == ['A', 'B']
+    assert [f.name for f in plan_xy_figures(eis_dataset, ZS_RE, ZS_IM)] == ['S0', 'S1', 'S2']
+    dual = plan_dual_y_figures(eis_dataset, left=(FREQ, ZS_RE), right=(FREQ, ZS_IM))
+    assert [f.name for f in dual] == ['S0', 'S1', 'S2']
+
+
+@pytest.mark.parametrize("grouped", [False, True], ids=['no_groups', 'merge'])
+def test_legend_title_on_single_figure(eis_dataset, grouped):
+    """
+    只有一张图（不分组、合并模式）：标题是自由文字，照原样用（如突出某个样品时直接写它的名字）；
+    这种图没有「自己的名字」，'{name}' 不替换、也不报错（用户定：不给单图加限制）。
+    """
+    def draw(title):
+        return plan(eis_dataset, overlap_config() if grouped else None, merge_groups=grouped, legend_title=title)
+
+    assert draw('S1 (highlighted)')[0].legend_title == 'S1 (highlighted)'
+    assert draw('{name}')[0].legend_title == '{name}'

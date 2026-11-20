@@ -12,7 +12,8 @@ from .backends import get_backend
 from .dataset import DataSet
 from .group import Group
 from .plan import plan_dual_y_figures, plan_multiline_figures, plan_xy_figures, resolve_groups
-from .plot_spec import Appearance, AxesFormatter, CurveKind, DrawnFigure, FigureSpec
+from .plot_spec import (Appearance, AxesFormatter, CurveKind, DrawnFigure, FigureSpec, FrameStyle, LegendStyle,
+                        LineStyle, TickStyle)
 
 # 整图回调：整张图画完、各轴回调之后调用一次，拿到图和全部坐标轴 {'left': ..., 'right': ...}
 type FigureFormatter = Callable[[Any, dict[str, Any]], Any]
@@ -37,14 +38,18 @@ class DataPlotter:
 
     格式化
     ------
-    所有绘图方法支持三类按轴的回调和一个整图回调（matplotlib 收原生对象，Plotly 都收 fig）：
+    所有绘图方法支持三类按轴的回调和一个整图回调。按轴回调由后端按轴调用，只拿到这根轴自己的东西，
+    两个后端形状对应（matplotlib 是原生对象，Plotly 的轴是 layout 里的轴名）：
 
-    - axes_formatter(ax, fig)     : 坐标轴（Plotly：axes_formatter(fig)）
-    - lines_formatter(lines)      : 线条（Plotly：lines_formatter(fig)）
-    - legend_formatter(legends)   : 图例（Plotly：legend_formatter(fig)）
+    - axes_formatter(ax, fig)     : 坐标轴（Plotly：axes_formatter(轴名, fig)，如 ('yaxis2', fig)）
+    - lines_formatter(lines)      : 这根轴上的线（Plotly：这根轴上的 trace 列表）
+    - legend_formatter(legends)   : 图例（Plotly：[fig.layout.legend]）；一张图只有一个图例，归左轴，
+                                    给双 Y 轴的右轴配图例回调会报错
     - figure_formatter(fig, axes) : 整图，axes = {'left': ..., 'right': ...}（Plotly 是配置里的轴名）
 
     顺序：默认排版 → 各轴回调 → 整图回调 → 负对数刻度。
+    样式对象（plot_spec.py）：DataPlotter(lines=, frame=, legend=, ticks=) 管全部的图，
+    make_axes_formatter(x=, y=, frame=, ticks=) / make_lines_formatter(LineStyle) / make_legend_formatter(LegendStyle) 再改单根轴。
 
     使用示例
     --------
@@ -61,14 +66,13 @@ class DataPlotter:
         font_family: str = 'Arial',
         font_size: int = 22,
         font_weight: str = 'bold',
-        line_width: float = 3,
-        axis_width: float = 3,
-        linestyle: str | tuple = 'solid',
+        lines: LineStyle | None = None,
+        frame: FrameStyle | None = None,
+        legend: LegendStyle | None = None,
+        ticks: TickStyle | None = None,
         plotrange: int | None = None,
         channel_x: int = 0,
         channel_y: int = 1,
-        legend_font_size: int = 10,
-        tick_width: float = 3,
         figsize: tuple[float, float] | None = None,
         dpi: float = 100,
         backend: str = 'matplotlib',
@@ -87,17 +91,17 @@ class DataPlotter:
             色带名，由后端解析（matplotlib 默认 'plasma'）。
         font_family, font_size, font_weight :
             字体、字号（磅）、字重。
-        line_width, axis_width, tick_width :
-            线宽、坐标轴线宽、刻度线宽（磅）。
-        linestyle : str or tuple
-            默认线型，标准写法（style.py）：'solid'、'dash'、'dot'、'dashdot'，
-            或自定义虚线 (实线长, 空白长, ...)。分组没写 linestyle 时也用它。
+        lines, frame, legend, ticks : 样式对象, optional
+            对本绘图器的所有图生效的线、边框、图例、刻度（plot_spec.LineStyle / FrameStyle / LegendStyle / TickStyle）。
+            只写要改的字段，其余沿用库默认值 DEFAULT_* 和各版式的预设；这里写了的盖过预设（如 frame=FrameStyle(top=True)
+            让所有版式都画上边框）。单根轴、单条线再改用 make_*_formatter。2026-11-20 样式对象化：
+            原 line_width、linestyle → lines.width、lines.linestyle；axis_width → frame.width；
+            legend_font_size → legend.font_size；tick_width → ticks.width（不留别名）。
+            lines 不收颜色：颜色按样品配色（cmap），统一颜色请用分组配置的 color 或 make_lines_formatter。
         plotrange : int, optional
             绘制的数据点数，None 表示全部。
         channel_x, channel_y : int
             X、Y 轴数据的通道号（样品内的列序号）。plot_xy 不传通道时也用它们。
-        legend_font_size : int
-            图例字号（磅）。
         figsize : tuple, optional
             图尺寸（宽, 高），单位英寸，对本绘图器的所有绘图方法生效。
             None 时各方法用各自的默认值：plot_multiline 为 (10, 8)，plot_groups 为 (16, 12)，
@@ -109,11 +113,13 @@ class DataPlotter:
         """
         groups = resolve_groups(groups, dataset)
 
-        # 外观参数打包成后端无关的 Appearance，由后端翻译（matplotlib → rc_params，Plotly → 模板）；
-        # 非标准写法的 linestyle 在这里创建后端时就报错
+        if lines is not None and lines.color is not None:
+            raise ValueError("lines 不收颜色：颜色按样品配色（cmap）；统一颜色请用分组配置的 color 或 make_lines_formatter")
+        # 外观参数打包成后端无关的 Appearance，由后端翻译（matplotlib → rc_params 等，Plotly → 模板）；
+        # 存的是用户写的那一层，库默认和版式预设由后端叠加。非标准写法、后端做不到的设置在这里创建后端时就报错
         appearance = Appearance(font_family=font_family, font_size=font_size, font_weight=font_weight,
-                                line_width=line_width, axis_width=axis_width, linestyle=linestyle,
-                                legend_font_size=legend_font_size, tick_width=tick_width, dpi=dpi)
+                                lines=lines or LineStyle(), frame=frame or FrameStyle(),
+                                legend=legend or LegendStyle(), ticks=ticks or TickStyle(), dpi=dpi)
         self.backend = get_backend(backend, appearance, cmap)
 
         self.dataset: DataSet = dataset
@@ -133,11 +139,17 @@ class DataPlotter:
                 formatters: dict[str, AxesFormatter],
                 figure_formatter: FigureFormatter | None = None) -> DataPlotter:
         """
-        把计划逐张交给后端画，结果存进 self.figures = {计划的 key: DrawnFigure}（每次调用前清空）。
-        画图的事（建图、画线、排版、formatter、neglog）全在后端：self.backend.draw。
+        把计划交给后端画，结果存进 self.figures = {计划的 key: DrawnFigure}（每次调用前清空）。
+        画图的事（建图、画线、排版、formatter、neglog）全在后端。
+        多张计划时按后端的能力分两种（6.8）：有 draw_pages 的后端（Plotly）画成一个 Figure 多页，
+        其余（matplotlib）一张计划一张图。与滑块一样按「有没有这个能力」判断，不按后端名字。
         """
-        self.figures = {spec.key: self.backend.draw(spec, figsize, formatters, figure_formatter)
-                        for spec in specs}
+        draw_pages = getattr(self.backend, 'draw_pages', None)
+        if draw_pages is not None and len(specs) > 1:
+            drawn = draw_pages(specs, figsize, formatters, figure_formatter)
+        else:
+            drawn = [self.backend.draw(spec, figsize, formatters, figure_formatter) for spec in specs]
+        self.figures = {page.spec.key: page for page in drawn}
         return self
 
     # ========================================================================
@@ -146,25 +158,42 @@ class DataPlotter:
 
     def add_slider(self, mode: str = 'cumulative', slider_formatter=None):
         """
-        给刚画好的图加控制曲线显示的滑块，返回这张图（Plotly 的 go.Figure，可直接交给 html_export）。
+        曲线滑块：给刚画好的一页图加控制曲线显示的滑块，一条线一档；返回这张图（Plotly 的 go.Figure，可直接交给 html_export）。
 
         只有 Plotly 后端有滑块（BACKEND_PLAN 原则 3：滑块是画完之后的可选交互）；
-        只能用于只有一张图的结果（plot_multiline、合并模式的 plot_groups）。
+        只能用于一页图（plot_multiline、合并模式的 plot_groups）；多页图（分组分离模式、xy、双 Y 轴）用 add_page_slider。
         mode：'single' 每档只显示当前曲线；'cumulative'（默认）每档显示第一条到当前曲线。
         slider_formatter：接收安装后的 Slider 并原地修改，在默认外观之后执行。
         """
-        # 不是每个后端都有滑块：按「有没有这个能力」判断，而不是按后端名字（以后加别的交互后端也适用）
-        add_slider = getattr(self.backend, 'add_slider', None)
-        if add_slider is None:
+        add_slider = self._slider_method('add_slider')
+        if len(self.figures) != 1:
+            raise RuntimeError(f"当前结果有 {len(self.figures)} 页，曲线滑块只能加在一页图上；"
+                               f"按页翻请用 add_page_slider()")
+        [drawn] = self.figures.values()
+        return add_slider(drawn.fig, mode, slider_formatter)
+
+    def add_page_slider(self, mode: str = 'single', slider_formatter=None):
+        """
+        翻页滑块（6.8）：多页图（分组分离模式、xy、双 Y 轴在 Plotly 里画成一个 Figure 多页）一页一档；返回这个 go.Figure。
+
+        档位标签是每页的名字（组名 / 样品名）；翻页时标题、图例标题换成这一页的；当前值默认不加前缀。
+        mode 与曲线滑块相同：'single'（默认）每档只显示当前页；'cumulative' 每档显示第一页到当前页。
+        只有一页时用 add_slider。
+        """
+        add_page_slider = self._slider_method('add_page_slider')
+        if len(self.figures) == 1:
+            raise RuntimeError("当前结果只有一页，翻页滑块用不上；按曲线滑动请用 add_slider()")
+        return add_page_slider(list(self.figures.values()), mode, slider_formatter)
+
+    def _slider_method(self, name: str):
+        """两种滑块共用的检查：后端有没有这个能力（不按后端名字判断）、是否已经画过图。返回后端的方法。"""
+        method = getattr(self.backend, name, None)
+        if method is None:
             raise NotImplementedError(f"滑块只有 Plotly 后端有，当前后端是 {self.backend.name!r}；"
                                       f"请用 DataPlotter(..., backend='plotly')")
         if not self.figures:
             raise RuntimeError("请先调用绘图方法，再添加滑块")
-        if len(self.figures) != 1:
-            raise RuntimeError(f"滑块只能加在一张图上，当前有 {len(self.figures)} 张"
-                               f"（xy、双 Y 轴、分组分离模式会画出多张图；按组翻页见 STRUCTURE_REVIEW 6.8）")
-        [drawn] = self.figures.values()
-        return add_slider(drawn.fig, mode, slider_formatter)
+        return method
 
     # ========================================================================
     # 绘图方法：计划 → 打包回调 → _render
@@ -178,6 +207,7 @@ class DataPlotter:
                        neglog_y: bool = False,
                        plot_kind: CurveKind = 'line',
                        figure_formatter: FigureFormatter | None = None,
+                       legend_title: str | None = None,
                        ) -> DataPlotter:
         """
         多线图：所有样品画在同一坐标系，每个样品一条线（原 plot_objects）。
@@ -192,6 +222,9 @@ class DataPlotter:
             画法：'line' / 'scatter' / 'bar'。
         figure_formatter : callable, optional
             整图回调 (fig, axes)。
+        legend_title : str, optional
+            图例标题，默认不加。'{name}' 会换成每张图自己的名字（xy、双 Y 轴是样品名，分组分离模式是组名）；
+            只有一张图时没有这个名字，'{name}' 原样保留。
 
         Returns
         -------
@@ -201,7 +234,7 @@ class DataPlotter:
         # 不分组（groups=None）：一张 'main' 图，全部样品；不看 self.groups
         specs = plan_multiline_figures(self.dataset, None, self.channel_x, self.channel_y,
                                        plotrange=self.plotrange, neglog_x=neglog_x, neglog_y=neglog_y,
-                                       kind=plot_kind)
+                                       kind=plot_kind, legend_title=legend_title)
         formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
         return self._render(specs, self.figsize or (10, 8), formatters, figure_formatter)
 
@@ -214,6 +247,7 @@ class DataPlotter:
                     merge_groups: bool = False,
                     plot_kind: CurveKind = 'line',
                     figure_formatter: FigureFormatter | None = None,
+                    legend_title: str | None = None,
                     ) -> DataPlotter:
         """
         分组绘图：按 self.groups（Group 对象）分组画（原 group_plotter）。
@@ -227,8 +261,8 @@ class DataPlotter:
 
         分组样式
         --------
-        分组配置里写了 linestyle / marker / color 就应用（两种模式一样）；linestyle / marker 仅 plot_kind='line'，
-        color 对所有 plot_kind 生效，写了时这组所有样品都用它。没写时：线型用 linestyle；
+        分组配置里写了 linestyle / marker / color 就应用（两种模式一样）；linestyle 仅 plot_kind='line'，
+        marker 对 'line' 和 'scatter' 生效，color 对所有 plot_kind 生效，写了时这组所有样品都用它。没写时：线型用 linestyle；
         颜色在分离模式按样品配色，合并模式统一为组首色。优先级：默认样式 < 分组样式 < lines_formatter。
 
         Returns
@@ -242,13 +276,15 @@ class DataPlotter:
                 plot_kind=plot_kind, neglog_x=neglog_x, neglog_y=neglog_y,
                 axes_formatter=axes_formatter, lines_formatter=lines_formatter,
                 legend_formatter=legend_formatter, figure_formatter=figure_formatter,
+                legend_title=legend_title,
             )
 
         # 分组规则（去重、先到先得、组首色、样式归属）都在计划里；合并模式的计划只有一张 'main' 图，
         # 所以两种模式走同一个 _render
         specs = plan_multiline_figures(self.dataset, self.groups, self.channel_x, self.channel_y,
                                        merge_groups=merge_groups, plotrange=self.plotrange,
-                                       neglog_x=neglog_x, neglog_y=neglog_y, kind=plot_kind)
+                                       neglog_x=neglog_x, neglog_y=neglog_y, kind=plot_kind,
+                                       legend_title=legend_title)
         formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
         return self._render(specs, self.figsize or (16, 12), formatters, figure_formatter)
 
@@ -262,6 +298,7 @@ class DataPlotter:
                 channel_x: int | None = None,
                 channel_y: int | None = None,
                 figure_formatter: FigureFormatter | None = None,
+                legend_title: str | None = None,
                 ) -> DataPlotter:
         """
         x-y 单线图：每个样品一张图、一条线，画两个通道的关系（如 Nyquist 图：Zs' 对 Zs''；原 subplotter_yy / subplotter_xy）。
@@ -281,7 +318,8 @@ class DataPlotter:
         specs = plan_xy_figures(self.dataset,
                                 self.channel_x if channel_x is None else channel_x,
                                 self.channel_y if channel_y is None else channel_y,
-                                plotrange=self.plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=plot_kind)
+                                plotrange=self.plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=plot_kind,
+                                legend_title=legend_title)
         formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
         return self._render(specs, self.figsize or (12, 8), formatters, figure_formatter)
 
@@ -300,17 +338,20 @@ class DataPlotter:
                     neglog_y2: bool = False,
                     plot_kinds: tuple[CurveKind, CurveKind] = ('line', 'line'),
                     figure_formatter: FigureFormatter | None = None,
+                    legend_title: str | None = '{name}',
                     ) -> DataPlotter:
         """
         双 Y 轴图：每个样品一张图，左线挂左轴、右线挂右轴，共用 X 轴（原 subplotter_xyy）。
         左红右蓝（排版预设）；X 轴标题取左侧 X 通道的单位。
+        图例在图外上方，两条线都进图例、各写自己的单位；图例标题默认是样品名（legend_title='{name}'，None 不加）。
 
         Parameters
         ----------
         left, right : (int, int)
             左线、右线的 (X 通道, Y 通道)。
         axes_formatter, lines_formatter, legend_formatter : callable, optional
-            左轴的回调；right_axes_formatter 等是右轴的回调。
+            左轴的回调；right_axes_formatter、right_lines_formatter 是右轴的回调。
+            图例只有一个（两条线都在里面），归 legend_formatter；给 right_legend_formatter 会报错。
         neglog_x, neglog_y, neglog_x2, neglog_y2 : bool
             左线的 X、Y 与右线的 X、Y 是否按负对数画（右线的 X 与左轴共用，只取绝对值）。
         plot_kinds : (str, str)
@@ -327,7 +368,7 @@ class DataPlotter:
         specs = plan_dual_y_figures(
             self.dataset, left=left, right=right, plotrange=self.plotrange,
             neglog_x=neglog_x, neglog_y=neglog_y, neglog_x2=neglog_x2, neglog_y2=neglog_y2,
-            kinds=plot_kinds,
+            kinds=plot_kinds, legend_title=legend_title,
         )
         # 每根轴一组回调
         formatters = {

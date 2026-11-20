@@ -11,6 +11,7 @@ from .formatters import (
 )
 from .group import Group
 from .plan import color_positions
+from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
 
 __all__ = [
     'DataSet',
@@ -23,6 +24,12 @@ __all__ = [
     'make_legend_formatter',
     'combine_formatters',
     'Group',
+    # 样式对象（2026-11-20）
+    'AxisStyle',
+    'FrameStyle',
+    'LegendStyle',
+    'LineStyle',
+    'TickStyle',
 ]
 # 交互图（Plotly）用 DataPlotter(..., backend='plotly')；Plotly 后端在用到时才导入，没装 Plotly 也能用其余部分。
 

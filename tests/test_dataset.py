@@ -115,6 +115,49 @@ def test_unit_mismatch_between_samples_raises():
         g0.expandata(g1)
 
 
+def zero_rows(sample_idx):
+    """有两个通道、没有行的样品（例如找不到峰时的峰表）。"""
+    return make(np.empty((0, 2)), ['p', 'p'], ['x', 'y'], sample_idx)
+
+
+def test_expandata_zero_row_sample_first():
+    """
+    回归（第三方审查 B）：零行样品也有列，拼接时补 NaN，不能当成「空容器」。
+    曾用 data.size == 0 判断空：(0, 2) 的 size 也是 0，第二次拼接时整块矩阵被替换，报维度不匹配。
+    """
+    ds = DataSet().expandata(zero_rows(0)).expandata(make([[1, 2]], ['b', 'b'], ['x', 'y'], 1))
+
+    assert ds.data.shape == (1, 4)
+    assert np.isnan(ds.data[0, :2]).all()
+    np.testing.assert_array_equal(ds.data[0, 2:], [1, 2])
+    assert ds.sample_idx == [0, 0, 1, 1]
+
+
+def test_expandata_all_zero_rows():
+    """全部样品都是零行：列照常拼上，行数仍是 0。"""
+    ds = DataSet().expandata(zero_rows(0)).expandata(zero_rows(1))
+    assert ds.data.shape == (0, 4)
+    assert ds.num_samples == 2
+
+
+def test_expandata_failure_leaves_dataset_unchanged():
+    """
+    回归（第三方审查 B）：拼接失败（单位冲突）后原对象不变，之后还能继续正确拼接。
+    曾先改数据和元数据、后校验，报错时原对象已经多了这次的列。
+    """
+    ds = make([[1, 2]], ['a', 'a'], ['x', 'y'], 0)
+    with pytest.raises(RuntimeError, match="Unit mismatch"):
+        ds.expandata(make([[1, 2]], ['c', 'c'], ['x', 'z'], 1))
+
+    assert ds.data.shape == (1, 2)
+    assert ds.names == ['a', 'a'] and ds.units == ['x', 'y'] and ds.sample_idx == [0, 0]
+    assert ds.num_samples == 1
+
+    ds.expandata(make([[3, 4]], ['c', 'c'], ['x', 'y'], 1))
+    np.testing.assert_array_equal(ds.data, [[1, 2, 3, 4]])
+    assert ds.num_samples == 2
+
+
 # ══════════════════════════════════════════════
 # Column / ColumnList：列视图
 # ══════════════════════════════════════════════

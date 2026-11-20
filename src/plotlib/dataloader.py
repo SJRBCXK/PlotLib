@@ -60,7 +60,7 @@ class Dataloader:
         Parameters
         ----------
         DATASET_FRACTION : float, optional
-            样品数计算系数，默认 1/6。
+            已不参与计算（样品数改由列数整除每样品列数得出），保留只为兼容现有脚本；步骤 7.1 删除。
         COLUMNS_PER_DATASET : int, optional
             每个样品的列数，默认 6。
         """
@@ -147,25 +147,27 @@ class Dataloader:
             if self.file_path is None:
                 raise ValueError("文件路径未指定。")
 
-        # 根据扩展名读取文件
-        if self.file_path.endswith('.csv'):
-            self.dataset = pd.read_csv(self.file_path, low_memory=False, header=None)
-        elif self.file_path.endswith(('.xlsx', '.xls')):
-            self.dataset = pd.read_excel(self.file_path, header=None)
-        elif self.file_path.endswith(('.txt', '.dat')):
+        # 根据扩展名读取文件。先读进局部变量：读不了就报错，不会沿用上一次读到的 self.dataset（第三方审查 A）
+        path = self.file_path
+        if path.endswith('.csv'):
+            table = pd.read_csv(path, low_memory=False, header=None)
+        elif path.endswith(('.xlsx', '.xls')):
+            table = pd.read_excel(path, header=None)
+        elif path.endswith(('.txt', '.dat')):
             # sep=r'\s+'：任意连续空白（空格/制表符）作为分隔符。
             # pandas 3 已移除 delim_whitespace=True；python engine 不支持 low_memory，此处不再传
-            self.dataset = pd.read_csv(self.file_path, sep=r'\s+', header=None)
-
-        if self.dataset is None:
-            raise RuntimeError("数据集加载失败")
+            table = pd.read_csv(path, sep=r'\s+', header=None)
+        else:
+            raise ValueError(f"不支持的文件格式：{path}；支持 .csv、.xlsx、.xls、.txt、.dat")
+        self.dataset = table
 
         # 验证列数
         total_cols = len(self.dataset.columns)
         if total_cols % self.COLUMNS_PER_DATASET != 0:
             raise ValueError("Column count must be a multiple of COLUMNS_PER_DATASET.")
 
-        self.num_samples = int(len(self.dataset.columns) * self.DATASET_FRACTION)
+        # 整数除法：不用 DATASET_FRACTION（浮点数，int(98 * (1/49)) 得 1，会静默丢样品；第三方审查 A）
+        self.num_samples = total_cols // self.COLUMNS_PER_DATASET
 
         # 提取样品名（每列重复对应样品的标识）
         self.names = [self.dataset.iloc[0, i * self.COLUMNS_PER_DATASET]

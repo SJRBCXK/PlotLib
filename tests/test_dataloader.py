@@ -106,10 +106,42 @@ def test_txt_with_mixed_whitespace(tmp_path):
 
 
 def test_unsupported_extension_raises(tmp_path):
+    """不支持的扩展名：报错信息里写出这个文件名，方便用户看出是哪个文件。"""
     path = tmp_path / 'data.json'
     path.write_text('{}', encoding='utf-8')
-    with pytest.raises(RuntimeError, match="数据集加载失败"):
+    with pytest.raises(ValueError, match=r"data\.json"):
         load_file(path, columns_per_group=4)
+
+
+def test_reused_loader_with_unsupported_extension_raises(tmp_path):
+    """
+    回归（第三方审查 A）：同一个 loader 先读成功，再换成不支持的后缀。
+    曾因没有对应的读取分支、沿用上一次读到的表，「成功」返回了上一份数据。
+    """
+    from plotlib.dataloader import Dataloader
+
+    loader = Dataloader(DATASET_FRACTION=1 / 4, COLUMNS_PER_DATASET=4)
+    loader.file_path = str(write_grouped_file(tmp_path / 'a.csv', EIS_UNITS, {'S0': [[1, 2, 3]]}))
+    loader.load_data()
+
+    bad = tmp_path / 'b.json'
+    bad.write_text('{}', encoding='utf-8')
+    loader.file_path = str(bad)
+    with pytest.raises(ValueError, match=r"b\.json"):
+        loader.load_data()
+
+
+def test_sample_count_exact_for_any_width(make_dataset):
+    """
+    回归（第三方审查 A）：每样品 49 列、共 98 列时，int(98 * (1/49)) 得 1，
+    第二个样品被静默丢掉，后面的校验也照着错的样品数通过。样品数应由整数除法得出。
+    """
+    units = [f"U{i}" for i in range(48)]
+    row = list(range(48))
+    ds = make_dataset(units, {'A': [row], 'B': [row]})
+
+    assert ds.num_samples == 2
+    assert ds.data.shape == (1, 96)
 
 
 # ──────────────────────────────────────────────

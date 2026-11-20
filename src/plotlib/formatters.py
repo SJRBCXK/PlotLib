@@ -1,54 +1,42 @@
 """
-绘图格式化器工厂模块
+绘图格式化器工厂（2026-11-20 样式对象化）：参数是样式对象（plot_spec.py），按 backend 返回 matplotlib 或 Plotly 的回调。
 
-同一套格式参数，通过 backend 选择返回 matplotlib 或 Plotly 的格式回调。
+使用方式（matplotlib，默认 backend；Plotly 加 backend='plotly'，写法相同）:
+    from plotlib import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
 
-使用方式（matplotlib，默认 backend）:
     axes_fmt = make_axes_formatter(
-        xlim_left=0, xlim_right=10,
-        custom_formation=[lambda ax, fig: ax.grid(True)],
+        x=AxisStyle(scale='log', limits=(0.001, None), format='{x:.0e}'),
+        y=AxisStyle(limits=(None, 0.002)),
+        frame=FrameStyle(top=True),          # 这根轴的边框
+        ticks=TickStyle(length=10),          # 这根轴的刻度
+        custom=[lambda ax, fig: ax.grid(True)],
     )
-    lines_fmt = make_lines_formatter(linewidth=2, linestyle='dash')
-    legend_fmt = make_legend_formatter(legend_fontsize=12)
+    lines_fmt = make_lines_formatter(LineStyle(width=2, linestyle='dash'))
+    legend_fmt = make_legend_formatter(LegendStyle(font_size=12, position='upper left'))
 
-    plotter.plot_multiline(
-        axes_formatter=axes_fmt,
-        lines_formatter=lines_fmt,
-        legend_formatter=legend_fmt,
-    )
-
-使用方式（Plotly）:
-    axes_fmt = make_axes_formatter(backend="plotly", xscale_type="log")
-    lines_fmt = make_lines_formatter(backend="plotly", linestyle="dash")
-    legend_fmt = make_legend_formatter(backend="plotly", legend_fontsize=18)
-
-    DataPlotter(data, backend="plotly").plot_multiline(
-        axes_formatter=axes_fmt,
-        lines_formatter=lines_fmt,
-        legend_formatter=legend_fmt,
-    )
-    # Plotly 的三种回调都收 fig；也可以用 combine_formatters 合成一个，交给任意一个参数
+    plotter.plot_multiline(axes_formatter=axes_fmt, lines_formatter=lines_fmt, legend_formatter=legend_fmt)
+    # 同一种回调可以用 combine_formatters 合成一个（两个后端都可以）
 
 注意事项:
-    - 刻度格式、线条与图例参数默认为 None，表示保持原样；只修改明确传入的设置，
-      因此不会覆盖绘图器按样品分配的颜色，也不会覆盖自动刻度格式。
-      坐标轴的尺度（默认 'linear'）、刻度线宽和 hide_spines 仍总会应用。
-    - matplotlib 回调：轴 (ax, fig)、线条 (lines)、图例 (legends)。
-      Plotly 回调：三者都接收 Figure，可组合后交给 figure_formatter。
-    - 线条的 linestyle / linemarker / linecolor 只收 style.py 的标准写法（如 'dash'、'circle'、'red'），
-      由工厂翻译成各 backend 的原生值；后端写法（如 '--'、'o'）在创建 formatter 时就报错。
-    - 自定义回调使用各 backend 的原生对象，不自动翻译：
-      轴为 (ax, fig) 或 (fig)，线为 Line2D 或 Scatter，图例为 Legend 或 layout.Legend。
-    - Plotly 刻度格式支持 {x:.Nf}、{x:.Ne}、{x:.Ng}、{x:.N%}；
-      暂不支持显示值缩放 xscaler/yscaler，以及 symlog/logit。
-    - Plotly 图例拖动属于显示配置，需要时使用
-      fig.show(config={"edits": {"legendPosition": True}})。
+    - 样式对象里没写的字段（None）不改：沿用 DataPlotter(...) 的全局设置和版式预设（不会覆盖按样品分配的颜色、
+      预设的刻度格式）。刻度类型也一样，没写就不调用 set_*scale（以前总是调用，会冲掉预设的刻度格式）。
+    - 单位：线宽、标记大小、字号、刻度长短都是磅；Plotly 按这张图的 dpi 换成像素（后端记在 fig.layout.meta['dpi']）。
+    - 回调由后端按轴调用，只拿到这根轴自己的东西（第三方审查 E 起，两个后端形状对应）：
+        matplotlib：轴 (ax, fig)、线条 (这根轴的 Line2D 列表)、图例 (legends)；
+        Plotly：    轴 (轴名, fig)，如 ('yaxis2', fig)、线条 (这根轴的 trace 列表)、图例 ([fig.layout.legend])。
+      X 轴左右共用：右轴回调里的 x 设置也作用在共用的 X 轴上（与 matplotlib twinx 一样）；
+      边框、刻度在右轴回调里只改右侧（右轴自己的轴线、Y 轴）。要一次改整张图，用绘图方法的 figure_formatter(fig, axes)。
+    - 写法只收 style.py 的标准写法（如 'dash'、'circle'、'red'）；后端写法（如 '--'、'o'）在创建 formatter 时就报错，
+      后端做不到的设置（Plotly 的 scaler、symlog / logit、次刻度文字的字号、图例拖动）也在创建时报错。
+    - custom 里的自定义回调用各 backend 的原生对象，不自动翻译：
+      轴为 (ax, fig) 或 (轴名, fig)，线为 Line2D 或 Scatter，图例为 Legend 或 layout.Legend。
+    - Plotly 刻度格式支持 {x:.Nf}、{x:.Ne}、{x:.Ng}、{x:.N%}。
+    - Plotly 图例拖动属于显示配置，需要时使用 fig.show(config={"edits": {"legendPosition": True}})。
 """
-import math
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 
-from matplotlib.ticker import FuncFormatter, LogLocator
+from matplotlib.lines import Line2D
 
 if TYPE_CHECKING:
     # 仅用于类型提示；只用 matplotlib 时不需要安装 Plotly。
@@ -56,414 +44,269 @@ if TYPE_CHECKING:
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
     from matplotlib.legend import Legend
-    from matplotlib.lines import Line2D
 
-from .style import (Backend, check_backend, translate_color, translate_linestyle, translate_marker,
-                    translate_tick_format)
+from .backends.matplotlib_styles import apply_axis, apply_frame, apply_legend, apply_minor, apply_tick_params
+from .plot_spec import Appearance, AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
+from .style import (Backend, check_axis_style, check_backend, check_frame, check_legend_style, check_line_style,
+                    check_ticks, translate_axis_style, translate_frame, translate_legend_style, translate_line_style,
+                    translate_ticks)
 
 # 各 backend 返回的回调类型；入口函数用 overload 按 backend 选择其一。
 type MplAxesFormatter = Callable[[Axes, Figure], None]
 type MplLinesFormatter = Callable[[Iterable[Line2D]], None]
 type MplLegendFormatter = Callable[[Iterable[Legend]], None]
-type PlotlyFormatter = Callable[[go.Figure], None]
+type PlotlyAxesFormatter = Callable[[str, go.Figure], None]            # (轴名, fig)
+type PlotlyLinesFormatter = Callable[[Iterable[Any]], None]            # 这根轴的 trace 列表
+type PlotlyLegendFormatter = Callable[[Iterable[go.layout.Legend]], None]
 
 
-_check_backend = check_backend     # backend 校验与样式词汇共用 style.py 的一份
+def _figure_dpi(fig) -> float:
+    """这张图的 dpi：后端画图时记在 fig.layout.meta['dpi']；不是后端画的图（或拿不到图）用默认 dpi。"""
+    meta = None if fig is None else cast("go.Layout", fig.layout).meta
+    return meta.get('dpi', Appearance().dpi) if isinstance(meta, dict) else Appearance().dpi
 
 
-class AxesFormatterFactory:
-    """坐标轴格式化器工厂类"""
+# ══════════════════════════════════════════════
+# 坐标轴：x / y（AxisStyle）、边框（FrameStyle）、刻度（TickStyle）
+# ══════════════════════════════════════════════
+@overload
+def make_axes_formatter(x: AxisStyle | None = ..., y: AxisStyle | None = ..., frame: FrameStyle | None = ...,
+                        ticks: TickStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                        backend: Literal["matplotlib"] = ...) -> MplAxesFormatter: ...
+@overload
+def make_axes_formatter(x: AxisStyle | None = ..., y: AxisStyle | None = ..., frame: FrameStyle | None = ...,
+                        ticks: TickStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                        backend: Literal["plotly"]) -> PlotlyAxesFormatter: ...
+@overload
+def make_axes_formatter(x: AxisStyle | None = ..., y: AxisStyle | None = ..., frame: FrameStyle | None = ...,
+                        ticks: TickStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                        backend: Backend) -> MplAxesFormatter | PlotlyAxesFormatter: ...
+def make_axes_formatter(x: AxisStyle | None = None, y: AxisStyle | None = None, frame: FrameStyle | None = None,
+                        ticks: TickStyle | None = None, custom: Iterable[Callable] | None = None, *,
+                        backend: Backend = "matplotlib") -> MplAxesFormatter | PlotlyAxesFormatter:
+    """
+    坐标轴回调。x、y 各一个 AxisStyle（刻度类型、范围、刻度格式、换算、着色）；frame、ticks 改这根轴的边框和刻度。
+    都只改写了的字段，没给的沿用全局与预设。custom：自定义回调列表，matplotlib 以 (ax, fig) 调用，Plotly 以 (轴名, fig) 调用。
+    返回：matplotlib formatter(ax, fig)；Plotly formatter(轴名, fig)。
+    """
+    check_backend(backend)
+    # 写错或后端做不到的，创建时就报错（不等到画图）
+    for style in (x, y):
+        if style is not None:
+            check_axis_style(style, backend)
+    if frame is not None:
+        check_frame(frame)
+    if ticks is not None:
+        check_ticks(ticks, backend)
+    custom = list(custom or ())
 
-    @staticmethod
-    def create(
-        xlim_left=None,
-        xlim_right=None,
-        ylim_bottom=None,
-        ylim_top=None,
-        xscale_type='linear',
-        yscale_type='linear',
-        xscaler=1.0,
-        yscaler=1.0,
-        x_format=None,
-        y_format=None,
-        hide_spines=True,
-        custom_formation=None,
-        *,
-        backend: Backend = "matplotlib",
-    ):
-        """
-        创建坐标轴格式回调。
+    if backend == "matplotlib":
+        x_native = None if x is None else translate_axis_style(x, backend, 'x')
+        y_native = None if y is None else translate_axis_style(y, backend, 'y')
+        frame_native = None if frame is None else translate_frame(frame, backend)
+        tick_native = None if ticks is None else translate_ticks(ticks, backend)
 
-        参数:
-            xlim_left / xlim_right: X 轴左右边界（数据值），None 表示自动。
-            ylim_bottom / ylim_top: Y 轴上下边界（数据值），None 表示自动。
-            xscale_type / yscale_type: 'linear' 或 'log'（matplotlib 另支持 symlog/logit）。
-            xscaler / yscaler: 刻度文字显示值 = 刻度值 × scaler，不修改数据（仅 matplotlib）。
-            x_format / y_format: 刻度数字格式，如 '{x:.2f}'、'{y:.1e}'；None 表示不改，
-                保留 backend 的自动刻度（matplotlib 给了 scaler 时按 '{x:g}' 显示）。
-            hide_spines: True 隐藏上/右边框；False 显示四周边框。
-            custom_formation: 自定义回调列表，matplotlib 以 (ax, fig) 调用，Plotly 以 (fig) 调用。
-            backend: 'matplotlib' 或 'plotly'，只能以关键字传入。
+        def formatter(ax, fig, *_args, **_kwargs):
+            _ = _args, _kwargs  # 标记为有意未使用
+            if x_native is not None:
+                apply_axis(ax, 'x', x_native)
+            if y_native is not None:
+                apply_axis(ax, 'y', y_native)
+            if frame_native is not None:
+                apply_frame(ax, frame_native)
+            # 刻度放在改刻度类型之后：改类型会重置次刻度；这里照改，后端的全局补设就不会再动它
+            if tick_native is not None:
+                apply_tick_params(ax, tick_native)
+                apply_minor(ax, tick_native, only_defaults=False)
+            for func in custom:
+                func(ax, fig)
 
-        返回:
-            matplotlib: formatter(ax, fig)；Plotly: formatter(fig)。
-        """
-        _check_backend(backend)
+        return formatter
 
-        if backend == "matplotlib":
-            def tick_formatter(fmt, key, scaler):
-                """返回刻度文字格式器；不需要改时返回 None，保留 matplotlib 默认。"""
-                if fmt is None and scaler == 1:
-                    return None
-                text_fmt: str = fmt or '{' + key + ':g}'
-                return FuncFormatter(lambda v, _: text_fmt.format(**{key: v * scaler}))
+    x_native = None if x is None else translate_axis_style(x, backend, 'x')
+    y_native = None if y is None else translate_axis_style(y, backend, 'y')
 
-            x_tick_formatter = tick_formatter(x_format, 'x', xscaler)
-            y_tick_formatter = tick_formatter(y_format, 'y', yscaler)
+    def plotly_formatter(axis: str, fig: go.Figure):
+        """axis 是这根轴在 layout 里的名字（'yaxis' / 'yaxis2'），由后端按轴传入；X 轴左右共用 'xaxis'。"""
+        if x_native is not None:
+            fig.update_layout(xaxis=x_native)
+        if y_native is not None:
+            fig.update_layout({axis: y_native})
+        if frame is not None:
+            _apply_plotly_frame(fig, axis, translate_frame(frame, 'plotly', _figure_dpi(fig)))
+        if ticks is not None:
+            _apply_plotly_ticks(fig, axis, ticks)
+        for func in custom:
+            func(axis, fig)
 
-            def formatter(ax, fig, *_args, **_kwargs):
-                _ = _args, _kwargs  # 标记为有意未使用
-
-                # X 轴
-                ax.set_xscale(xscale_type)
-                if xscale_type == 'log':
-                    ax.xaxis.set_major_locator(LogLocator(base=10))
-                if xlim_left is not None:
-                    ax.set_xlim(left=xlim_left)
-                if xlim_right is not None:
-                    ax.set_xlim(right=xlim_right)
-                if x_tick_formatter is not None:
-                    ax.xaxis.set_major_formatter(x_tick_formatter)
-                ax.xaxis.set_tick_params(which='both', width=3, direction='out')
-
-                # Y 轴
-                ax.set_yscale(yscale_type)
-                if yscale_type == 'log':
-                    ax.yaxis.set_major_locator(LogLocator(base=10))
-                if ylim_bottom is not None:
-                    ax.set_ylim(bottom=ylim_bottom)
-                if ylim_top is not None:
-                    ax.set_ylim(top=ylim_top)
-                if y_tick_formatter is not None:
-                    ax.yaxis.set_major_formatter(y_tick_formatter)
-                ax.tick_params(axis='y', which='both', width=3, direction='out')
-
-                # 隐藏上/右边框
-                if hide_spines:
-                    ax.spines['right'].set_visible(False)
-                    ax.spines['top'].set_visible(False)
-
-                for func in custom_formation or ():
-                    func(ax, fig)
-
-            return formatter
-
-        # ── Plotly：创建回调前先校验，转换不了的设置立即报错 ──
-        # Plotly 没有 Python FuncFormatter，只翻译可直接对应的数字格式。
-        # None 表示不设置 tickformat，保留 Plotly 自动格式。
-        # 刻度格式的翻译在翻译层（style.translate_tick_format），与 Plotly 后端的排版预设共用
-        tick_formats: list[str | None] = [
-            None if fmt is None else translate_tick_format(fmt, 'plotly') for fmt in (x_format, y_format)
-        ]
-        if xscaler != 1 or yscaler != 1:
-            raise ValueError("Plotly 暂不支持显示值缩放 xscaler/yscaler；不会修改原始数据替代")
-        if xscale_type not in ("linear", "log") or yscale_type not in ("linear", "log"):
-            raise ValueError("Plotly 公共轴格式目前只支持 linear 和 log")
-
-        axis_settings = []
-        for scale, bounds, tick_format in (
-            (xscale_type, (xlim_left, xlim_right), tick_formats[0]),
-            (yscale_type, (ylim_bottom, ylim_top), tick_formats[1]),
-        ):
-            if scale == "log" and any(v is not None and v <= 0 for v in bounds):
-                raise ValueError("对数轴边界必须大于 0")
-
-            options: dict = dict(
-                type=scale,
-                tickwidth=3,
-                ticks="outside",
-                # hide_spines=False 时镜像轴线，对应 matplotlib 的上/右边框。
-                mirror=not hide_spines,
-            )
-            if tick_format is not None:
-                options["tickformat"] = tick_format
-            # 公共输入使用数据值；Plotly 对数轴的边界使用 log10。
-            low, high = (
-                math.log10(v) if scale == "log" and v is not None else v
-                for v in bounds
-            )
-            if low is not None and high is not None:
-                options.update(range=[low, high], autorange=False)
-            elif low is not None or high is not None:
-                # 只给一侧时用 minallowed / maxallowed：自动范围照常计算，
-                # 给定的一侧直接作为边界。不用 autorange="min"/"max"：
-                # Plotly.js 在 automargin 扩边重绘时会把它重置成完全自动，边界失效。
-                options["autorange"] = True
-                options["autorangeoptions"] = (
-                    {"minallowed": low} if low is not None else {"maxallowed": high}
-                )
-            axis_settings.append(options)
-
-        def plotly_formatter(fig: go.Figure):
-            fig.update_xaxes(axis_settings[0])
-            fig.update_yaxes(axis_settings[1])
-            for func in custom_formation or ():
-                func(fig)
-
-        return plotly_formatter
+    return plotly_formatter
 
 
-class LinesFormatterFactory:
-    """线条格式化器工厂类"""
+def _apply_plotly_frame(fig: go.Figure, axis: str, frame: dict) -> None:
+    """
+    单轴的边框（Plotly，对照 matplotlib_styles.apply_frame）：左轴回调改 X、Y 两根轴的线宽，上边 = X 轴镜像、右边 = Y 轴镜像；
+    右轴回调只改右轴的线宽，上边照改，右边就是右轴自己的轴线。有右轴时左 Y 轴不镜像（否则会叠在右轴上）。
+    """
+    layout = cast(Any, fig.layout)
+    left = axis == 'yaxis'
+    if 'linewidth' in frame:
+        for name in (['xaxis', axis] if left else [axis]):
+            fig.update_layout({name: dict(linewidth=frame['linewidth'])})
+    if 'top' in frame:
+        fig.update_layout(xaxis_mirror=frame['top'])
+    if 'right' in frame and left:
+        fig.update_layout(yaxis_mirror=frame['right'] and layout.yaxis2.overlaying is None)
 
-    @staticmethod
-    def create(
-        linewidth=None,
-        linecolor=None,
-        linestyle=None,
-        linemarker=None,
-        linemarkersize=None,
-        custom_formations=None,
-        *,
-        backend: Backend = "matplotlib",
-    ):
-        """
-        创建线条格式回调；参数为 None 时保持原样。
 
-        参数:
-            linewidth: 线宽。
-            linecolor: 颜色：CSS 颜色名、'#rrggbb' 或 RGB 元组 (0~255)；
-                会覆盖所有曲线的按样品配色，通常只在单条曲线时使用。
-            linestyle: 'solid'、'dash'、'dot'、'dashdot'，或自定义虚线 (实线长, 空白长, ...)。
-            linemarker: 'circle'、'square'、'triangle-up'、'triangle-down'、'diamond'、'cross'、'x'。
-            linemarkersize: 标记大小。
-            custom_formations: 自定义回调列表，以单条 Line2D 或 Scatter 调用。
-            backend: 'matplotlib' 或 'plotly'，只能以关键字传入。
-            （线型、标记、颜色的标准写法见 style.py）
+def _apply_plotly_ticks(fig: go.Figure, axis: str, ticks: TickStyle) -> None:
+    """
+    单轴的刻度（Plotly）：磅按这张图的 dpi 换成像素。
+    左轴回调连 X 轴一起改（对应 matplotlib 左轴的 x、y）；右轴回调只改自己的 Y 轴（X 轴左右共用，归左轴）。
+    """
+    native = translate_ticks(ticks, 'plotly', _figure_dpi(fig))
+    for target in (['xaxis', axis] if axis == 'yaxis' else [axis]):
+        settings = dict(native)
+        # Plotly 的 minor.ticks 同时管次刻度的显示和朝向：只改朝向（没写 minor）时，不能把关掉的次刻度打开
+        if ticks.minor is None and 'ticks' in settings.get('minor', {}) and not _minor_ticks_shown(fig, target):
+            settings['minor'] = {k: v for k, v in settings['minor'].items() if k != 'ticks'}
+        fig.update_layout({target: settings})
 
-        返回:
-            matplotlib: formatter(lines)；Plotly: formatter(fig)，只修改 Scatter。
-        """
-        _check_backend(backend)
 
-        # 在创建 formatter 时就翻译：非标准写法立刻报错，不等到画图
-        # （Plotly 的自定义虚线按 linewidth 换算像素，未给时用 Plotly 默认线宽）
-        native_style = None if linestyle is None else translate_linestyle(linestyle, backend, linewidth)
-        native_marker = None if linemarker is None else translate_marker(linemarker, backend)
-        native_color = None if linecolor is None else translate_color(linecolor, backend)
+def _minor_ticks_shown(fig: go.Figure, axis: str) -> bool:
+    """这根轴现在显不显示次刻度：轴上写了就看轴上的，没写看模板（模板只有 xaxis / yaxis 两套，yaxis2 用 yaxis 的）。"""
+    # layout[轴名] 的类型标注过宽（Plotly 按名字动态取子对象），按 Any 读
+    layout = cast(Any, fig.layout)
+    value = layout[axis].minor.ticks
+    if value is None:
+        template_axis = 'xaxis' if axis.startswith('x') else 'yaxis'
+        value = layout.template.layout[template_axis].minor.ticks
+    return bool(value)
 
-        if backend == "matplotlib":
-            def formatter(lines, *_args, **_kwargs):
-                _ = _args, _kwargs
 
-                for line in lines:
-                    if linewidth is not None:
-                        line.set_linewidth(linewidth)
-                    if native_color is not None:
-                        line.set_color(native_color)
-                    if native_style is not None:
-                        line.set_linestyle(native_style)
-                    # 未指定 marker 时不动它：set_marker(None) 在 matplotlib 3.10 会报错
-                    if native_marker is not None:
-                        line.set_marker(native_marker)
-                    if linemarkersize is not None:
-                        line.set_markersize(linemarkersize)
-                    for func in custom_formations or ():
-                        func(line)
+# ══════════════════════════════════════════════
+# 线（LineStyle）
+# ══════════════════════════════════════════════
+@overload
+def make_lines_formatter(style: LineStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                         backend: Literal["matplotlib"] = ...) -> MplLinesFormatter: ...
+@overload
+def make_lines_formatter(style: LineStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                         backend: Literal["plotly"]) -> PlotlyLinesFormatter: ...
+@overload
+def make_lines_formatter(style: LineStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                         backend: Backend) -> MplLinesFormatter | PlotlyLinesFormatter: ...
+def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callable] | None = None, *,
+                         backend: Backend = "matplotlib") -> MplLinesFormatter | PlotlyLinesFormatter:
+    """
+    线条回调：把 LineStyle 写了的字段改到这根轴的每条线上（颜色会覆盖按样品分配的颜色，通常只在单条线时用；
+    线和点一起改色，纯散点看得见的是点）。custom：自定义回调列表，以单条 Line2D 或 Scatter 调用。
+    返回：matplotlib formatter(lines)；Plotly formatter(traces)，只改其中的 Scatter。
+    """
+    check_backend(backend)
+    style = style or LineStyle()
+    check_line_style(style)            # 非标准写法创建时就报错
+    custom = list(custom or ())
 
-            return formatter
+    if backend == "matplotlib":
+        native = translate_line_style(style, backend)
 
-        # ── Plotly ──
+        def formatter(lines, *_args, **_kwargs):
+            _ = _args, _kwargs
+            for line in lines:
+                if isinstance(line, Line2D):
+                    line.set(**native)
+                elif 'color' in native:         # 散点、柱：只有颜色看得见
+                    line.set_color(native['color'])
+                for func in custom:
+                    func(line)
+
+        return formatter
+
+    def plotly_formatter(traces):
         import plotly.graph_objects as go
 
-        line_options = {}
-        if linewidth is not None:
-            line_options["width"] = linewidth
-        if native_color is not None:
-            line_options["color"] = native_color
-        if native_style is not None:
-            line_options["dash"] = native_style
+        for trace in traces:
+            if not isinstance(trace, go.Scatter):
+                continue
+            # trace.figure 是它所在的图：按这张图的 dpi 把磅换成像素
+            native = translate_line_style(style, 'plotly', _figure_dpi(trace.figure))
+            trace.update(**native)      # update 合并嵌套属性，没写的保持不变
+            # 写了标记时，让纯线条也显示标记
+            mode = str(trace.mode or "lines")
+            if style.marker is not None and "markers" not in mode:
+                trace.mode = mode + "+markers"
+            for func in custom:
+                func(trace)
 
-        marker_options = {}
-        if native_marker is not None:
-            marker_options["symbol"] = native_marker
-        if linemarkersize is not None:
-            marker_options["size"] = linemarkersize
-
-        def plotly_formatter(fig: go.Figure):
-            for trace in fig.data:
-                if not isinstance(trace, go.Scatter):
-                    continue
-                # update 合并嵌套属性，未传入的颜色等保持不变。
-                if line_options:
-                    trace.update(line=line_options)
-                if marker_options:
-                    trace.update(marker=marker_options)
-                # 指定标记时，让纯线条也显示标记。
-                mode = str(trace.mode or "lines")
-                if linemarker is not None and "markers" not in mode:
-                    trace.mode = mode + "+markers"
-                for func in custom_formations or ():
-                    func(trace)
-
-        return plotly_formatter
+    return plotly_formatter
 
 
-class LegendsFormatterFactory:
-    """图例格式化器工厂类"""
-
-    @staticmethod
-    def create(
-        legend_location=None,
-        legend_fontsize=None,
-        legend_frameon=None,
-        legend_draggable=None,
-        custom_formations=None,
-        *,
-        backend: Backend = "matplotlib",
-    ):
-        """
-        创建图例格式回调；参数为 None 时保持原样。
-
-        参数:
-            legend_location: 'best'、'upper right'、'lower left'、'center' 等。
-                Plotly 不会自动寻找空位，'best' 使用右上角。
-            legend_fontsize: 图例字号。
-            legend_frameon: True 显示边框和白色背景；False 无边框、透明背景。
-            legend_draggable: 是否可拖动（仅 matplotlib；Plotly 见模块说明）。
-            custom_formations: 自定义回调列表，以 matplotlib Legend 或 Plotly layout.Legend 调用。
-            backend: 'matplotlib' 或 'plotly'，只能以关键字传入。
-
-        返回:
-            matplotlib: formatter(legends)；Plotly: formatter(fig)。
-        """
-        _check_backend(backend)
-
-        if backend == "matplotlib":
-            def formatter(legends, *_args, **_kwargs):
-                _ = _args, _kwargs
-
-                for legend in legends:
-                    # Legend 没有 set_fontsize，字号要逐个设到图例文字上
-                    if legend_fontsize is not None:
-                        for text in legend.get_texts():
-                            text.set_fontsize(legend_fontsize)
-                    if legend_frameon is not None:
-                        legend.set_frame_on(legend_frameon)  # 方法名是 set_frame_on
-                    if legend_draggable is not None:
-                        legend.set_draggable(legend_draggable)
-                    if legend_location is not None:
-                        legend.set_loc(legend_location)
-                    for func in custom_formations or ():
-                        func(legend)
-
-            return formatter
-
-        # ── Plotly ──
-        positions = {
-            "best": (1, 1, "right", "top"),
-            "upper right": (1, 1, "right", "top"),
-            "upper left": (0, 1, "left", "top"),
-            "lower right": (1, 0, "right", "bottom"),
-            "lower left": (0, 0, "left", "bottom"),
-            "center": (0.5, 0.5, "center", "middle"),
-            "center left": (0, 0.5, "left", "middle"),
-            "center right": (1, 0.5, "right", "middle"),
-            "right": (1, 0.5, "right", "middle"),
-            "upper center": (0.5, 1, "center", "top"),
-            "lower center": (0.5, 0, "center", "bottom"),
-        }
-        if legend_location is not None and legend_location not in positions:
-            raise ValueError(f"Plotly 暂不支持此公共图例位置: {legend_location!r}")
-        # Plotly 图例默认不可拖动；开启拖动属于显示配置，不在 Figure 中。
-        if legend_draggable:
-            raise ValueError(
-                "Plotly 图例拖动请在显示时设置 "
-                "fig.show(config={'edits': {'legendPosition': True}})"
-            )
-
-        legend_options: dict = {}
-        if legend_fontsize is not None:
-            legend_options["font_size"] = legend_fontsize
-        if legend_location is not None:
-            x, y, xanchor, yanchor = positions[legend_location]
-            legend_options.update(x=x, y=y, xanchor=xanchor, yanchor=yanchor)
-        if legend_frameon is not None:
-            legend_options.update(
-                borderwidth=1 if legend_frameon else 0,
-                bordercolor="black",
-                bgcolor="white" if legend_frameon else "rgba(0,0,0,0)",
-            )
-
-        def plotly_formatter(fig: go.Figure):
-            if legend_options:
-                fig.update_layout(legend=legend_options)
-            # fig.layout 的类型标注过宽；字符串形式避免运行时依赖 TYPE_CHECKING 中的 go。
-            layout = cast("go.Layout", fig.layout)
-            for func in custom_formations or ():
-                func(layout.legend)
-
-        return plotly_formatter
-
-
-# 公共入口：backend 只能以关键字传入，默认保持现有 matplotlib 行为。
-# overload 只服务类型检查：让编辑器按 backend 推断返回的回调签名。
+# ══════════════════════════════════════════════
+# 图例（LegendStyle）
+# ══════════════════════════════════════════════
 @overload
-def make_axes_formatter(
-    *, backend: Literal["matplotlib"] = ..., **kwargs
-) -> MplAxesFormatter: ...
+def make_legend_formatter(style: LegendStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                          backend: Literal["matplotlib"] = ...) -> MplLegendFormatter: ...
 @overload
-def make_axes_formatter(*, backend: Literal["plotly"], **kwargs) -> PlotlyFormatter: ...
-def make_axes_formatter(
-    *, backend: Backend = "matplotlib", **kwargs
-) -> MplAxesFormatter | PlotlyFormatter:
-    """创建坐标轴格式回调；参数见 AxesFormatterFactory.create。"""
-    return AxesFormatterFactory.create(backend=backend, **kwargs)
-
-
+def make_legend_formatter(style: LegendStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                          backend: Literal["plotly"]) -> PlotlyLegendFormatter: ...
 @overload
-def make_lines_formatter(
-    *, backend: Literal["matplotlib"] = ..., **kwargs
-) -> MplLinesFormatter: ...
-@overload
-def make_lines_formatter(*, backend: Literal["plotly"], **kwargs) -> PlotlyFormatter: ...
-def make_lines_formatter(
-    *, backend: Backend = "matplotlib", **kwargs
-) -> MplLinesFormatter | PlotlyFormatter:
-    """创建线条格式回调；参数见 LinesFormatterFactory.create。"""
-    return LinesFormatterFactory.create(backend=backend, **kwargs)
+def make_legend_formatter(style: LegendStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                          backend: Backend) -> MplLegendFormatter | PlotlyLegendFormatter: ...
+def make_legend_formatter(style: LegendStyle | None = None, custom: Iterable[Callable] | None = None, *,
+                          backend: Backend = "matplotlib") -> MplLegendFormatter | PlotlyLegendFormatter:
+    """
+    图例回调：把 LegendStyle 写了的字段改到图例上（位置写法见 style.LEGEND_POSITIONS，与排版预设同一套）。
+    custom：自定义回调列表，以 matplotlib Legend 或 Plotly layout.Legend 调用。
+    返回：matplotlib formatter(legends)；Plotly formatter(legends)，legends 是 [fig.layout.legend]。
+    """
+    check_backend(backend)
+    style = style or LegendStyle()
+    check_legend_style(style, backend)
+    if backend == 'plotly' and style.draggable:
+        raise ValueError("Plotly 图例拖动请在显示时设置 fig.show(config={'edits': {'legendPosition': True}})")
+    custom = list(custom or ())
+
+    if backend == "matplotlib":
+        native = translate_legend_style(style, backend)
+
+        def formatter(legends, *_args, **_kwargs):
+            _ = _args, _kwargs
+            for legend in legends:
+                apply_legend(legend, native)
+                for func in custom:
+                    func(legend)
+
+        return formatter
+
+    def plotly_formatter(legends):
+        for legend in legends:
+            # legend.figure 是它所在的图：按这张图的 dpi 把字号换成像素
+            legend.update(translate_legend_style(style, 'plotly', _figure_dpi(legend.figure)))
+            for func in custom:
+                func(legend)
+
+    return plotly_formatter
 
 
-@overload
-def make_legend_formatter(
-    *, backend: Literal["matplotlib"] = ..., **kwargs
-) -> MplLegendFormatter: ...
-@overload
-def make_legend_formatter(*, backend: Literal["plotly"], **kwargs) -> PlotlyFormatter: ...
-def make_legend_formatter(
-    *, backend: Backend = "matplotlib", **kwargs
-) -> MplLegendFormatter | PlotlyFormatter:
-    """创建图例格式回调；参数见 LegendsFormatterFactory.create。"""
-    return LegendsFormatterFactory.create(backend=backend, **kwargs)
-
-
-def combine_formatters(*formatters: PlotlyFormatter | None) -> PlotlyFormatter:
-    """把多个 Plotly 回调合成一个，按传入顺序依次调用；None 会被跳过。
+def combine_formatters(*formatters: Callable[..., Any] | None) -> Callable[..., None]:
+    """把同一种回调合成一个，按传入顺序依次调用、参数原样转交；None 会被跳过。两个后端通用。
 
     Args:
-        formatters: make_xxx_formatter(backend="plotly") 返回的回调，或任意 fn(fig)。
+        formatters: 同一种的回调，如几个 make_axes_formatter(...) 的结果，或参数形状相同的自定义函数。
 
     Returns:
-        formatter(fig)，可直接交给 DataPlotter(backend='plotly') 绘图方法的 axes_formatter 等参数。
+        合成的回调，交给对应的参数（几个轴回调合成后交给 axes_formatter，依此类推）。
 
     Example:
-        fmt = combine_formatters(axes_fmt, lines_fmt, legend_fmt)
-        DataPlotter(data, backend='plotly').plot_multiline(axes_formatter=fmt)
+        fmt = combine_formatters(make_axes_formatter(x=AxisStyle(scale='log')), my_axes_tweak)
+        DataPlotter(data).plot_multiline(axes_formatter=fmt)
+    （第三方审查 E 以前 Plotly 的回调都收 fig，可以把轴、线、图例回调合成一个；现在三种回调参数不同，只合并同一种。）
     """
     active = [f for f in formatters if f is not None]
 
-    def figure_formatter(fig: go.Figure) -> None:
+    def combined(*args, **kwargs) -> None:
         for formatter in active:
-            formatter(fig)
+            formatter(*args, **kwargs)
 
-    return figure_formatter
+    return combined

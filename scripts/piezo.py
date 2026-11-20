@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from plotlib.dataloader import Dataloader
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
+from plotlib.plot_spec import AxisStyle
 from plotlib.group import Group
 
 plt.close('all')
@@ -35,26 +36,32 @@ data_groups = {
 # ============================================================
 # Displacement-Voltage 格式化器
 DV_axes_formatter = make_axes_formatter(
-    xlim_left=0.0001, yscaler=10, x_format='{x:.1e}', y_format='{y:.1e}'
+    x=AxisStyle(limits=(0.0001, None), format='{x:.1e}'),
+    y=AxisStyle(format='{y:.1e}', scaler=10),
 )
 DV_axes_formatter_log = make_axes_formatter(
-    xlim_left=0.001, xscale_type='log', yscaler=10, x_format='{x:.1e}', y_format='{y:.1e}'
+    x=AxisStyle(scale='log', limits=(0.001, None), format='{x:.1e}'),
+    y=AxisStyle(format='{y:.1e}', scaler=10),
 )
 
 # Force-Voltage 格式化器
 FV_axes_formatter = make_axes_formatter(
-    xlim_left=0.1, yscaler=10, x_format='{x:.1e}', y_format='{y:.1e}'
+    x=AxisStyle(limits=(0.1, None), format='{x:.1e}'),
+    y=AxisStyle(format='{y:.1e}', scaler=10),
 )
 FV_axes_formatter_log = make_axes_formatter(
-    xlim_left=0.1, xscale_type='log', yscaler=10, x_format='{x:.1e}', y_format='{y:.1e}'
+    x=AxisStyle(scale='log', limits=(0.1, None), format='{x:.1e}'),
+    y=AxisStyle(format='{y:.1e}', scaler=10),
 )
 
 # Time-Voltage 格式化器
 TV_axes_formatter = make_axes_formatter(
-    xlim_left=-5, yscaler=10, x_format='{x:.1e}', y_format='{y:.1e}'
+    x=AxisStyle(limits=(-5, None), format='{x:.1e}'),
+    y=AxisStyle(format='{y:.1e}', scaler=10),
 )
 TV_axes_formatter_zoomed = make_axes_formatter(
-    xlim_left=0, xscale_type='linear', yscaler=10, x_format='{x:.1e}', y_format='{y:.1e}'
+    x=AxisStyle(scale='linear', limits=(0, None), format='{x:.1e}'),
+    y=AxisStyle(format='{y:.1e}', scaler=10),
 )
 
 # ============================================================

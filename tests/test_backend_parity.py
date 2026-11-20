@@ -13,7 +13,10 @@ import pytest
 
 pytest.importorskip("plotly")
 
+from plotlib.formatters import (combine_formatters, make_axes_formatter, make_legend_formatter,
+                                make_lines_formatter)
 from plotlib.group import Group
+from plotlib.plot_spec import AxisStyle, LegendStyle, LineStyle
 from plotlib.plotter import DataPlotter
 
 BACKENDS = pytest.mark.parametrize("backend", ['matplotlib', 'plotly'])
@@ -76,8 +79,8 @@ def test_default_groups_is_empty_group(eis_dataset, backend):
 ], ids=['objects', 'merge', 'separate', 'xy', 'dual_y'])
 def test_same_figures_and_curves(eis_dataset, draw):
     """
-    图的 key 相同，每张图的曲线条数、顺序、标签、数据相同（去重、先到先得等规则本身在 test_plot_plan.py）。
-    分离模式每组一张图：Plotly 在 6.8 前也是每组一个 Figure。
+    图的 key 相同，每张图（Plotly 是每页）的曲线条数、顺序、标签、数据相同（去重、先到先得等规则本身在 test_plot_plan.py）。
+    按页比较，不比原生 Figure 的个数：多张计划时 matplotlib 是多张图，Plotly 是一个 Figure 多页（6.8）。
     """
     groups = Group(eis_dataset, overlap_config())
     mpl = draw(DataPlotter(eis_dataset, groups=groups, channel_x=FREQ, channel_y=ZS_RE))
@@ -87,6 +90,165 @@ def test_same_figures_and_curves(eis_dataset, draw):
     assert list(ply.figures) == list(mpl.figures)
     for key, drawn in mpl.figures.items():
         assert_same_curves(ply.figures[key].artists, drawn.artists)
+
+
+# ══════════════════════════════════════════════
+# 按轴回调只作用在自己那根轴上（第三方审查 E，用户选做法 2：后端把这根轴的东西交给回调）
+# 两个后端回调形状对应：axes (ax | 轴名, fig)、lines (这根轴的线)、legend (图例列表)
+# ══════════════════════════════════════════════
+@BACKENDS
+def test_right_formatters_only_touch_right_axis(eis_dataset, backend):
+    """
+    只给右轴配范围和线色：右轴、右线变；左轴范围仍自动、左线仍是预设的红。
+    回归：Plotly 的按轴回调曾都只收 fig，工厂改了全部 Y 轴和全部线（左右一起变成 -5~0、绿色）。
+    """
+    drawn = DataPlotter(eis_dataset, backend=backend).plot_dual_y(
+        left=(FREQ, ZS_RE), right=(FREQ, ZS_IM),
+        right_axes_formatter=make_axes_formatter(y=AxisStyle(limits=(-5, 0)), backend=backend),
+        right_lines_formatter=make_lines_formatter(LineStyle(color='green'), backend=backend),
+    ).figures[0]
+    left, right = drawn.artist(0), drawn.artist(0, 'right')
+
+    if backend == 'matplotlib':
+        assert drawn.axes['right'].get_ylim() == (-5, 0)
+        low, high = drawn.axes['left'].get_ylim()
+        assert low <= 10 and high >= 30                 # 左轴仍按自己的数据（Zs' 10~30）自动
+        assert (left.get_color(), right.get_color()) == ('red', 'green')
+    else:
+        lay = drawn.fig.to_dict()['layout']
+        assert lay['yaxis2']['range'] == [-5, 0]
+        assert 'range' not in lay['yaxis']
+        assert (left.line.color, right.line.color) == ('red', 'green')
+
+
+@BACKENDS
+def test_right_legend_formatter_raises(eis_dataset, backend):
+    """
+    双 Y 轴只有左轴有图例（右轴的线不进图例）：给右轴配图例回调 → 明确报错，提示交给 legend_formatter（用户定）。
+    回归：matplotlib 曾把 None 交给图例回调（AttributeError）；Plotly 曾悄悄改了唯一的那个图例。
+    """
+    with pytest.raises(ValueError, match='legend_formatter'):
+        DataPlotter(eis_dataset, backend=backend).plot_dual_y(
+            right=(FREQ, ZS_IM),
+            right_legend_formatter=make_legend_formatter(LegendStyle(font_size=8), backend=backend))
+
+
+@BACKENDS
+def test_axes_formatter_keeps_tick_width(eis_dataset, backend):
+    """
+    轴工厂没给 ticks 时不改刻度，仍是构造时的全局设置（DataPlotter(ticks=TickStyle(width=5))，原 tick_width 参数）。
+    回归：两个工厂曾写死刻度宽 3。matplotlib 渲染后才确定全部刻度，所以先 draw 再看。
+    """
+    from plotlib.plot_spec import TickStyle
+
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(width=5), backend=backend).plot_multiline(
+        axes_formatter=make_axes_formatter(
+            x=AxisStyle(scale='log'),
+            backend=backend,
+        )).figures['main']
+
+    if backend == 'matplotlib':
+        drawn.fig.canvas.draw()
+        ax = drawn.axes['left']
+        ticks = ax.xaxis.get_major_ticks() + ax.yaxis.get_major_ticks()
+        assert {t.tick1line.get_markeredgewidth() for t in ticks} == {5}
+    else:
+        lay = drawn.fig.to_dict()['layout']
+        assert 'tickwidth' not in lay['xaxis'] and 'tickwidth' not in lay['yaxis']
+        assert lay['template']['layout']['xaxis']['tickwidth'] == pytest.approx(5 * 100 / 72)
+
+
+@BACKENDS
+def test_axes_formatter_ticks_only_touch_its_axis(eis_dataset, backend):
+    """
+    单轴覆盖：右轴回调里的 ticks 只改右侧 Y 轴（主刻度长 12、关掉次刻度），左轴仍是全局默认（长 6、有次刻度）。
+    Plotly 的磅按这张图的 dpi 换算（后端把 dpi 记在 fig.layout.meta 里，工厂画图时读）。
+    """
+    from plotlib.plot_spec import TickStyle
+
+    drawn = DataPlotter(eis_dataset, dpi=200, backend=backend).plot_dual_y(
+        right=(FREQ, ZS_IM),
+        right_axes_formatter=make_axes_formatter(
+            ticks=TickStyle(length=12, minor=False),
+            backend=backend,
+        ),
+    ).figures[0]
+
+    if backend == 'matplotlib':
+        drawn.fig.canvas.draw()
+        left, right = drawn.axes['left'].yaxis, drawn.axes['right'].yaxis
+        assert {t.tick1line.get_markersize() for t in right.get_major_ticks()} == {12}
+        assert list(right.get_minorticklocs()) == []
+        assert {t.tick1line.get_markersize() for t in left.get_major_ticks()} == {6}
+        assert list(left.get_minorticklocs())
+    else:
+        lay = drawn.fig.to_dict()['layout']
+        assert lay['yaxis2']['ticklen'] == pytest.approx(12 * 200 / 72)
+        assert lay['yaxis2']['minor']['ticks'] == ''
+        assert 'ticklen' not in lay['yaxis'] and 'ticklen' not in lay['xaxis']
+
+
+@BACKENDS
+def test_combine_formatters_same_kind(eis_dataset, backend):
+    """combine_formatters 合并同一种回调（两个后端通用）：依次调用、跳过 None、参数原样转交。"""
+    counts = []
+    fmt = combine_formatters(make_lines_formatter(LineStyle(width=5), backend=backend), None,
+                             lambda lines: counts.append(len(lines)))
+    drawn = DataPlotter(eis_dataset, backend=backend).plot_multiline(lines_formatter=fmt).figures['main']
+
+    # 线宽 5 磅：matplotlib 就是 5，Plotly 按 dpi 100 换成像素（样式对象化起两个后端都用磅）
+    widths = [a.get_linewidth() if backend == 'matplotlib' else a.line.width for a in drawn.artists]
+    assert widths == pytest.approx([5 if backend == 'matplotlib' else 5 * 100 / 72] * 3)
+    assert counts == [3]
+
+
+@BACKENDS
+def test_group_marker_applies_to_scatter(eis_dataset, backend):
+    """分组写的 marker 对散点图也生效（第三方审查 G；以前分组样式只对折线应用）。"""
+    groups = Group(eis_dataset, {'A': {'num': [0, 1], 'marker': 'square'}})
+    artist = DataPlotter(eis_dataset, groups=groups, backend=backend) \
+        .plot_groups(plot_kind='scatter').figures['A'].artist(0)
+
+    if backend == 'matplotlib':
+        from matplotlib.markers import MarkerStyle
+        square = MarkerStyle('s')
+        expected = square.get_path().transformed(square.get_transform())
+        np.testing.assert_allclose(np.asarray(artist.get_paths()[0].vertices), np.asarray(expected.vertices))
+    else:
+        assert artist.marker.symbol == 'square'
+        assert artist.mode == 'markers'                 # 散点不因为写了 marker 变成「线 + 点」
+
+
+# ══════════════════════════════════════════════
+# 图例标题（2026-11-20 用户提出）：四种方法都能设，计划里写了就画上；'{name}' 的替换规则在 test_plot_plan.py
+# ══════════════════════════════════════════════
+@BACKENDS
+@pytest.mark.parametrize("draw, expected", [
+    (lambda p: p.plot_multiline(), {'main': None}),
+    (lambda p: p.plot_multiline(legend_title='Samples'), {'main': 'Samples'}),
+    (lambda p: p.plot_groups(legend_title='Group {name}'), {'A': 'Group A', 'B': 'Group B'}),
+    (lambda p: p.plot_xy(legend_title='{name}'), {0: 'S0', 1: 'S1', 2: 'S2'}),
+    (lambda p: p.plot_dual_y(right=(FREQ, ZS_IM)), {0: 'S0', 1: 'S1', 2: 'S2'}),
+    (lambda p: p.plot_dual_y(right=(FREQ, ZS_IM), legend_title=None), {0: None, 1: None, 2: None}),
+], ids=['multiline_default', 'multiline_text', 'groups_name', 'xy_name', 'dual_y_default', 'dual_y_none'])
+def test_legend_title_drawn(eis_dataset, backend, draw, expected):
+    """
+    每张图（Plotly 是每页）的图例标题就是计划写的；没有就不画。
+    Plotly 多页共用一个图例：第一页的标题画完就在，其余页的在翻到那一页时换上（读翻页滑块每一档改的图例标题）。
+    """
+    plotter = draw(DataPlotter(eis_dataset, groups=Group(eis_dataset, overlap_config()), backend=backend))
+
+    if backend == 'matplotlib':
+        titles = [drawn.axes['left'].get_legend().get_title().get_text() or None
+                  for drawn in plotter.figures.values()]
+    elif len(plotter.figures) == 1:
+        [drawn] = plotter.figures.values()
+        titles = [drawn.fig.layout.legend.title.text]
+    else:
+        steps = plotter.add_page_slider().layout.sliders[0].steps
+        titles = [step.args[1]['legend.title.text'] or None for step in steps]
+
+    assert dict(zip(plotter.figures, titles)) == expected
 
 
 @BACKENDS
@@ -99,7 +261,7 @@ def test_backend_rejects_unknown_layout_and_kind(backend):
 
     def one_curve(kind='line') -> CurveSpec:
         return CurveSpec(sample_idx=0, x=np.array([0, 1]), y=np.array([0, 1]), label='S0',
-                         group_name=None, color_position=None, style={}, kind=kind)  # pyright: ignore[reportArgumentType]
+                         group_name=None, color_position=None, kind=kind)  # pyright: ignore[reportArgumentType]
 
     with pytest.raises(ValueError, match='版式'):
         drawer.draw(FigureSpec(key='k', x_unit='', y_unit='', curves=[one_curve()],

@@ -4,7 +4,8 @@
 > 评估范围：`src/`、`scripts/` 逐行阅读；`tools/`、`gui/`、`tests/`、配置与文档看了结构和接口。
 > 本文分三部分：A 评估结论与问题清单（背景）；**B 分步开发指南（当前要做的）**；C 整理工作的记录（已完成）。
 > **状态**：C 部分已全部完成并提交（`92bbde6`，206 passed）。接下来由执行者（Opus 5.5）按 B 部分**指导用户**一步步做，先读 B.0。
-> **进度（2026-11-19）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已提交（`815634e`）；步骤 6.1 已提交（`2d87f86`）；步骤 6.2 已提交（`d6f7af6`；374 passed）。步骤 6.3 已提交（`b0d65dd`；385 passed）。之后绘图测试按层整理（`e0799fd`）。6.4「计划补全」、6.5「统一结果与清理」、6.6a「matplotlib 后端（搬家）」、6.6b「排版预设」、6.7「Plotly 后端」已完成（426 passed，待提交）。**后端重构完成，结构已确认**（见 6.7 之后的「结构确认」）：唯一入口 `DataPlotter(backend='matplotlib' | 'plotly')`，`plot_spec.py`（约定）/ `plan.py`（规则）/ `layouts.py` / `style.py`（翻译层）/ `backends/`；公开接口已统一命名（`plot_multiline` 等）。2026-11-19 路线调整：**先建后端，再加新功能**——原 6.4（按组翻页）挪到 6.8，新的 6.4 ~ 6.7 依次是计划补全、统一结果、matplotlib 后端、Plotly 后端。**下一步是 6.8「Plotly 按组翻页」（在新架构上加新功能），先读 6.7 执行记录和 6.8 小节**。
+> **进度（2026-11-20 收工时；最新提交 `d41d98f`，之后全部未提交，520 passed；新文件 `src/plotlib/backends/matplotlib_styles.py` 提交时需要 `git add`）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已提交（`815634e`）；步骤 6.1 已提交（`2d87f86`）；步骤 6.2 已提交（`d6f7af6`；374 passed）。步骤 6.3 已提交（`b0d65dd`；385 passed）。之后绘图测试按层整理（`e0799fd`）。6.4「计划补全」、6.5「统一结果与清理」、6.6a「matplotlib 后端（搬家）」、6.6b「排版预设」、6.7「Plotly 后端」已完成（426 passed，待提交）。**后端重构完成，结构已确认**（见 6.7 之后的「结构确认」）：唯一入口 `DataPlotter(backend='matplotlib' | 'plotly')`，`plot_spec.py`（约定）/ `plan.py`（规则）/ `layouts.py` / `style.py`（翻译层）/ `backends/`；公开接口已统一命名（`plot_multiline` 等）。2026-11-19 路线调整：**先建后端，再加新功能**——原 6.4（按组翻页）挪到 6.8，新的 6.4 ~ 6.7 依次是计划补全、统一结果、matplotlib 后端、Plotly 后端。**2026-11-20 插入「第三方审查修复」（6.7 之后、6.8 之前；第一组、第二组（E + G）、双 Y 轴版式与 `legend_title`、F（`plotly>=6.3`）全部完成，472 passed）。
+**6.8「Plotly 翻页」也已完成，步骤 6 全部完成；之后加了刻度 `TickStyle`、再把格式参数全部样式对象化（`LineStyle` / `AxisStyle` / `FrameStyle` / `LegendStyle` / `TickStyle`，预设也用它们写；520 passed，未提交）。下一步：步骤 7**，之后才是 6.8「Plotly 按组翻页」（在新架构上加新功能），先读 6.7 执行记录、审查修复小节和 6.8 小节**。
 > **2026-11-18 路线调整**：步骤 5、6 按「先抽绘图计划、两个后端按同一份计划画」重排，不再先在 Plotly 里复制一份 `group_plotter`（理由见步骤 5 的「讲」）。
 > 4.3 引入了标准样式写法（`src/plotlib/style.py`，见 4.3 执行记录）。6.1 起绘图规则集中在 `plot_common.plan_figures`，两个后端只按计划画。
 > 新文件 `src/plotlib/style.py`、`tests/test_style.py` 提交时需要 `git add`。
@@ -161,7 +162,7 @@ matplotlib 坐标轴回调把刻度线宽写死为 3（`formatters.py:134`、`14
 - 不跨步骤，不顺手修本文没列出的问题；发现了就记下来告诉用户。
 - 本文的行号对应提交 `92bbde6`，改动后会漂移，**以函数名为准**。本文与代码不一致时以代码为准，并告诉用户。
 - 测试跟着需求走（2026-11-19 用户改定，原为「只增不减」）：重构途中旧测试是安全网，不改；结构变了以后，测已消失的结构、或在多层重复同一规则的测试，经用户同意清理。
-  绘图测试按层放（见 `tests/README.md` 约定第 1 条）。基线是 428 passed（6.7 后的结构确认之后；此前 426；6.8 先写的 10 条 xfail 随 InteractivePlotter 删除，6.8 按新入口重写；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354 → 355 → 359 → 364 → 370 → 374 → 385）。
+  绘图测试按层放（见 `tests/README.md` 约定第 1 条）。基线是 520 passed（6.8 之后的样式对象化；此前 507（刻度 TickStyle）、484（6.8 翻页）、472（第三方审查修复：双 Y 轴版式与图例标题）、451（第二组）、438（第一组）、428（结构确认之后）、426；6.8 先写的 10 条 xfail 随 InteractivePlotter 删除，6.8 按新入口重写；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354 → 355 → 359 → 364 → 370 → 374 → 385）。
 - 本文给出的名字、签名都是建议。「定」这个动作里用户改了主意，就按用户的来，并把决定写回本文对应小节。
 - 修改代码用编辑工具逐处修改，让用户能看到 diff。注释和文档保持中文。
 
@@ -910,6 +911,72 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 5. Plotly `_apply_neglog` 改名 `_apply_neglog_formatter`（与 matplotlib 对齐）；两个后端补「版式 / 画法写错报错」的测试。
 - 结果：428 passed；类型检查 0 错误；BACKEND_PLAN 第 2 节改为「当前架构（定稿）」与模块职责表。
 
+#### 6.7 之后：第三方审查修复（2026-11-20，插在 6.8 之前）
+
+**来源：** `docs/ThirdPary_review.md`。执行者逐条复现，库代码相关的结论全部成立；报告第 2 条（EIS 按行配对）和第 3 条的脚本部分（多峰选峰、无峰输出）**用户定先不管**，留给步骤 8 或单独处理。
+**教训：** C、D 两个问题一直没被发现，是因为测试只断言对象属性（直接调用格式器、只看图例句柄样式），没有渲染。**以后刻度文字、图例位置这类结果，要 `canvas.draw()` 之后再断言**（写进 `tests/README.md` 约定）。
+
+| # | 问题（复现） | 来源 | 分组 |
+|---|---|---|---|
+| A | `Dataloader`：`int(98 * (1/49))` 得 1，静默丢样品；未知后缀不报错，沿用 `self.dataset` 里上一次的表 | 重构前就有 | 第一组（最小修复） |
+| B | `DataSet.expandata`：零行结果 `(0, 2)` 的 `size == 0` 被当成空容器而替换矩阵；元数据先改后校验，报错时原对象已改坏 | 重构前就有（脚本触发，错在库里） | 第一组 |
+| C | matplotlib `neglog`：渲染后刻度文字全是 `'-'`。包装的 `ScalarFormatter` 收不到本轮刻度位置；双 Y 轴两个 X 标志会重复加负号 | 重构前就有 | 第一组 |
+| D | matplotlib `lines_formatter` 后重建图例：`get_bbox_to_anchor()` 已是像素坐标又被当锚点再转换一次，图例 (757, 362) → (468882, 243990) | 重构前就有 | 第一组 |
+| E | 右轴回调范围：Plotly 回调都收整个 `fig`，公共工厂改全部轴 / 全部线（只配右轴，左轴也变）；matplotlib 右轴没有图例，图例回调收到 `None` 报错 | 即 BACKEND_PLAN 第 7 节「目标轴」 | 第二组（先定设计） |
+| F | `pyproject` 写 `plotly>=6.1`，模板用的 `minorloglabels` 从 6.3 才有 | — | 第三组 |
+| G | 样式适用范围：两个后端轴工厂写死刻度宽 3；分组 `marker` 对散点无效；Plotly 线工厂 `linecolor` 对纯散点改的是隐藏线色 | — | 第三组（随 E） |
+| — | 取列随样品数平方增长；选择缺失样品号、单改某样品单位的语义 | — | 暂缓到步骤 7 |
+
+**第一组的修法（用户定：按建议，执行者写、用户看 diff）：**
+1. C：负号刻度不再包原格式器，改为包装后把刻度位置一并交给原格式器；共享的 X 轴只加一次负号。测试渲染后断言刻度文字。
+2. D：不重建图例，把线的新样式同步到现有图例句柄（`handle.update_from(line)`），位置、拖动、字号原样保留，也不再读私有 `_loc`。测试渲染后断言图例位置不变。
+3. B：「空容器」改看有没有列；先校验待拼接的数据与元信息，再修改对象。测试首样品无峰、全部无峰、失败后原对象可继续正确追加。
+4. A：整数除法计数；本次读到的表用局部变量；未知后缀立即报错。其余接口调整（只留每样品列宽、直接传路径、取消不退出、Tk 延迟导入）仍在 7.1。
+
+**顺序：** 第一组 → 讨论定 E 的设计，E 与 G 一起改 → F 顺手 → 6.8。
+
+**第一组执行记录（2026-11-20 完成，438 passed）：** 先写 10 条回归测试（全部按预期失败），再修：
+- D 的修法与上面写的不同：实验发现 `update_from` 会把线的坐标变换也复制到图例句柄上，句柄画错位置，不能用。
+  改为把「按预设建图例」抽成 `MatplotlibBackend._make_legend(ax, preset)`，排版时建一次，`lines_formatter` 之后按同一预设重建；
+  删除 `_refresh_legend`（不再读私有 `_loc`）；`_apply_optional_formatters` 改收 `preset`，图例回调拿到的是重建后的图例。
+- C：新增 `_NegativeFormatter(Formatter)`，前缀负号，`set_locs` / `set_axis` / `get_offset` 转交原格式器。
+  **行为变化**：matplotlib 的 `'x2'` 不再作用在双 Y 轴共用的 X 轴上（约定里 `'x2'` 是上轴，与 Plotly 一致）；以前只给 `neglog_x2` 也会给共用 X 轴加负号。
+- B：`expandata` 用「列数为 0」判断空；先记原状，`update_attributes` 失败就恢复再抛出（与 `Column.sample_idx` 的 setter 同一做法）。
+- A：样品数 `total_cols // COLUMNS_PER_DATASET`；`DATASET_FRACTION` 不再参与计算（参数保留到 7.1）；未知后缀 `ValueError`（以前是 `RuntimeError`「数据集加载失败」）。
+- 遗留（外观，未改）：负号刻度下落在 0 处的刻度显示为 `-0`，与多线图预设格式下的 `-0.00` 相同，原来就有。
+
+**第二组 E + G 执行记录（2026-11-20 完成，451 passed）：**
+- 讨论：三种做法——①后端传轴名、工厂自己筛 trace；②后端交出这根轴的东西（轴名 + 这根轴的 trace + 图例列表）；③创建工厂时指定目标轴。
+  **用户选做法 2**：「找哪根轴的东西」只在后端做一次（与 matplotlib 后端挑线同一行），工厂只管「怎么改」。
+  `figure_formatter(fig, axes)` 拿整个轴字典，按轴回调拿字典里的一项，两层分工不变。
+- 回调形状（两个后端对应）：axes `(ax | 轴名, fig)`、lines（这根轴的线 / trace）、legend（`[Legend]` / `[fig.layout.legend]`）。
+  Plotly 轴工厂：Y 设置写到给定轴名，X 设置写到共用的 `xaxis`；`custom_formation` 收 `(轴名, fig)`。
+- **用户定：没有图例的轴配图例回调 → 报错**（两个后端同一句，`layouts.NO_LEGEND_MESSAGE`；一张图一个图例，归左轴）。
+- `combine_formatters` 改为合并同一种回调、参数原样转交，两个后端通用（以前 Plotly 专用，可把三种回调合成一个 `fn(fig)`——这个用法没有了；脚本没用到）。
+- G：两个轴工厂不再写刻度宽（由 `tick_width` 决定；未加工厂参数）；新增翻译层 `style.STYLE_FIELDS_BY_KIND`（折线：线型 + 标记，散点：标记，柱：无），
+  两个后端的 `_native_style(curve)` 按它取字段，样式改为**画线时一次给出**（与颜色一样；matplotlib 散点的标记画完改不了）；Plotly 线工厂 `linecolor` 点也一起改。
+- 行为变化：Plotly 用轴工厂时刻度宽从 3px 变为模板换算值（约 4.2px，与不用工厂时一致）；matplotlib 默认 `tick_width` 也是 3，效果不变。
+
+**双 Y 轴版式与图例标题（用户 2026-11-20 提出，参照 Origin 图；完成，472 passed）。** 用户记得「双 Y 轴图例有红蓝两条」，
+实测重构前后（及去年的旧脚本）都只有左线一条，那是 Origin 画的图；用户要求按 Origin 的样子改默认版式。定下的事：
+1. 图例放图外上方、右对齐（翻译层新增 `'outside top right'`；matplotlib 要 `borderaxespad=0` 才右对齐）；左右两条线都进图例；上边距 0.85。
+2. 图例标签：**图例标题写样品名，每条线写自己的单位**（用户选第三种：只写单位会丢样品名，样品名 + 单位太长）。
+3. 约定 `FigureSpec.legend_title`；**四种绘图方法都有 `legend_title` 参数**（用户要求）：多线 / 分组 / xy 默认 None，双 Y 轴默认 `'{name}'`。
+   `'{name}'` 换成每张图自己的名字（xy、双 Y 轴是样品名，分离模式是组名）。只有一张图时：执行者原提议写 `'{name}'` 报错，
+   **用户改为不报错、不替换**（「都允许自由传参了，没必要给单图加限制」；如突出一个样品时直接写它的名字）。
+4. 右轴仍没有自己的图例：`right_legend_formatter` 照旧报错，图例归 `legend_formatter`。
+5. Origin 图里的次刻度不在这次范围（会影响所有版式），需要时单独提。
+
+**F（2026-11-20 完成）**：`pyproject.toml` 的 `interactive` 改为 `plotly>=6.3`（模板的 `minorloglabels` 从 6.3 起才有；本机 7.1，旧版本未实测）。第三方审查修复全部完成，接 6.8。
+
+（上面双 Y 轴版式的实现细节：）
+- 实现：计划层新增 `_make_figure(key, curves, name, *, legend_title, **图信息)`，与 `_make_curve` 一样用 `partial` 绑定；`_make_curve` 加 `label_from='name' | 'unit'`；
+  新增 `plan.sample_name`。两个后端的图例收所有轴上的线（matplotlib 手动收 `twinx` 的句柄；Plotly 去掉右线 `showlegend=False`）并加标题；
+  matplotlib rc 加 `legend.title_fontsize`（不设时标题用正文字号 22）。
+- **回调顺序调整（两个后端）**：以前按轴逐个「轴 → 线 → 图例」；图例里有右线后，右轴线回调触发的重建会冲掉左轴图例回调的设置。
+  改为两遍：各轴的轴、线回调 → 线改过就重建一次图例（matplotlib）→ 图例回调。单轴图不受影响。
+- 行为变化：双 Y 轴图例从图内右下（只有左线、写样品名）变为图外上方（两条线、写单位、标题样品名）；`CurveSpec.label` 在双 Y 轴里是单位。
+
 #### 6.8 Plotly 分离模式：按组翻页（原 6.4）
 
 **方向（6.3 时定）：** 分离模式 = 一张 Figure 按组翻页，**每一页就是计划里的一张 `FigureSpec`**：
@@ -924,6 +991,68 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 
 **测（6.7 后更新）：** 原先按 `InteractivePlotter` 写的 10 条 xfail 测试已随它删除，6.8 按新入口 `DataPlotter(backend='plotly')` 重写，期望不变：默认分离模式 4 条 trace、每页与 matplotlib 对应分组那张图一致、同一样品各页样式不同、
 分离模式按样品上色、初始只显示第一页、分组滑块的档位与可见性、两种方法用错报错。实现时按 6.7 的新入口改调用。
+跨后端对照按「页」比较（matplotlib 一页一张 Figure，Plotly 多页同一个 Figure），不要假设两边原生 Figure 数量相同（第三方审查的提醒）。
+
+**执行记录（2026-11-20 完成，484 passed）：**
+- 定（全按建议，用户另加一条）：
+  1. **凡是一次画出多张计划的都翻页**（分组分离模式、xy、双 Y 轴）：后端只认计划、不认绘图方法；只让分组翻页就得让后端知道「这是分组图」。
+  2. Plotly 后端新增 `draw_pages(specs, ...)`，每页一个 `DrawnFigure`（共用 `fig`、`axes`，`artists` 只有这页的）；
+     `draw` 就是只有一页的 `draw_pages`。`DataPlotter._render` 按「后端有没有 `draw_pages`、计划是否多于一张」分支（与滑块一样按能力判断）。
+  3. 各页来自同一次计划、只有一套轴：排版按第一页，按轴回调、整图回调对整个 Figure 只调一次，线回调拿到这根轴上所有页的 trace。
+  4. 原定 `add_group_slider` + 前缀 `'Group: '` 改为 **`add_page_slider`**、前缀默认为空（组名、样品名都会出现）；档位标签是每页的名字，
+     为此约定新增 **`FigureSpec.name`**（`_make_figure` 本来就算出了它，用来替换 `'{name}'`）。翻页时标题、图例标题换成这一页的。
+  5. **用户加：翻页滑块也支持 `single` / `cumulative`**。用户指出翻页与曲线滑块原理相同（Plotly 一个 Figure 装不下多个 Figure，只能切换 trace 显隐），
+     于是两种滑块共用 `_install_slider(fig, steps, mode, prefix, formatter)`：steps 是每档的 (标签, trace 位置, 翻到时改的 layout)，
+     曲线滑块一档一条 trace，翻页滑块一档一页。`add_page_slider` 默认 `'single'`，`add_slider` 仍默认 `'cumulative'`。
+- 滑块改 layout 改用带点的路径（`'title.text'`、`'legend.title.text'`）：只改这一项，不会把图例位置等设置冲掉；曲线滑块的测试随之更新。
+- 用错：多页图用 `add_slider` / 一页图用 `add_page_slider` → `RuntimeError` 并提示另一个；两者共用 `DataPlotter._slider_method` 做能力和「已绘图」检查。
+- 行为变化：Plotly 的分组分离模式、xy、双 Y 轴不再是多个 Figure，而是一个 Figure 多页、只显示第一页（以前全部各自显示）。
+- 验证：kaleido 渲染多页双 Y 轴图 + 翻页滑块，初始只显示第一页，标题、图例标题、两档的显隐与图例标题都对；导出 HTML 正常。
+
+#### 6.8 之后：刻度 TickStyle（2026-11-20，用户试 piezo_interactive 时提出，507 passed）
+
+**起因**：用户要精调主 / 次刻度的长短和显示，现状没有接口：刻度宽只有 `tick_width`（主次一样），刻度长 Plotly 模板写死 6 / 3 px、matplotlib 用默认 3.5 / 2 磅，
+次刻度 Plotly 一律显示、matplotlib 线性轴不显示，两边都对不上。用户又问「以后参数越来越多怎么办」。
+**定（全按建议，用户另加）：**
+1. **按主题打包成对象**：一个主题一个冻结 dataclass（标准写法、磅）+ 翻译层一个 `translate_*`；字段 None 表示不改，按层叠加
+   （默认 `DEFAULT_TICKS` < `DataPlotter(ticks=...)` < `make_axes_formatter(ticks=...)`）。刻度是第一个；工厂其余参数照此抽象是下一步（用户提出，方案待定）。
+2. 字段（用户要求做完整，后面写文档一气呵成）：`direction`（只有 out / in，Plotly 没有 inout）、`length` / `width`、`minor`（**默认显示，有开关**，用户定）、
+   `minor_length` / `minor_width`、`label_font` / `label_size` / `label_pad`、`minor_labels`（none / short / full）、`minor_label_font` / `_size` / `_pad`。不分 x、y，分开用单轴覆盖。
+3. `tick_width` 并入 `ticks.width`，不留别名。全局和单轴两层一起做。
+4. Plotly 做不到的：单独设次刻度文字的字体 / 字号 / 间距 → 报错（Plotly 次刻度没有文字属性）；线性轴上的次刻度文字不报错、只在对数轴生效。
+   用户提议直接改 JS 控制次刻度字号：只对导出的 HTML 有效、重画会被冲掉，记入 BACKEND_PLAN 待办。
+- 实现：`plot_spec.TickStyle`（`updated` 叠加）/ `DEFAULT_TICKS`，`Appearance.ticks`；`style.check_ticks` / `translate_ticks`；
+  matplotlib 新增 `backends/matplotlib_ticks.py`（样式对象化时改名 `matplotlib_styles.py`；后端与工厂共用，不导入 pyplot）：线和文字用 `tick_params`（改刻度类型后保留）建轴时应用；
+  次刻度的定位器 / 格式器会被 `set_xscale` 重置，所以在用户回调之后只补还是默认值的（`isDefault_minloc / minfmt`），不覆盖单轴设置；
+  只动看得见的 Axis（`twinx` 的 X 轴隐藏且与左轴共用定位器）。Plotly：模板里写全局刻度；`fig.layout.meta['dpi']` 记 dpi，单轴工厂按它换算；
+  只改朝向时不把关掉的次刻度打开（Plotly 的 `minor.ticks` 同时管显示和朝向）。两个工厂去掉写死的朝外。
+- 实际渲染后改了一处：线性轴上的 `'short'` 原定等同 `'full'`，画出来每个次刻度都标数、挤成一片，改为线性轴不写（与 Plotly 一致）。
+- 行为变化：两个后端默认都显示次刻度；默认刻度长统一为主 6 / 次 3 磅（matplotlib 原 3.5 / 2 磅，Plotly 原 6 / 3 像素）；`DataPlotter(tick_width=...)` 改为 `ticks=TickStyle(width=...)`。
+- 顺带发现（原来就有，记入 BACKEND_PLAN 第 7 节）：matplotlib 轴工厂总调用 `set_yscale`，会冲掉排版预设的刻度格式。
+
+#### 6.8 之后：样式对象化（2026-11-20，用户提出「工厂里的其它参数也一起抽象出来管理，保持结构一致」，520 passed）
+
+**定（全按建议，用户另加）：**
+1. 照 `TickStyle` 的做法，格式参数按主题打包成冻结 dataclass：`LineStyle`（线，合并 `line_width` / `linestyle`、线条工厂参数、分组样式）、
+   `AxisStyle`（一个方向的轴：`scale` / `limits` / `format` / `scaler` / `color`，按方向拆开，`make_axes_formatter(x=, y=)`）、
+   `FrameStyle`（边框：`width` / `top` / `right`，合并 `axis_width`、`hide_spines`）、`LegendStyle`（`position` / `font_size` / `frame` / `draggable`）。
+   公共部分 `StyleLayer.updated`（写了的覆盖、None 沿用）。
+2. **默认无框**（用户定）；**双 Y 轴预设画完整的框**（左右各有一根轴，不封口太难看）。
+3. **版式预设也用样式对象写**（用户：「后面用统一的 plot_spec 对象，结构上完美很多」）：`LayoutPreset(legend=LegendStyle, frame=FrameStyle, axes={轴名: AxisStyle}, margins)`。
+4. 旧参数不留（`line_width`、`linestyle`、`axis_width`、`legend_font_size`，工厂的 `xlim_*`、`*scale_type`、`*_format`、`*scaler`、`hide_spines`、`line*`、`legend_*`、`custom_formation(s)` → `custom`）。
+- **叠加顺序**（执行者补充说明，用户同意按规划改）：库默认 < 版式预设 < **DataPlotter 全局** < 分组样式 < 格式化器。
+  用户明确写的全局设置盖过预设，否则 `DataPlotter(frame=FrameStyle(top=True))` 会被多线图的「无框」悄悄盖掉。
+  为此 `Appearance` 只存用户写的那一层，库默认和预设由后端在画每张图时叠（`layouts.resolve_legend / resolve_frame`，唯一写顺序的地方）；`ticks` 一并改成这样。
+- 实施：原计划分四步、每步全绿；但 `Appearance` 一去掉旧参数，中间状态就跑不起来，所以四步一起写完再迁移测试（已告知用户）。
+  脚本和测试里 41 处工厂调用用 ast 迁移脚本改写（再把过长的一行拆成每个参数一行），带 `**kwargs` 的 3 处和其余测试手改。
+- 翻译层新增 `check_* / translate_line_style / translate_axis_style / translate_frame / translate_legend_style`；图例位置合成一张表 `LEGEND_POSITIONS`
+  （原图例工厂自带的 Plotly 对照表删掉，图内位置离边 0.02）；`STYLE_FIELDS_BY_KIND` 加上 `width` / `marker_size`。
+  matplotlib 的 `matplotlib_ticks.py` 改名 `matplotlib_styles.py`，加 `apply_axis` / `apply_frame` / `apply_legend`；双 Y 轴右轴（twin）的左、下边不画，免得盖住左轴的红色轴线。
+  Plotly 的线宽、标记大小、图例字号在格式化器里也改成磅（按 `fig.layout.meta['dpi']` 换算；trace / legend 用 `.figure` 找到所在的图）。
+- 顺带修：`set_yscale` 冲掉预设刻度格式（`AxisStyle.scale` 没写就不调用）；**Plotly 双 Y 轴右轴刻度不整齐**（渲染时发现，原来就有：Plotly 对叠加轴默认
+  `tickmode='sync'` 对齐左轴，刻度值成了 1.0007、0.9022；改为 `'auto'`，与 matplotlib twinx 一致）。
+- 行为变化：默认无框（以前 matplotlib 不用工厂时四面都有，用了工厂只剩 L 形；Plotly 是 L 形），双 Y 轴两个后端都是完整的框；
+  空的轴工厂什么都不改（以前默认隐藏上 / 右边、重置刻度类型）；Plotly 格式化器里的线宽、字号单位从像素改为磅；Plotly 图例图内位置离边 0.02。
 
 #### 6.4 ~ 6.8 期间的记录
 
@@ -967,6 +1096,7 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 | 4 | 扩展名     | 不区分大小写；不支持时报错信息列出支持的格式                                            |
 
 **测。** 直接传路径能加载；取消选择时抛出约定的异常而不是退出；`.CSV` 能读；不支持的扩展名报错信息含扩展名。
+（第三方审查修复已先做了最小修复：整数除法计数、本次读取用局部表、未知后缀报错，见 6.7 之后的「第三方审查修复」A。）
 **教学点：** `tkinter` 改为函数内导入后，`tests/test_dataloader.py` 末尾用 `monkeypatch` 替换弹窗的那条测试的替换目标会变，让用户自己想清楚为什么。
 
 **一起处理（步骤 2 留下的，2026-11-18 补记）：** `tests/conftest.py` 的 `write_grouped_file(path, units, groups)`、`load_file(path, columns_per_group)`、
@@ -1029,7 +1159,8 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 | 4.4 结果带分组名           | 完成   | 2026-11-18 | 不传 `naming` 时结果名为「组名_函数名」；「组间计算」改名为「分组计算」（见执行记录）。基线 355 |
 | 4.5 结果配新 Group         | 取消   | 2026-11-18 | 计算结果很少再分组；需要时手动套 `Group`（见 4.5）。步骤 4 已验收 |
 | 5 交互图接上 Group、共用取数 | 完成   | 2026-11-18 | 路线调整：原步骤 5 的分组绘图移到 6.3。5.1、5.2 全按建议；`_ensure_ready` 删除不搬（见 5.2 执行记录）。基线 364 |
-| 6 绘图计划与后端 | 进行中 |          | 6.1（`2d87f86`）、6.2（`d6f7af6`）、6.3（`b0d65dd`）已提交；之后绘图测试按层整理（用户提出，B.0 改为「测试跟着需求走」）；路线调整：先建后端（6.4 计划补全 → 6.5 统一结果 → 6.6 matplotlib 后端 → 6.7 Plotly 后端，删除 `InteractivePlotter`），原 6.4 按组翻页挪到 6.8（测试已写，标 xfail）。6.4 完成：计划补全（图层面单位 / neglog / 版式，xy 与双 Y 轴计划），`subplotter_yy` 改名 `subplotter_xy`，xy 颜色不变（色带位置可为 None），`figsize` 对所有方法生效。6.5 完成：结果统一为 `figures = {key: DrawnFigure}`（替换 `axesset`），颜色一次赋值（分组颜色对散点 / 柱也生效），删 `color_positions` 属性。6.6a 完成：建 `backends/`，`MatplotlibBackend.draw` 只读计划，`DataPlotter` 只剩「计划 → `_render` → 存结果」，`Appearance` / `AxesFormatter`，整图回调统一 `(fig, axes)`。6.6b 完成：`layouts.py` 排版预设，后端三种版式合成一段 `_draw`，双 Y 轴红蓝只由预设定。6.7 完成：`PlotlyBackend`、翻译层（`style.py`）、显式 dpi、`DataPlotter.add_slider`，删除 `InteractivePlotter`。之后结构确认：拆出 `plot_spec.py` / `plan.py`，公开接口统一命名。下一步 6.8。6.1 完成：重复样品保持先到先得、归属单独一步；拆成三个内部函数（用户提出）。6.2 完成：合并模式柱状图改为组首色（选 A）；新增 `figsize`；删除 `plot_artists`。6.3 完成：Plotly 按计划画，新增 `plot_plotly_group`（合并模式）、`_LINE_WIDTH`；删除 `_get_color`；按组翻页改为按 `FigureSpec` 分页（现 6.8）；颜色统一为一次赋值（用户决定，现 6.5）。基线 385 |
+| 6 绘图计划与后端 | 完成   | 2026-11-20 | 6.1（`2d87f86`）、6.2（`d6f7af6`）、6.3（`b0d65dd`）已提交；之后绘图测试按层整理（用户提出，B.0 改为「测试跟着需求走」）；路线调整：先建后端（6.4 计划补全 → 6.5 统一结果 → 6.6 matplotlib 后端 → 6.7 Plotly 后端，删除 `InteractivePlotter`），原 6.4 按组翻页挪到 6.8（测试已写，标 xfail）。6.4 完成：计划补全（图层面单位 / neglog / 版式，xy 与双 Y 轴计划），`subplotter_yy` 改名 `subplotter_xy`，xy 颜色不变（色带位置可为 None），`figsize` 对所有方法生效。6.5 完成：结果统一为 `figures = {key: DrawnFigure}`（替换 `axesset`），颜色一次赋值（分组颜色对散点 / 柱也生效），删 `color_positions` 属性。6.6a 完成：建 `backends/`，`MatplotlibBackend.draw` 只读计划，`DataPlotter` 只剩「计划 → `_render` → 存结果」，`Appearance` / `AxesFormatter`，整图回调统一 `(fig, axes)`。6.6b 完成：`layouts.py` 排版预设，后端三种版式合成一段 `_draw`，双 Y 轴红蓝只由预设定。6.7 完成：`PlotlyBackend`、翻译层（`style.py`）、显式 dpi、`DataPlotter.add_slider`，删除 `InteractivePlotter`。之后结构确认：拆出 `plot_spec.py` / `plan.py`，公开接口统一命名。之后第三方审查修复（插在 6.8 前；第一组、第二组、双 Y 轴版式与 `legend_title`、F 全部完成，基线 472）。6.8 完成：凡是多张计划，Plotly 都画成一个 Figure 多页（`draw_pages`），
+翻页滑块 `add_page_slider`（原定 `add_group_slider`，范围扩大后改名；用户要求也支持 single / cumulative，两种滑块共用 `_install_slider`），约定新增 `FigureSpec.name`。基线 484。6.1 完成：重复样品保持先到先得、归属单独一步；拆成三个内部函数（用户提出）。6.2 完成：合并模式柱状图改为组首色（选 A）；新增 `figsize`；删除 `plot_artists`。6.3 完成：Plotly 按计划画，新增 `plot_plotly_group`（合并模式）、`_LINE_WIDTH`；删除 `_get_color`；按组翻页改为按 `FigureSpec` 分页（现 6.8）；颜色统一为一次赋值（用户决定，现 6.5）。基线 385 |
 | 7.1 `Dataloader` 接口    | 未开始 |          |                                |
 | 7.2 逐样品变换             | 未开始 |          |                                |
 | 7.3 公开的列排序           | 未开始 |          |                                |

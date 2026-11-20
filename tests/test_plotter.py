@@ -18,6 +18,8 @@ DataPlotter 把画出的东西都存在 self.figures 里（{计划的 key: Drawn
 数据来自 eis_dataset：每个样品 3 列 [Frequency(Hz), Zs'(ohm), Zs''(ohm)]，
 S1 = S0 × 2，S2 = S0 × 3。
 """
+import re
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -28,6 +30,7 @@ from matplotlib.lines import Line2D
 from numpy.typing import NDArray
 
 from plotlib.group import Group
+from plotlib.plot_spec import AxisStyle, LegendStyle, LineStyle
 from plotlib.plotter import DataPlotter
 
 FREQ, ZS_RE, ZS_IM = 0, 1, 2      # 通道号
@@ -170,6 +173,24 @@ def test_legend_follows_lines_formatter(eis_dataset):
     assert [h.get_linestyle() for h in ax.get_legend().legend_handles] == ['--'] * 3
 
 
+@pytest.mark.parametrize("method", ['plot_multiline', 'plot_xy'])
+def test_legend_stays_in_place_after_lines_formatter(eis_dataset, method):
+    """
+    回归（第三方审查 D）：lines_formatter 之后重建的图例留在原位、能否拖动不变（两种图例位置：图外右侧、图内右下）。
+    曾把已是像素坐标的锚点再按坐标轴换算一次，图例被移到画布外几十万像素处。渲染后才看得出来。
+    """
+    def legend_after_draw(**kwargs):
+        drawn = next(iter(getattr(DataPlotter(eis_dataset), method)(**kwargs).figures.values()))
+        drawn.fig.canvas.draw()
+        legend = drawn.axes['left'].get_legend()
+        return legend.get_window_extent().p0, legend.get_draggable()
+
+    before, draggable_before = legend_after_draw()
+    after, draggable_after = legend_after_draw(lines_formatter=lambda lines: None)
+    np.testing.assert_allclose(after, before)
+    assert draggable_after == draggable_before
+
+
 # ══════════════════════════════════════════════
 # plot_groups：把计划画对（分组规则本身在 test_plot_plan.py；
 # 分组参数的约定在 test_backend_parity.py 里对两个绘图器一起测）
@@ -224,29 +245,34 @@ def test_group_style_translated(eis_dataset, style, expected):
     ('dot',   ':'),
 ])
 def test_group_without_linestyle_uses_default_linestyle(eis_dataset, linestyle, expected):
-    """分组没写线型时用绘图器的 linestyle（经 rc_context 生效）。"""
+    """分组没写线型时用绘图器的全局线型 lines=LineStyle(linestyle=...)（经 rc_context 生效）。"""
     groups = Group(eis_dataset, {'A': {'num': [0, 1]}})
-    plotter = DataPlotter(eis_dataset, groups=groups, linestyle=linestyle).plot_groups()
+    plotter = DataPlotter(eis_dataset, groups=groups, lines=LineStyle(linestyle=linestyle)).plot_groups()
     assert all(a.get_linestyle() == expected for a in plotter.figures['A'].artists)
 
 
-def test_linestyle_default_and_standard_words(eis_dataset):
-    """linestyle 也是线型入口：默认 'solid'，接受标准词，后端写法 '-' 不再接受。"""
+def test_global_lines_and_standard_words(eis_dataset):
+    """
+    全局的线 lines=LineStyle(...)（原 line_width / linestyle 参数）：默认实线、线宽 3；只写要改的，其余沿用默认；
+    只收标准写法（后端写法 '-' 报错）；不收颜色（颜色按样品配色）。
+    """
     lines = DataPlotter(eis_dataset).plot_multiline().figures['main'].artists
-    assert all(line.get_linestyle() == '-' for line in lines)
+    assert all((line.get_linestyle(), line.get_linewidth()) == ('-', 3) for line in lines)
 
-    lines = DataPlotter(eis_dataset, linestyle='dash').plot_multiline().figures['main'].artists
-    assert all(line.get_linestyle() == '--' for line in lines)
+    lines = DataPlotter(eis_dataset, lines=LineStyle(linestyle='dash')).plot_multiline().figures['main'].artists
+    assert all((line.get_linestyle(), line.get_linewidth()) == ('--', 3) for line in lines)
 
     with pytest.raises(ValueError):
-        DataPlotter(eis_dataset, linestyle='-')
+        DataPlotter(eis_dataset, lines=LineStyle(linestyle='-'))
+    with pytest.raises(ValueError, match='颜色'):
+        DataPlotter(eis_dataset, lines=LineStyle(color='red'))
 
 
 def test_lines_formatter_overrides_group_style(eis_dataset):
     """优先级：默认样式 < 分组样式 < 用户 formatter（formatter 最后执行）。"""
     from plotlib.formatters import make_lines_formatter
     plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).plot_groups(
-        lines_formatter=make_lines_formatter(linestyle='dashdot'))
+        lines_formatter=make_lines_formatter(LineStyle(linestyle='dashdot')))
     for drawn in plotter.figures.values():
         assert all(a.get_linestyle() == '-.' for a in drawn.artists)
 
@@ -432,12 +458,30 @@ def test_neglog_both_axes_keep_their_own_format(eis_dataset):
     """
     from plotlib.formatters import make_axes_formatter
 
-    fmt = make_axes_formatter(x_format='{x:.1f}', y_format='{y:.3f}')
+    fmt = make_axes_formatter(x=AxisStyle(format='{x:.1f}'), y=AxisStyle(format='{y:.3f}'))
     ax = DataPlotter(eis_dataset, channel_x=ZS_IM, channel_y=ZS_IM).plot_multiline(
         axes_formatter=fmt, neglog_x=True, neglog_y=True).figures['main'].axes['left']
 
     assert ax.xaxis.get_major_formatter()(2.0, 0) == '-2.0'
     assert ax.yaxis.get_major_formatter()(2.0, 0) == '-2.000'
+
+
+@pytest.mark.parametrize("draw, axis", [
+    (lambda ds: DataPlotter(ds).plot_xy(channel_x=ZS_IM, channel_y=ZS_RE, neglog_x=True), 'x'),
+    (lambda ds: DataPlotter(ds).plot_dual_y(left=(FREQ, ZS_IM), right=(FREQ, ZS_RE), neglog_y=True), 'y'),
+    (lambda ds: DataPlotter(ds).plot_dual_y(left=(ZS_IM, ZS_RE), right=(ZS_IM, ZS_RE),
+                                            neglog_x=True, neglog_x2=True), 'x'),
+], ids=['xy_x', 'dual_y_left_y', 'dual_y_shared_x'])
+def test_neglog_ticks_render_numbers(eis_dataset, draw, axis):
+    """
+    回归（第三方审查 C）：渲染后每个刻度都是「一个负号 + 数字」。这几根轴用的是 matplotlib 默认刻度格式（版式没设）。
+    曾只包装了默认格式器的调用，它收不到本轮的刻度位置，渲染出来只剩 '-'。
+    双 Y 轴左右共用 X 轴：只加一次负号（'x2' 在约定里是上轴，不作用在共用的 X 轴上，与 Plotly 一致）。
+    """
+    drawn = draw(eis_dataset).figures[0]
+    drawn.fig.canvas.draw()
+    texts = [t.get_text() for t in getattr(drawn.axes['left'], f'get_{axis}ticklabels')() if t.get_text()]
+    assert texts and all(re.fullmatch(r'-\d+(\.\d+)?', t) for t in texts), texts
 
 
 # ══════════════════════════════════════════════
@@ -453,9 +497,9 @@ def test_backend_draws_only_from_plan():
 
     spec = FigureSpec(key='hand', x_unit='X(u)', y_unit='Y(u)', curves=[
         CurveSpec(sample_idx=7, x=np.array([0, 1, 2]), y=np.array([3, 4, 5]), label='手写一',
-                  group_name=None, color_position=None, style={'color': (255, 0, 0)}),
+                  group_name=None, color_position=None, style=LineStyle(color=(255, 0, 0))),
         CurveSpec(sample_idx=8, x=np.array([0, 1, 2]), y=np.array([6, 7, 8]), label='手写二',
-                  group_name=None, color_position=0.5, style={}),
+                  group_name=None, color_position=0.5),
     ])
     drawn = MatplotlibBackend(Appearance(), cmap=None).draw(spec, figsize=(6, 4))
 
@@ -478,13 +522,20 @@ def test_backend_choice(eis_dataset):
 
 
 def test_appearance_translated_to_rc_params():
-    """外观参数是后端无关的公共参数（Appearance），由 matplotlib 后端翻译成 rc_params。"""
+    """
+    外观参数是后端无关的公共参数（Appearance），由 matplotlib 后端翻译成 rc_params；
+    样式对象按「库默认 < 用户写的那一层」叠加（只写线型，线宽仍是默认 3）。
+    """
     from plotlib.backends.matplotlib_backend import MatplotlibBackend
-    from plotlib.plot_spec import Appearance
+    from plotlib.plot_spec import Appearance, FrameStyle, LegendStyle
 
-    backend = MatplotlibBackend(Appearance(font_size=30, linestyle='dash'), cmap=None)
+    backend = MatplotlibBackend(Appearance(font_size=30, lines=LineStyle(linestyle='dash'),
+                                           frame=FrameStyle(width=2), legend=LegendStyle(font_size=12)), cmap=None)
     assert backend.rc_params['font.size'] == 30
     assert backend.rc_params['lines.linestyle'] == '--'           # 标准写法翻译成 matplotlib 原生值
+    assert backend.rc_params['lines.linewidth'] == 3              # 没写：库默认
+    assert backend.rc_params['axes.linewidth'] == 2
+    assert backend.rc_params['legend.fontsize'] == backend.rc_params['legend.title_fontsize'] == 12
 
 
 # ══════════════════════════════════════════════
@@ -504,10 +555,10 @@ def draw_layout(dataset, layout):
 @pytest.mark.parametrize("layout, legend_loc, draggable", [
     ('multiline', 6, True),       # 6 = 'center left'，配合 bbox (1, 0.5) 放在图外右侧
     ('xy',        4, False),      # 4 = 'lower right'
-    ('dual_y',    4, False),
+    ('dual_y',    4, False),      # 'lower right' 配合 bbox (1, 1.02)：图外上方、右对齐（位置见下一条测试）
 ])
 def test_layout_legend(eis_dataset, layout, legend_loc, draggable):
-    """图例：多线图放图外右侧且可拖动；xy、双 Y 轴在右下角。双 Y 轴只有左轴有图例。"""
+    """图例：多线图放图外右侧且可拖动；xy 在右下角；双 Y 轴在图外上方。一张图只有一个图例，建在左轴上。"""
     _, left, right = draw_layout(eis_dataset, layout)
     legend = left.get_legend()
     assert legend._loc == legend_loc
@@ -533,6 +584,7 @@ def test_layout_tick_format(eis_dataset, layout, axis, value, text):
     ('multiline', 'right', 0.75),
     ('xy',        'left',  0.15),
     ('dual_y',    'right', 0.85),
+    ('dual_y',    'top',   0.85),     # 上边给图外上方的图例让位
 ])
 def test_layout_margins(eis_dataset, layout, side, value):
     """边距：绘图区边界占画布的比例（多线图右边给图例让位）。"""
@@ -552,6 +604,167 @@ def test_layout_dual_y_axis_colors(eis_dataset):
     assert to_rgba(left.yaxis.get_ticklabels()[0].get_color()) == red
     assert to_rgba(drawn.artist(0).get_color()) == red
     assert to_rgba(drawn.artist(0, 'right').get_color()) == blue
+
+
+@pytest.mark.parametrize("layout, top, right", [
+    ('multiline', False, False),      # 默认无框（用户定）
+    ('xy',        False, False),
+    ('dual_y',    True,  True),       # 双 Y 轴：左右各有一根轴，画完整的框（用户定）
+])
+def test_layout_frame(eis_dataset, layout, top, right):
+    """边框（FrameStyle）：多线、xy 只有左边和下边；双 Y 轴画完整的框，右边是右轴自己的（蓝色）轴线。"""
+    _, left, right_ax = draw_layout(eis_dataset, layout)
+    assert left.spines['top'].get_visible() == top
+    if right_ax is None:
+        assert left.spines['right'].get_visible() == right
+    else:
+        assert right_ax.spines['right'].get_visible()
+        assert to_rgba(right_ax.spines['right'].get_edgecolor()) == to_rgba('blue')
+        assert not right_ax.spines['left'].get_visible()          # 不盖住左轴的红色轴线
+
+
+def test_global_styles_override_preset(eis_dataset):
+    """
+    DataPlotter 里写的全局样式盖过版式预设（库默认 < 预设 < 全局）：
+    多线图预设无框、图例在图外右侧；全局写了 top=True、position='upper left' 就照全局画，没写的（拖动）仍用预设。
+    """
+    from plotlib.plot_spec import FrameStyle
+
+    ax = DataPlotter(eis_dataset, frame=FrameStyle(top=True), legend=LegendStyle(position='upper left')) \
+        .plot_multiline().figures['main'].axes['left']
+    assert ax.spines['top'].get_visible() and not ax.spines['right'].get_visible()
+    legend = ax.get_legend()
+    assert legend._loc == 2 and legend.get_draggable()        # 2 = 'upper left'；拖动来自预设
+
+
+def test_axes_formatter_keeps_preset_tick_format(eis_dataset):
+    """
+    轴工厂只改写了的：只把 X 轴改成对数，Y 轴仍是多线图预设的两位小数。
+    回归（样式对象化时修）：工厂曾总是调用 set_yscale('linear')，把预设的刻度格式重置成自动格式。
+    """
+    from plotlib.formatters import make_axes_formatter
+
+    ax = DataPlotter(eis_dataset).plot_multiline(
+        axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'))).figures['main'].axes['left']
+    assert ax.get_xscale() == 'log'
+    assert ax.yaxis.get_major_formatter()(1.234, 0) == '1.23'
+
+
+def test_layout_dual_y_legend(eis_dataset):
+    """
+    双 Y 轴图例（2026-11-20，参照用户的 Origin 图）：左右两条线都进图例（红、蓝），每条写自己的单位，
+    图例标题是样品名；放在绘图区上方、右边与绘图区对齐，整个在画布内。渲染后才知道位置，先 draw。
+    """
+    drawn, left, right = draw_layout(eis_dataset, 'dual_y')
+    assert right is not None
+    drawn.fig.canvas.draw()
+    legend = left.get_legend()
+
+    assert right.get_legend() is None                       # 仍只有一个图例，建在左轴上
+    assert legend.get_title().get_text() == 'S0'
+    assert [t.get_text() for t in legend.get_texts()] == ["Zs'(ohm)", "Zs''(ohm)"]
+    assert [to_rgba(h.get_color()) for h in legend.legend_handles] == [to_rgba('red'), to_rgba('blue')]
+    box, plot_area = legend.get_window_extent(), left.get_window_extent()
+    assert box.y0 >= plot_area.y1                           # 在绘图区上方
+    assert box.x1 == pytest.approx(plot_area.x1, abs=2)     # 右边对齐
+    assert box.y1 <= drawn.fig.bbox.y1                      # 没有超出画布
+
+
+def test_dual_y_legend_follows_right_lines_and_keeps_legend_formatter(eis_dataset):
+    """
+    图例里有右线：右轴的 lines_formatter 改了线色，图例跟着变；左轴 legend_formatter 设的字号、图例标题不能被重建冲掉。
+    所以各轴的轴、线回调都执行完、图例按需重建一次之后，才调用图例回调。
+    """
+    from plotlib.formatters import make_legend_formatter, make_lines_formatter
+
+    drawn = DataPlotter(eis_dataset).plot_dual_y(
+        right=(FREQ, ZS_IM),
+        right_lines_formatter=make_lines_formatter(LineStyle(color='green')),
+        legend_formatter=make_legend_formatter(LegendStyle(font_size=7))).figures[0]
+    legend = drawn.axes['left'].get_legend()
+
+    assert [h.get_color() for h in legend.legend_handles] == ['red', 'green']
+    assert [t.get_fontsize() for t in legend.get_texts()] == [7, 7]
+    assert legend.get_title().get_text() == 'S0'
+
+
+# ══════════════════════════════════════════════
+# 刻度 TickStyle（2026-11-20）：DataPlotter(ticks=...) 全局，axes formatter 的 ticks 单轴覆盖。渲染后断言
+# ══════════════════════════════════════════════
+def drawn_ticks(drawn, side='left', axis='x'):
+    """渲染后取一根轴的 (主刻度, 次刻度位置, 次刻度文字)。"""
+    drawn.fig.canvas.draw()
+    target = getattr(drawn.axes[side], f'{axis}axis')
+    labels = [t.get_text() for t in target.get_minorticklabels() if t.get_text()]
+    return target.get_major_ticks(), list(target.get_minorticklocs()), labels
+
+
+def test_ticks_default(eis_dataset):
+    """默认：主刻度 6 × 3 磅、朝外；线性轴也显示次刻度（3 磅长），次刻度不写文字。"""
+    major, minor_locs, minor_labels = drawn_ticks(DataPlotter(eis_dataset).plot_multiline().figures['main'])
+    assert {(t.tick1line.get_markersize(), t.tick1line.get_markeredgewidth()) for t in major} == {(6, 3)}
+    assert minor_locs
+    assert minor_labels == []
+
+
+def test_ticks_global_settings(eis_dataset):
+    """DataPlotter(ticks=...) 只写要改的，其余沿用默认：主刻度长 10（宽仍 3），刻度文字 12 磅 serif。"""
+    from plotlib.plot_spec import TickStyle
+
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(length=10, label_size=12, label_font='serif')) \
+        .plot_multiline().figures['main']
+    major, _, _ = drawn_ticks(drawn)
+    assert {(t.tick1line.get_markersize(), t.tick1line.get_markeredgewidth()) for t in major} == {(10, 3)}
+    label = drawn.axes['left'].xaxis.get_ticklabels()[0]
+    assert label.get_fontsize() == 12 and label.get_fontfamily() == ['serif']
+
+
+def test_ticks_minor_switch_survives_scale_change(eis_dataset):
+    """
+    关掉次刻度后，轴工厂把 X 轴改成对数也不会冒出次刻度：
+    改刻度类型时 matplotlib 会把次刻度的定位器重置成默认值，后端在用户回调之后补上全局设置（只补还是默认值的）。
+    """
+    from plotlib.formatters import make_axes_formatter
+    from plotlib.plot_spec import TickStyle
+
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor=False)).plot_multiline(
+        axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'))).figures['main']
+    assert drawn_ticks(drawn, axis='x')[1] == []
+    assert drawn_ticks(drawn, axis='y')[1] == []
+
+
+@pytest.mark.parametrize("minor_labels, check", [
+    ('none',  lambda labels: labels == []),
+    ('short', lambda labels: labels and set(labels) <= set('23456789')),     # 对数轴只写首位数字：2、3 … 9
+    ('full',  lambda labels: len(labels) >= 8),                              # 每个次刻度都写完整数值
+])
+def test_minor_labels_on_log_axis(eis_dataset, minor_labels, check):
+    """次刻度文字（对数轴，频率 1 ~ 100）：none 不写；short 只写首位数字；full 写完整数值。"""
+    from plotlib.formatters import make_axes_formatter
+    from plotlib.plot_spec import TickStyle
+
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels=minor_labels)).plot_multiline(
+        axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'))).figures['main']
+    labels = drawn_ticks(drawn, axis='x')[2]
+    assert check(labels), labels
+
+
+def test_minor_labels_style_matplotlib_only(eis_dataset):
+    """
+    matplotlib 的次刻度文字可以单独设字号（Plotly 不行，见 test_plotly_backend.py）；线性轴上 full 也能写文字。
+    线性轴上的 short 不写（首位数字只在对数轴上有意义，与 Plotly 一致；曾等同 full，画出来每个次刻度都标数、挤成一片）。
+    """
+    from plotlib.plot_spec import TickStyle
+
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels='full', minor_label_size=8)) \
+        .plot_multiline().figures['main']
+    _, _, labels = drawn_ticks(drawn, axis='y')
+    assert labels
+    sizes = {t.get_fontsize() for t in drawn.axes['left'].yaxis.get_minorticklabels() if t.get_text()}
+    assert sizes == {8}
+
+    short = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels='short')).plot_multiline().figures['main']
+    assert drawn_ticks(short, axis='y')[2] == []
 
 
 def test_appearance_dpi(eis_dataset):

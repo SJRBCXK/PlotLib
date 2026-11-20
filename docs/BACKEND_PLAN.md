@@ -35,24 +35,25 @@ MatplotlibBackend          PlotlyBackend          （backends/：只管渲染，
         │ ③ 交回 DrawnFigure(spec, fig, axes, artists)
         ▼
 DataPlotter.figures = {FigureSpec.key: DrawnFigure}；取线 figures[key].artist(样品号, 轴)
+   （多张计划时 Plotly 用 draw_pages 画成一个 Figure 多页，各页共用 fig；add_slider 一条线一档，add_page_slider 一页一档）
 ```
 
 | 模块 | 职责 | 依赖 |
 |---|---|---|
 | `plotter.py` | `DataPlotter`：唯一入口。选计划函数、定默认尺寸、把用户回调按轴打包、交给后端、存结果；不导入绘图库 | plan、plot_spec、backends |
 | `plan.py` | 规则：`plan_multiline_figures` / `plan_xy_figures` / `plan_dual_y_figures`，以及 `color_positions`、`resolve_groups`、取数 | plot_spec、DataSet、Group |
-| `plot_spec.py` | 约定：`CurveSpec`、`FigureSpec`、`DrawnFigure`、`Appearance`（含 `dpi`）、`AxesFormatter`；不含规则、不导入绘图库 | numpy |
-| `layouts.py` | 排版预设：每种版式的图例位置、刻度格式、轴着色、边距（标准写法） | plot_spec |
-| `style.py` | 翻译层：线型 / 标记 / 颜色 / 图例位置 / 刻度格式的标准写法 → 各后端原生值；磅、英寸按 dpi 换算 | — |
-| `backends/` | `get_backend(name, appearance, cmap)`；`MatplotlibBackend`、`PlotlyBackend`：唯一公开方法 `draw`，Plotly 另有 `add_slider`；只依赖约定，不依赖规则 | plot_spec、layouts、style |
-| `formatters.py` | 用户回调工厂 `make_*_formatter(backend=...)`、`combine_formatters`（前端接口，按 backend 参数区分，不按后端拆文件） | style |
+| `plot_spec.py` | 约定：样式对象 `LineStyle` / `AxisStyle` / `FrameStyle` / `LegendStyle` / `TickStyle` 与库默认 `DEFAULT_*`（2026-11-20 样式对象化）；`CurveSpec`（`style` 是 `LineStyle`）、`FigureSpec`、`DrawnFigure`、`Appearance`（用户写的那一层样式、`dpi`）、`AxesFormatter`；不含规则、不导入绘图库 | numpy |
+| `layouts.py` | 排版预设：每种版式的图例（`LegendStyle`）、边框（`FrameStyle`）、各轴（`AxisStyle`：刻度格式、着色）、边距；`resolve_legend` / `resolve_frame` 是唯一写叠加顺序的地方（库默认 < 预设 < 全局） | plot_spec |
+| `style.py` | 翻译层：线型 / 标记 / 颜色 / 图例位置 / 刻度格式 / 刻度（`TickStyle`）的标准写法 → 各后端原生值；磅、英寸按 dpi 换算 | plot_spec |
+| `backends/` | `get_backend(name, appearance, cmap)`；`MatplotlibBackend`、`PlotlyBackend`：公开方法 `draw`（一张计划一张图）；Plotly 另有 `draw_pages`（多张计划画成一个 Figure 多页，6.8）、`add_slider` / `add_page_slider`；`DataPlotter` 按「后端有没有这个方法」决定用不用；只依赖约定，不依赖规则；`matplotlib_styles.py` 把翻译好的样式用到 matplotlib 对象上（后端与格式化器共用，不导入 pyplot） | plot_spec、layouts、style |
+| `formatters.py` | 用户回调工厂 `make_*_formatter(backend=...)`、`combine_formatters`（前端接口，按 backend 参数区分，不按后端拆文件）。回调由后端按轴调用，两个后端形状对应：axes `(ax \| 轴名, fig)`、lines（这根轴的线）、legend（图例列表） | style |
 | `html_export.py` | 把 Plotly Figure 导出成随窗口缩放的 HTML | plotly |
 
 依赖只朝一个方向：入口 → 计划 → 约定 ← 后端；后端不认识 `DataSet`、`Group`、`DataPlotter`，也不依赖规则。
 `import plotlib` 不加载 Plotly 和 pyplot：后端在 `get_backend` 里用到时才导入。
 
 公开接口的命名（2026-11-20 统一，与计划层、`Appearance`、GLOSSARY 一致）：
-构造参数 `dataset`、`channel_x` / `channel_y`、`line_width` / `axis_width` / `tick_width`、`linestyle`、`legend_font_size`、`dpi`、`backend`；
+构造参数 `dataset`、`channel_x` / `channel_y`、样式对象 `lines` / `frame` / `legend` / `ticks`（2026-11-20 起替换 `line_width`、`linestyle`、`axis_width`、`legend_font_size`、`tick_width`）、`dpi`、`backend`；
 方法名「plot_ + 版式」；方法参数 `neglog_x` / `neglog_y`（双 Y 轴再有 `neglog_x2` / `neglog_y2`）、`plot_kind`（双 Y 轴 `plot_kinds`）、
 双 Y 轴 `left=(X, Y)` / `right=(X, Y)`、按轴回调 `axes_formatter` 等（右轴 `right_axes_formatter` 等）、整图回调 `figure_formatter(fig, axes)`。
 
@@ -185,9 +186,13 @@ Plotly backend，删除 `InteractivePlotter`（6.7）→ Plotly 按组翻页（6
   `plot_data_groups` 只保存不使用。要按 2.1 节的绘图器约定改：删掉第一个参数，改为可选的 `groups: Group | None`，三种情况的检查与 `DataPlotter` 相同；
   届时把检查移进 `plot_common.py`（如 `resolve_groups(groups, dataset) -> Group`），两个绘图器共用。随之更新测试中 12 处 `InteractivePlotter(None, ...)`、
   `scripts/piezo_interactive.py` 和 README。
-- **matplotlib 的 axes formatter 写死刻度宽 3**（2026-11-20 记录）：`make_axes_formatter` 里 `tick_params(width=3)` 不读 `Appearance.tick_width`。
-- **功能待办（不影响结构）**：formatter 工厂的「目标轴」参数（右轴回调）；`combine_formatters` 两个后端通用；Plotly 的上轴 `x2`；参照脚本做「前端模板」；Plotly 分离模式按组翻页（STRUCTURE_REVIEW 6.8）。
-- **分组样式只对折线生效**（2026-11-18 记录；2026-11-19 STRUCTURE_REVIEW 6.5 起颜色已对所有画法生效，下面说的是线型、标记）：scatter / bar 写了 linestyle / marker / color 也不应用（scatter 创建后改不了 marker，bar 没有 `set_color`）。
+- ~~axes formatter 写死刻度宽 3~~、~~「目标轴」~~、~~`combine_formatters` 两个后端通用~~：2026-11-20 第三方审查修复第二组已完成
+  （按轴回调由后端交出这根轴的东西，见 STRUCTURE_REVIEW「第三方审查修复」）。
+- **功能待办（不影响结构）**：Plotly 的上轴 `x2`；参照脚本做「前端模板」；~~Plotly 分离模式按组翻页~~（6.8 完成：凡是多张计划都翻页）。
+- ~~样式对象化~~（2026-11-20 完成）：格式参数按主题打包成 `LineStyle` / `AxisStyle` / `FrameStyle` / `LegendStyle` / `TickStyle`，全局、预设、分组、格式化器同一种写法（STRUCTURE_REVIEW「6.8 之后：样式对象化」）。
+- ~~matplotlib 轴工厂冲掉排版预设的刻度格式~~（随样式对象化修：`AxisStyle.scale` 没写就不调用 `set_*scale`）。
+- **Plotly 次刻度文字字号**（2026-11-20 记录）：Plotly 没有这个属性，只能在导出的 HTML 里用 JS 改；静态图、notebook 不生效，缩放重画会被冲掉。真需要时作为 html_export 的增强。
+- ~~分组样式只对折线生效~~（第三方审查 G 起标记对散点也生效，样式对象化起按 `STYLE_FIELDS_BY_KIND` 取字段）（2026-11-18 记录；2026-11-19 STRUCTURE_REVIEW 6.5 起颜色已对所有画法生效，下面说的是线型、标记）：scatter / bar 写了 linestyle / marker / color 也不应用（scatter 创建后改不了 marker，bar 没有 `set_color`）。
   按原则 5 以后应改为明确报错或在创建时传入。数据点很密时标记会糊成一片，以后可能需要 `markevery` 类参数。
 - **图例显示样品名，不显示分组名**（2026-11-18 记录）：分组绘图的图例来自列名（样品名）。绘图计划的曲线带 `group_name`，是否改为显示组名在 STRUCTURE_REVIEW 6.1 由用户定。
 - **作用在绘图计划上的样式调整**（2026-11-18 记录，方向）：有了计划后，可在画之前按标准写法改某条曲线的样式，两个 backend 都生效；

@@ -8,6 +8,7 @@ from plotlib.dataset import DataSet
 from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
 from plotlib.formatters import make_axes_formatter
+from plotlib.plot_spec import AxisStyle
 
 plt.close('all')
 
@@ -21,10 +22,8 @@ dataRowNum_unit4 = 3
 
 
 Tensile_formatter = make_axes_formatter(
-    xscale_type='linear',
-    yscale_type='linear',
-    x_format='{x:.2f}',
-    y_format='{y:.2f}'
+    x=AxisStyle(scale='linear', format='{x:.2f}'),
+    y=AxisStyle(scale='linear', format='{y:.2f}'),
 )
 
 

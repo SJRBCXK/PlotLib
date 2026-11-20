@@ -179,10 +179,14 @@ class DataSet():
 
 
     def expandata(self, other: DataSet):
-        """扩展数据集"""
-
-        if self.data.size == 0:
-            self.data = other.data.copy()
+        """
+        横向拼接另一个数据集：行数不同时短的一方在下面补 NaN。
+        拼接后校验失败（如同一通道单位不同）→ 恢复原状再抛出，不留下半改的对象。
+        """
+        # 「空」看有没有列，不看 size：零行的样品（如找不到峰的峰表，形状 (0, 2)）size 也是 0，
+        # 但它有列，要照常拼接（第三方审查 B）
+        if self.data.shape[1] == 0:
+            new_data = other.data.copy()
         else:
             a, b = self.data, other.data
             max_rows = max(a.shape[0], b.shape[0])
@@ -190,13 +194,21 @@ class DataSet():
                 a = np.vstack([a, np.full((max_rows - a.shape[0], a.shape[1]), np.nan)])
             if b.shape[0] < max_rows:
                 b = np.vstack([b, np.full((max_rows - b.shape[0], b.shape[1]), np.nan)])
-            self.data = np.hstack([a, b])
-        self.names.extend(other.names)
-        self.units.extend(other.units)
-        self.sample_idx.extend(other.sample_idx)
-        self.father_idx.extend(other.father_idx)
-        self.initial_idx.extend(other.initial_idx)
-        self.update_attributes()
+            new_data = np.hstack([a, b])
+
+        # 先记下原状（与 Column.sample_idx 的 setter 同一做法）：update_attributes 校验失败时恢复
+        fields = ('data', 'names', 'units', 'sample_idx', 'father_idx', 'initial_idx')
+        backup = {field: getattr(self, field) for field in fields}
+        self.data = new_data
+        for field in fields[1:]:
+            setattr(self, field, getattr(self, field) + getattr(other, field))   # 新列表，原列表留作备份
+        try:
+            self.update_attributes()
+        except RuntimeError:
+            for field, value in backup.items():
+                setattr(self, field, value)
+            self.update_attributes()
+            raise
         return self
     
     

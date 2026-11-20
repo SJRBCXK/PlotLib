@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import TypedDict
 
 import numpy as np
-from .dataset import DataSet, Column, ColumnList
+from .dataset import DataSet, Column
 
 
 
@@ -12,16 +12,20 @@ from .dataset import DataSet, Column, ColumnList
 
 
 class TransformMetadata(TypedDict, total=False):
-    """命名回调可覆盖的结果元数据；省略或设为 None 时保留自动值。"""
+    """
+    命名回调可覆盖的结果元数据；省略或设为 None 时保留自动值。
+    sample_idx 只收一个整数：一次计算只产出一个样品（逐样品沿用原号、跨样品合成一个新样品、Group.apply 每组一个），
+    要拆成几个样品就逐样品 for 分开算再拼回（2026-11-20 全面评审：曾标注 int | list[int]，列表从来不能用）。
+    """
 
     names: list[str] | None
     units: list[str] | None
-    sample_idx: int | list[int] | None
+    sample_idx: int | None
 
 
 class DataProcessLayer:
     """
-    数据选择与处理层。
+    数据选择层（计算在 DataTransformer、Group.apply）。
 
     从 DataSet 中按条件筛选数据列，支持链式调用。
 
@@ -55,39 +59,21 @@ class DataProcessLayer:
     >>> layer.select('all').by(0, 1).Selected_data     # 链式筛选
     """
 
-    def __init__(
-        self,
-        dataset: DataSet,
-        input_data: object | None = None,
-        input_dataname: list[str] | None = None,
-        input_dataunits: list[str] | None = None,
-        data_Process_Index: list[int] | None = None,
-    ):
+    def __init__(self, dataset: DataSet):
         """
-        初始化处理层。
+        初始化选择层。
 
         Parameters
         ----------
         dataset : DataSet
-            输入数据集。
-        input_data : object, optional
-            输入数据矩阵（通常不直接使用）。
-        input_dataname : list[str], optional
-            数据列名称列表。
-        input_dataunits : list[str], optional
-            数据列单位列表。
-        data_Process_Index : list[int], optional
-            数据处理索引列表。
+            从中选列的数据集。
+
+        （2026-11-20 全面评审：删掉无人使用的 input_data / input_dataname / input_dataunits / data_Process_Index 参数
+        和 Processed_data / called_process 属性——计算已由 DataTransformer（逐样品）和 Group.apply（逐分组）承担，这一层只管选列。）
         """
         self.dataset = dataset
-        self.data = input_data
-        self.names = input_dataname
-        self.units = input_dataunits
-        self.User_data_Index = data_Process_Index
         self.Selected_data = DataSet()
-        self.Processed_data = DataSet()
         self.called_select = False
-        self.called_process = False
 
 
 
@@ -167,6 +153,10 @@ class DataProcessLayer:
                     isinstance(select_rc[i+1], list) and\
                     all(isinstance(x, int) for x in select_rc[i+1]):
                         sample_idx_list = list(select_rc[i+1])
+                        # 写错的样品号要报出来，不能静默只选出存在的（1.0 发布前复审）
+                        missing = set(sample_idx_list).difference(dataset_for_select.sample_idx)
+                        if missing:
+                            raise ValueError(f"找不到样品号：{sorted(missing)}；已有样品号：{sorted(set(dataset_for_select.sample_idx))}")
                         varlist_idx = [idx
                             for g in sample_idx_list
                             for idx, grp in enumerate(dataset_for_select.sample_idx) if grp == g] #type: ignore
@@ -520,6 +510,10 @@ class DataTransformer:
             if func_units is not None:
                 data_unit = func_units
             if func_sample_idx is not None:
+                # bool 也是 int 的子类，但 True / False 当样品号多半是写错了
+                if isinstance(func_sample_idx, bool) or not isinstance(func_sample_idx, int):
+                    raise TypeError(f"naming_func 返回的 sample_idx 只收一个整数（一次计算只产出一个样品），"
+                                    f"实际是 {func_sample_idx!r}")
                 data_sample_idx = func_sample_idx
     
            
@@ -610,8 +604,11 @@ class DataTransformer:
         if sample_idx_input is not None:
             data_sample_idx = sample_idx_input
         elif new_sample:
-            data_sample_idx = self._next_new_sample
-            self._next_new_sample += 1
+            # 新样品号要避开输入数据集和已累计的结果：结果里可能有显式写入的样品号（input_sample_idx / naming_func），
+            # 只看输入数据集会撞号，两次结果被并成同一个样品（1.0 发布前复审）
+            in_results = [idx for idx in self.result_dataset.sample_idx if idx is not None]
+            data_sample_idx = max(self._next_new_sample, max(in_results, default=-1) + 1)
+            self._next_new_sample = data_sample_idx + 1
             self.num_samples += 1
         elif len(set(sample_idx_extracted)) == 1:
             data_sample_idx = sample_idx_extracted[0]

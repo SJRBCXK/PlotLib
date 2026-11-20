@@ -1,4 +1,5 @@
 """Tk reorder: direct position editing shares insertion semantics with dragging."""
+import gc
 import tkinter as tk
 
 import pytest
@@ -21,6 +22,10 @@ def view():
     root.update()
     yield widget
     root.destroy()
+    # 在主线程里立刻回收：tk 变量挂在循环引用里，留给之后的自动回收时，可能落在别的线程
+    # （如 Kaleido 渲染的后台线程），在那里析构 tk 对象会等主线程的事件循环，卡住约 45 秒后报
+    # "main thread is not in main loop"（2026-11-20 步骤 7.1 改了内存分配节奏后出现）
+    gc.collect()
 
 
 def order(view):

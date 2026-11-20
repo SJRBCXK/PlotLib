@@ -34,7 +34,7 @@
     - Plotly 图例拖动属于显示配置，需要时使用 fig.show(config={"edits": {"legendPosition": True}})。
 """
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from matplotlib.lines import Line2D
 
@@ -46,7 +46,11 @@ if TYPE_CHECKING:
     from matplotlib.legend import Legend
 
 from .backends.matplotlib_styles import apply_axis, apply_frame, apply_legend, apply_minor, apply_tick_params
-from .plot_spec import Appearance, AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
+from .backends.plotly_styles import apply_axis as apply_plotly_axis
+from .backends.plotly_styles import apply_frame as apply_plotly_frame
+from .backends.plotly_styles import apply_ticks as apply_plotly_ticks
+from .backends.plotly_styles import figure_dpi
+from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
 from .style import (Backend, check_axis_style, check_backend, check_frame, check_legend_style, check_line_style,
                     check_ticks, translate_axis_style, translate_frame, translate_legend_style, translate_line_style,
                     translate_ticks)
@@ -58,12 +62,6 @@ type MplLegendFormatter = Callable[[Iterable[Legend]], None]
 type PlotlyAxesFormatter = Callable[[str, go.Figure], None]            # (轴名, fig)
 type PlotlyLinesFormatter = Callable[[Iterable[Any]], None]            # 这根轴的 trace 列表
 type PlotlyLegendFormatter = Callable[[Iterable[go.layout.Legend]], None]
-
-
-def _figure_dpi(fig) -> float:
-    """这张图的 dpi：后端画图时记在 fig.layout.meta['dpi']；不是后端画的图（或拿不到图）用默认 dpi。"""
-    meta = None if fig is None else cast("go.Layout", fig.layout).meta
-    return meta.get('dpi', Appearance().dpi) if isinstance(meta, dict) else Appearance().dpi
 
 
 # ══════════════════════════════════════════════
@@ -123,64 +121,23 @@ def make_axes_formatter(x: AxisStyle | None = None, y: AxisStyle | None = None, 
 
         return formatter
 
-    x_native = None if x is None else translate_axis_style(x, backend, 'x')
-    y_native = None if y is None else translate_axis_style(y, backend, 'y')
-
     def plotly_formatter(axis: str, fig: go.Figure):
-        """axis 是这根轴在 layout 里的名字（'yaxis' / 'yaxis2'），由后端按轴传入；X 轴左右共用 'xaxis'。"""
-        if x_native is not None:
-            fig.update_layout(xaxis=x_native)
-        if y_native is not None:
-            fig.update_layout({axis: y_native})
+        """
+        axis 是这根轴在 layout 里的名字（'yaxis' / 'yaxis2'），由后端按轴传入；X 轴左右共用 'xaxis'。
+        样式对象在应用时才翻译（backends/plotly_styles）：磅按这张图的 dpi 换算，对数轴的边界按轴的实际类型换算（55576fb 复审 3）。
+        """
+        if x is not None:
+            apply_plotly_axis(fig, 'xaxis', x, 'x')
+        if y is not None:
+            apply_plotly_axis(fig, axis, y, 'y')
         if frame is not None:
-            _apply_plotly_frame(fig, axis, translate_frame(frame, 'plotly', _figure_dpi(fig)))
+            apply_plotly_frame(fig, axis, frame)
         if ticks is not None:
-            _apply_plotly_ticks(fig, axis, ticks)
+            apply_plotly_ticks(fig, axis, ticks)
         for func in custom:
             func(axis, fig)
 
     return plotly_formatter
-
-
-def _apply_plotly_frame(fig: go.Figure, axis: str, frame: dict) -> None:
-    """
-    单轴的边框（Plotly，对照 matplotlib_styles.apply_frame）：左轴回调改 X、Y 两根轴的线宽，上边 = X 轴镜像、右边 = Y 轴镜像；
-    右轴回调只改右轴的线宽，上边照改，右边就是右轴自己的轴线。有右轴时左 Y 轴不镜像（否则会叠在右轴上）。
-    """
-    layout = cast(Any, fig.layout)
-    left = axis == 'yaxis'
-    if 'linewidth' in frame:
-        for name in (['xaxis', axis] if left else [axis]):
-            fig.update_layout({name: dict(linewidth=frame['linewidth'])})
-    if 'top' in frame:
-        fig.update_layout(xaxis_mirror=frame['top'])
-    if 'right' in frame and left:
-        fig.update_layout(yaxis_mirror=frame['right'] and layout.yaxis2.overlaying is None)
-
-
-def _apply_plotly_ticks(fig: go.Figure, axis: str, ticks: TickStyle) -> None:
-    """
-    单轴的刻度（Plotly）：磅按这张图的 dpi 换成像素。
-    左轴回调连 X 轴一起改（对应 matplotlib 左轴的 x、y）；右轴回调只改自己的 Y 轴（X 轴左右共用，归左轴）。
-    """
-    native = translate_ticks(ticks, 'plotly', _figure_dpi(fig))
-    for target in (['xaxis', axis] if axis == 'yaxis' else [axis]):
-        settings = dict(native)
-        # Plotly 的 minor.ticks 同时管次刻度的显示和朝向：只改朝向（没写 minor）时，不能把关掉的次刻度打开
-        if ticks.minor is None and 'ticks' in settings.get('minor', {}) and not _minor_ticks_shown(fig, target):
-            settings['minor'] = {k: v for k, v in settings['minor'].items() if k != 'ticks'}
-        fig.update_layout({target: settings})
-
-
-def _minor_ticks_shown(fig: go.Figure, axis: str) -> bool:
-    """这根轴现在显不显示次刻度：轴上写了就看轴上的，没写看模板（模板只有 xaxis / yaxis 两套，yaxis2 用 yaxis 的）。"""
-    # layout[轴名] 的类型标注过宽（Plotly 按名字动态取子对象），按 Any 读
-    layout = cast(Any, fig.layout)
-    value = layout[axis].minor.ticks
-    if value is None:
-        template_axis = 'xaxis' if axis.startswith('x') else 'yaxis'
-        value = layout.template.layout[template_axis].minor.ticks
-    return bool(value)
 
 
 # ══════════════════════════════════════════════
@@ -229,7 +186,7 @@ def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callab
             if not isinstance(trace, go.Scatter):
                 continue
             # trace.figure 是它所在的图：按这张图的 dpi 把磅换成像素
-            native = translate_line_style(style, 'plotly', _figure_dpi(trace.figure))
+            native = translate_line_style(style, 'plotly', figure_dpi(trace.figure))
             trace.update(**native)      # update 合并嵌套属性，没写的保持不变
             # 写了标记时，让纯线条也显示标记
             mode = str(trace.mode or "lines")
@@ -282,7 +239,7 @@ def make_legend_formatter(style: LegendStyle | None = None, custom: Iterable[Cal
     def plotly_formatter(legends):
         for legend in legends:
             # legend.figure 是它所在的图：按这张图的 dpi 把字号换成像素
-            legend.update(translate_legend_style(style, 'plotly', _figure_dpi(legend.figure)))
+            legend.update(translate_legend_style(style, 'plotly', figure_dpi(legend.figure)))
             for func in custom:
                 func(legend)
 

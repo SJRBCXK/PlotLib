@@ -1,7 +1,7 @@
 """
 公共样式词汇与后端翻译（STRUCTURE_REVIEW 步骤 4.3）。
 
-约定：程序入口（分组配置、formatter 工厂、DataPlotter 的 linestyle）只接受一套标准写法，
+约定：程序入口（分组配置、formatter 工厂、DataPlotter(lines=LineStyle(...))）只接受一套标准写法，
 不认识就报错，也不替用户改写；翻译只在后端发生：translate_* 把标准写法换成各后端的原生值。
 
 标准写法：
@@ -265,7 +265,7 @@ LEGEND_POSITIONS: dict[str, dict[str, dict]] = {
                           'plotly':     {'x': 1, 'y': 1.02, 'xanchor': 'right', 'yanchor': 'bottom'}},
 }
 
-# 刻度格式的写法与 make_axes_formatter 的 x_format / y_format 相同：'{x:.2f}'、'{y:.1e}'
+# 刻度格式（AxisStyle.format）的写法：'{x:.2f}'、'{y:.1e}'
 _TICK_FORMAT = re.compile(r"\{([xy]):([^}]*)\}")
 _PLOTLY_TICK_FORMAT = re.compile(r"\{[xy]:(\.\d+[feg%])\}")    # Plotly（d3）能直接对应的只有这几种
 
@@ -333,11 +333,15 @@ def check_axis_style(style: AxisStyle, backend: Backend) -> None:
             translate_tick_format(style.format, 'plotly')
 
 
-def translate_axis_style(style: AxisStyle, backend: Backend, letter: Literal['x', 'y']) -> dict:
+def translate_axis_style(style: AxisStyle, backend: Backend, letter: Literal['x', 'y'],
+                         log: bool | None = None) -> dict:
     """
     AxisStyle → 各后端原生值，只含写了的字段。letter 是这根轴的方向（只给了 scaler、没给 format 时按 '{x:g}' 显示）。
       matplotlib：{'scale', 'limits', 'formatter'（格式函数，或 None 不改）, 'color'}，由 backends/matplotlib_styles.py 应用；
       Plotly：    轴配置 {'type', 'range' / 'autorange' / 'autorangeoptions', 'tickformat', 轴着色}，可直接 update_layout。
+    log（只有 Plotly 用）：这根轴应用后是不是对数轴。Plotly 对数轴的边界要写 log10，而 limits 永远写数据值；
+      刻度类型可能在别的回调里设过，所以由应用的一方（backends/plotly_styles.apply_axis）按轴的实际类型给出。
+      不传时只看这个样式自己写的 scale（55576fb 复审 3）。
     """
     check_axis_style(style, backend)
     color = None if style.color is None else translate_color(style.color, backend)
@@ -356,7 +360,10 @@ def translate_axis_style(style: AxisStyle, backend: Backend, letter: Literal['x'
         native['tickformat'] = translate_tick_format(style.format, backend)
     if style.limits is not None:
         # 公共输入用数据值；Plotly 对数轴的边界用 log10
-        low, high = (math.log10(v) if style.scale == 'log' and v is not None else v for v in style.limits)
+        log = style.scale == 'log' if log is None else log
+        if log and any(v is not None and v <= 0 for v in style.limits):
+            raise ValueError("对数轴边界必须大于 0")
+        low, high = (math.log10(v) if log and v is not None else v for v in style.limits)
         if low is not None and high is not None:
             native.update(range=[low, high], autorange=False)
         elif low is not None or high is not None:
@@ -446,7 +453,7 @@ TICK_DIRECTIONS: dict[str, dict[str, str]] = {
     'out': {'matplotlib': 'out', 'plotly': 'outside'},
     'in':  {'matplotlib': 'in',  'plotly': 'inside'},
 }
-# 次刻度写什么 → Plotly 的 minorloglabels（matplotlib 由后端按刻度类型选格式器，见 backends/matplotlib_ticks.py）
+# 次刻度写什么 → Plotly 的 minorloglabels（matplotlib 由后端按刻度类型选格式器，见 backends/matplotlib_styles.py）
 MINOR_LABELS: dict[str, str] = {'none': 'none', 'short': 'small digits', 'full': 'complete'}
 
 _TICK_SIZES = ('length', 'width', 'minor_length', 'minor_width', 'label_size', 'minor_label_size')   # 必须 > 0
@@ -536,7 +543,8 @@ def translate_ticks(ticks: TickStyle, backend: Backend, dpi: float | None = None
     if font:
         native['tickfont'] = font
     if ticks.label_pad is not None:
-        native['ticklabelstandoff'] = px(ticks.label_pad)
+        # Plotly 的 ticklabelstandoff 只收整数像素（Plotly 6.3 / 7.1 都拒绝 5.56 这样的小数，1.0 发布前复审）
+        native['ticklabelstandoff'] = round(px(ticks.label_pad))
     if ticks.minor_labels is not None:
         native['minorloglabels'] = MINOR_LABELS[ticks.minor_labels]
     return native

@@ -12,8 +12,7 @@ PANEL_HTML = Path(__file__).parent / "assets" / "piezo_panel.html"
 OUTPUT_HTML = Path("output") / "output.html"
 
 
-INPUT_COLUMNS_PER_DATASET = 6  # 每组数据集的列数
-INPUT_DATASET_FRACTION = 1/INPUT_COLUMNS_PER_DATASET
+COLUMNS_PER_SAMPLE = 6  # 每个样品的列数（含 1 列标识）
 
 
 dataRowNum_unit1 = 0  # Time for displacement
@@ -37,10 +36,7 @@ axes_fmt = make_axes_formatter(
 
 
 
-data = Dataloader(
-    DATASET_FRACTION = INPUT_DATASET_FRACTION,
-    COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
-).load_data()
+data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
 
 
 

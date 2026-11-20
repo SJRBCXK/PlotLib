@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plotlib"
-version = "0.1.0"
+version = "1.0.0"   # 2026-11-20：库内部构建完成（B 部分步骤 1 ~ 7 + 全面评审），之后是脚本
 description = "科学数据绘图库"
 requires-python = ">=3.14"   # match 语法需 3.10+；类内不加引号的自引用类型标注（如 -> DataPlotter）需 3.14
 dependencies = [

@@ -21,8 +21,7 @@ plt.close('all')
 # ============================================================
 # 数据配置常量
 # ============================================================
-INPUT_COLUMNS_PER_DATASET = 8  # 每组数据集的列数
-INPUT_DATASET_FRACTION = 1/INPUT_COLUMNS_PER_DATASET
+COLUMNS_PER_SAMPLE = 8  # 每个样品的列数（含 1 列标识）
 
 # 数据列索引定义（从0开始）
 dataRowNum_unit1 = 0  # Frequency
@@ -106,10 +105,7 @@ def eis_dual_axis_formatter(ax1, ax2, _fig):
 # ============================================================
 # 数据加载
 # ============================================================
-data = Dataloader(
-    DATASET_FRACTION = INPUT_DATASET_FRACTION,
-    COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
-).load_data()
+data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
 groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图和计算都用它
 
 # ============================================================
@@ -180,10 +176,10 @@ Test_pltsubsxyy = DataPlotter(
 # )
 Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data
 Impendence = DataSet()
-for dataslice in Selected_data.iter('samples'):
+for dataslice in Selected_data:
     impendence_slice = DT(dataslice).Norm(extended=False,norm_unit='|Z|(ohm)')
     Impendence.expandata(impendence_slice)
-data = data.expandata(Impendence)._rearrange_columns()
+data = data.expandata(Impendence).sort_columns()
 Impendence_pltliner1 = DataPlotter(
     dataset=data,
     channel_x = 0,

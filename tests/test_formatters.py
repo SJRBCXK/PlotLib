@@ -5,6 +5,8 @@ make_xxx_formatter(...) 返回一个函数，交给 DataPlotter 的 axes_formatt
 lines_formatter / legend_formatter 参数使用。测试直接在一张空图上调用它，再检查属性。
 2026-11-20 样式对象化：参数是样式对象（AxisStyle、FrameStyle、LineStyle、LegendStyle、TickStyle），没写的字段不改。
 """
+import math
+
 import matplotlib.pyplot as plt
 import pytest
 from matplotlib.colors import to_rgba
@@ -291,6 +293,120 @@ def test_plotly_axis_bounds(axis, kwargs, expected):
     # 只设置了一根轴的边界，另一根轴不应被写入范围设置（样式对象化起没写的轴根本不写）
     other = layout.get("yaxis" if axis == "xaxis" else "xaxis", {})
     assert not {"range", "autorangeoptions"} & other.keys()
+
+
+def test_plotly_frame_on_single_axis_figure():
+    """
+    单轴图上用轴工厂画完整的框：上边 = X 轴镜像，右边 = Y 轴镜像（没有右轴，左 Y 轴自己镜像）。
+    回归：判断「有没有叠加的右轴」时直接读 fig.layout.yaxis2，没有右轴的图上抛 AttributeError
+    （2026-11-20 把 Plotly 的样式应用挪进 backends/plotly_styles.py 时发现）。
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
+    make_axes_formatter(frame=FrameStyle(top=True, right=True), backend="plotly")('yaxis', fig)
+    assert fig.layout.xaxis.mirror is True and fig.layout.yaxis.mirror is True
+
+
+@pytest.mark.parametrize("steps, expected", [
+    # 两侧：Plotly 对数轴的 range 用 log10
+    ([AxisStyle(scale='log', limits=(10, 1000))], dict(type='log', range=(1, 3))),
+    ([AxisStyle(scale='log'), AxisStyle(limits=(10, 1000))], dict(type='log', range=(1, 3))),
+    ([AxisStyle(limits=(10, 1000)), AxisStyle(scale='log')], dict(type='log', range=(1, 3))),
+    ([AxisStyle(scale='log', limits=(10, 1000)), AxisStyle(scale='linear')], dict(type='linear', range=(10, 1000))),
+    # 单侧：autorangeoptions 的边界也用 log10
+    ([AxisStyle(scale='log'), AxisStyle(limits=(10, None))], dict(type='log', minallowed=1)),
+    ([AxisStyle(limits=(None, 1000)), AxisStyle(scale='log')], dict(type='log', maxallowed=3)),
+], ids=['together', 'scale_first', 'limits_first', 'back_to_linear', 'one_side_scale_first', 'one_side_limits_first'])
+def test_plotly_log_limits_any_order(steps, expected):
+    """
+    limits 永远写数据值，与 matplotlib 相同：刻度类型和范围分几个回调设、先设哪个，结果都一样（55576fb 复审 3）。
+    回归：先设对数、再单独设 (10, 1000)，range 写成 [10, 1000]，被 Plotly 当成 10^10 ~ 10^1000；
+    反过来先设范围再改对数，已写的范围也没跟着换算。
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
+    combine_formatters(*(make_axes_formatter(x=step, backend="plotly") for step in steps))('yaxis', fig)
+
+    xaxis = fig.layout.xaxis
+    assert xaxis.type == expected['type']
+    if 'range' in expected:
+        assert list(xaxis.range) == pytest.approx(expected['range'])
+    for key in ('minallowed', 'maxallowed'):
+        if key in expected:
+            assert xaxis.autorangeoptions[key] == pytest.approx(expected[key])
+
+
+@pytest.mark.parametrize("steps, expected", [
+    # 先线性范围、再改对数并给新范围：旧边界 -1 不必换算（会被替换），直接用新的
+    ([AxisStyle(limits=(-1, 30)), AxisStyle(scale='log', limits=(1, 30))],
+     dict(type='log', range=(0, math.log10(30)), autorange=False, minallowed=None, maxallowed=None)),
+    # 单侧换单侧：上一次的下界不残留
+    ([AxisStyle(limits=(5, None)), AxisStyle(limits=(None, 30))],
+     dict(range=None, autorange=True, minallowed=None, maxallowed=30)),
+    # 两侧换单侧：上一次的固定范围不残留
+    ([AxisStyle(limits=(5, 30)), AxisStyle(limits=(None, 30))],
+     dict(range=None, autorange=True, minallowed=None, maxallowed=30)),
+    # 单侧换两侧：上一次的单侧边界不残留
+    ([AxisStyle(limits=(None, 30)), AxisStyle(limits=(5, 30))],
+     dict(range=(5, 30), autorange=False, minallowed=None, maxallowed=None)),
+], ids=['linear_to_log', 'one_side_to_other', 'both_to_one_side', 'one_side_to_both'])
+def test_plotly_limits_replace_previous(steps, expected):
+    """
+    这次写了 limits：两端一起换成这次的（写 None 的一端恢复自动），上一次的范围、单侧边界都不残留；
+    只改刻度类型（没写 limits）时才换算已有的边界（见 test_plotly_log_limits_any_order）。
+    回归（1.0 发布前复审）：先 (-1, 30) 再 log + (1, 30) 曾报「边界必须大于 0」；单侧边界曾残留。
+    """
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[2, 20], y=[1, 2]))
+    combine_formatters(*(make_axes_formatter(x=step, backend="plotly") for step in steps))('yaxis', fig)
+
+    xaxis = fig.layout.xaxis
+    if 'type' in expected:
+        assert xaxis.type == expected['type']
+    assert (None if xaxis.range is None else list(xaxis.range)) == \
+        (None if expected['range'] is None else pytest.approx(list(expected['range'])))
+    assert xaxis.autorange == expected['autorange']
+    assert (xaxis.autorangeoptions.minallowed, xaxis.autorangeoptions.maxallowed) == \
+        (expected['minallowed'], expected['maxallowed'])
+
+
+@pytest.mark.render
+def test_plotly_one_side_limit_after_other_side_render(eis_dataset, render):
+    """先限下界、再只限上界：渲染出的下界恢复自动（覆盖数据），上界就是这次写的。"""
+    from plotlib.plotter import DataPlotter
+
+    axes_fmt = combine_formatters(make_axes_formatter(x=AxisStyle(limits=(50, None)), backend="plotly"),
+                                  make_axes_formatter(x=AxisStyle(limits=(None, 80)), backend="plotly"))
+    fig = DataPlotter(eis_dataset, channel_x=0, channel_y=1, backend='plotly') \
+        .plot_multiline(axes_formatter=axes_fmt).figures['main'].fig
+    low, high = render(fig).layout.xaxis.range
+    assert low <= 1 and high == pytest.approx(80)       # eis_dataset 的频率是 1 ~ 100
+
+
+@pytest.mark.parametrize("steps", [
+    [AxisStyle(scale='log'), AxisStyle(limits=(0, 10))],
+    [AxisStyle(limits=(-1, 10)), AxisStyle(scale='log')],
+], ids=['limits_after_log', 'log_after_limits'])
+def test_plotly_log_limits_must_be_positive(steps):
+    """分步设置时，对数轴的边界同样必须大于 0：在应用时报错（创建时还不知道这根轴会是对数轴）。"""
+    go = pytest.importorskip("plotly.graph_objects")
+    fig = go.Figure(go.Scatter(x=[1, 2], y=[3, 4]))
+    formatter = combine_formatters(*(make_axes_formatter(x=step, backend="plotly") for step in steps))
+    with pytest.raises(ValueError, match='大于 0'):
+        formatter('yaxis', fig)
+
+
+@pytest.mark.render
+def test_plotly_log_limits_in_steps_after_render(eis_dataset, render):
+    """分步设置对数轴范围，Plotly.js 实际渲染出的范围就是写的数据值（复审 3 用 Kaleido 发现的就是这个）。"""
+    from plotlib.plotter import DataPlotter
+
+    axes_fmt = combine_formatters(make_axes_formatter(x=AxisStyle(scale='log'), backend="plotly"),
+                                  make_axes_formatter(x=AxisStyle(limits=(0.5, 500)), backend="plotly"))
+    fig = DataPlotter(eis_dataset, channel_x=0, channel_y=1, backend='plotly') \
+        .plot_multiline(axes_formatter=axes_fmt).figures['main'].fig
+    full_axis = render(fig).layout.xaxis
+    assert [10 ** v for v in full_axis.range] == pytest.approx([0.5, 500])
 
 
 @pytest.mark.render

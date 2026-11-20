@@ -826,8 +826,9 @@ class DataReorderGUI:
 
         return "\n".join(code_lines)
 
-    def _get_ordinal_name(self, index):
-        """根据索引（从 0 开始）自动生成序数词组名：0 → '1st'，1 → '2nd'"""
+    @staticmethod
+    def _get_ordinal_name(index):
+        """根据索引（从 0 开始）自动生成序数词组名：0 → '1st'，1 → '2nd'（不读界面状态，静态方法）"""
         number = index + 1  # 后缀要按从 1 开始的序号算
         # 特殊情况处理：11 ~ 13 是 eleventh / twelfth / thirteenth
         if 10 <= number % 100 <= 20:
@@ -838,8 +839,9 @@ class DataReorderGUI:
 
         return f'{number}{suffix}'
 
-    def _get_linestyle_for_group(self, group_index):
-        """根据组序号自动生成 linestyle（标准写法，见 src/plotlib/style.py）"""
+    @staticmethod
+    def _get_linestyle_for_group(group_index):
+        """根据组序号自动生成 linestyle（标准写法，见 src/plotlib/style.py；不读界面状态，静态方法）"""
         # 基础样式循环
         basic_styles = ["solid", "dash", "dashdot", "dot"]
 

@@ -28,6 +28,12 @@ def test_select_by_samples(eis_dataset):
     assert sel.sample_idx == [1, 1, 1, 2, 2, 2]        # 样品号保持原值
 
 
+def test_select_missing_samples_raises(eis_dataset):
+    """样品号写错（数据集里没有）→ ValueError，列出找不到的样品号。回归（1.0 发布前复审）：曾静默只选出存在的。"""
+    with pytest.raises(ValueError, match=r"找不到样品号：\[77\]"):
+        select(eis_dataset, 'samples', [0, 77])
+
+
 @pytest.mark.parametrize("keyword", ['Samples', 'sample', 'Group1', 'group'])
 def test_select_samples_keyword_must_match_exactly(eis_dataset, keyword):
     """
@@ -99,7 +105,7 @@ def test_select_samples_without_int_list_raises(eis_dataset, args):
 
 def test_select_inconsistent_units_raises(eis_dataset):
     """跨样品选列时，同一通道的单位必须一致：列 0 是 Freq、列 4 是 Zs' → 报错。"""
-    with pytest.raises(RuntimeError, match="Unit mismatch"):
+    with pytest.raises(RuntimeError, match="同一通道的单位不一致"):
         select(eis_dataset, 0, 4)
 
 

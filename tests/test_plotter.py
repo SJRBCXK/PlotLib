@@ -43,15 +43,6 @@ def legend_texts(ax):
 # ══════════════════════════════════════════════
 # plot_multiline：所有样品画在同一张图
 # ══════════════════════════════════════════════
-def test_plot_multiline_one_line_per_sample(eis_dataset):
-    plotter = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE)
-    plotter.plot_multiline()
-
-    assert list(plotter.figures) == ['main']
-    assert len(plotter.figures['main'].artists) == 3
-    assert len(plt.get_fignums()) == 1
-
-
 def test_plot_multiline_labels(eis_dataset):
     """坐标轴标题取单位，图例取样品名。"""
     ax = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE) \
@@ -351,35 +342,6 @@ def test_plot_dual_y_figure_formatter(eis_dataset):
 # ══════════════════════════════════════════════
 # 结果形状（6.5）：四种方法都是 {计划的 key: DrawnFigure}
 # ══════════════════════════════════════════════
-def make_all_kinds(dataset):
-    """四种绘图方法各画一次；返回 {方法名: (plotter, 期望的 key, 期望的轴)}。"""
-    return {
-        'plot_multiline':  (DataPlotter(dataset).plot_multiline(), ['main'], {'left'}),
-        'plot_groups': (DataPlotter(dataset, groups=make_groups(dataset)).plot_groups(), ['A', 'B'], {'left'}),
-        'plot_xy': (DataPlotter(dataset).plot_xy(channel_x=ZS_RE, channel_y=ZS_IM),
-                          [0, 1, 2], {'left'}),
-        'plot_dual_y': (DataPlotter(dataset).plot_dual_y(right=(FREQ, ZS_IM)),
-                           [0, 1, 2], {'left', 'right'}),
-    }
-
-
-@pytest.mark.parametrize("method", ['plot_multiline', 'plot_groups', 'plot_xy', 'plot_dual_y'])
-def test_result_shape_is_uniform(eis_dataset, method):
-    """
-    四种方法的结果同一形状：figures 的键是计划的 key；每张图是 DrawnFigure，
-    线与 spec.curves 一一对应；axes 单轴图为 {'left'}，双 Y 轴图为 {'left', 'right'}。
-    """
-    from plotlib.plot_spec import DrawnFigure
-
-    plotter, keys, axes = make_all_kinds(eis_dataset)[method]
-    assert list(plotter.figures) == keys
-    for key, drawn in plotter.figures.items():
-        assert isinstance(drawn, DrawnFigure)
-        assert drawn.spec.key == key
-        assert len(drawn.artists) == len(drawn.spec.curves)
-        assert set(drawn.axes) == axes
-
-
 def test_artist_lookup_by_sample(eis_dataset):
     """
     按样品号（和轴）取线：分组图里同一样品可在多张图；双 Y 轴图里同一样品有左右两条线，靠 axis 区分。
@@ -415,16 +377,6 @@ def test_group_color_applies_to_every_kind(eis_dataset, plot_kind):
 # sparse_dataset 的样品号是 0、5、9
 # ══════════════════════════════════════════════
 PLASMA = plt.get_cmap('plasma')       # DataPlotter 默认色带
-
-
-def test_sparse_sample_ids_colors(sparse_dataset):
-    """
-    三条线依次取色带 0、1/3、2/3 处的颜色。
-    回归：曾用「样品号 ÷ 样品数」，5/3、9/3 都超过 1 被截断，样品 5 和 9 同色且不报错。
-    """
-    lines = DataPlotter(sparse_dataset).plot_multiline().figures['main'].artists
-    np.testing.assert_allclose([to_rgba(line.get_color()) for line in lines],
-                               [PLASMA(p) for p in (0, 1/3, 2/3)])
 
 
 def test_bar_colors_follow_plan(sparse_dataset):
@@ -717,6 +669,20 @@ def test_ticks_global_settings(eis_dataset):
     assert {(t.tick1line.get_markersize(), t.tick1line.get_markeredgewidth()) for t in major} == {(10, 3)}
     label = drawn.axes['left'].xaxis.get_ticklabels()[0]
     assert label.get_fontsize() == 12 and label.get_fontfamily() == ['serif']
+
+
+def test_ticks_local_minor_on_log_axis_overrides_global(eis_dataset):
+    """
+    全局关掉次刻度、单根轴改成对数并写 minor=True：这根轴显示次刻度（单轴 formatter 盖过全局）。
+    回归（1.0 发布前复审）：对数轴要显示次刻度时只「保留默认定位器」，它仍算默认值，后端补全局设置时又被关掉。
+    """
+    from plotlib.formatters import make_axes_formatter
+    from plotlib.plot_spec import TickStyle
+
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor=False)).plot_multiline(
+        axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'), ticks=TickStyle(minor=True))).figures['main']
+    assert drawn_ticks(drawn, axis='x')[1] != []          # 对数轴
+    assert drawn_ticks(drawn, axis='y')[1] != []          # 轴工厂的 ticks 管这根轴的 X、Y 两个方向（线性轴本来就没问题）
 
 
 def test_ticks_minor_switch_survives_scale_change(eis_dataset):

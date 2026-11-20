@@ -78,15 +78,16 @@ def render():
         kaleido.stop_sync_server(silence_warnings=True)
 
 
-def write_grouped_file(path, units: list[str], groups: dict[str, list[list[float]]]):
+def write_samples_file(path, units: list[str], samples: dict[str, list[list[float]]]):
     """
     按 tools/ 的输出格式写一个按样品排列的数据文件，格式由扩展名决定：
       .csv          逗号分隔（与 tools 导出一致）
       .xlsx / .xls  Excel
       .txt / .dat   空白分隔（仪器导出的文本格式）
 
-    units  : 每个样品数据列的单位（各样品相同），如 ["Frequency(Hz)", "Zs'(ohm)"]
-    groups : {样品名: 数据行列表}，每行长度 == len(units)
+    units   : 每个样品数据列的单位（各样品相同），如 ["Frequency(Hz)", "Zs'(ohm)"]
+    samples : {样品名: 数据行列表}，每行长度 == len(units)
+    （步骤 7.1 改名：原名 write_grouped_file / groups；「组」现在专指 Group，这里是样品）
     """
     path = Path(path)
     suffix = path.suffix.lower()
@@ -96,11 +97,11 @@ def write_grouped_file(path, units: list[str], groups: dict[str, list[list[float
     blank = '-' if is_text else ''
 
     columns = []
-    for group_name, rows in groups.items():
+    for sample_name, rows in samples.items():
         rows = np.asarray(rows, dtype=float)
-        assert rows.shape[1] == len(units), f"{group_name} 的列数与 units 不一致"
+        assert rows.shape[1] == len(units), f"{sample_name} 的列数与 units 不一致"
         # 标识列：第 0 行是样品名，下面留空
-        columns.append([group_name] + [blank] * len(rows))
+        columns.append([sample_name] + [blank] * len(rows))
         # 数据列：第 0 行是单位，下面是数值
         for col_idx, unit in enumerate(units):
             if is_text:
@@ -120,14 +121,9 @@ def write_grouped_file(path, units: list[str], groups: dict[str, list[list[float
     return path
 
 
-def load_file(path, columns_per_group: int):
-    """用真实的 Dataloader 读文件（直接给 file_path，跳过选文件对话框）。"""
-    loader = Dataloader(
-        DATASET_FRACTION=1 / columns_per_group,
-        COLUMNS_PER_DATASET=columns_per_group,
-    )
-    loader.file_path = str(path)
-    return loader.load_data()
+def load_file(path, columns_per_sample: int):
+    """用真实的 Dataloader 读文件（直接传路径，不弹选文件对话框）。"""
+    return Dataloader(columns_per_sample=columns_per_sample).load_data(path)
 
 
 # ──────────────────────────────────────────────
@@ -137,15 +133,15 @@ def load_file(path, columns_per_group: int):
 @pytest.fixture
 def make_dataset(tmp_path):
     """
-    返回函数 make(units, groups, fmt='csv') -> DataSet。
+    返回函数 make(units, samples, fmt='csv') -> DataSet。
     fmt 取 'csv' / 'xlsx' / 'txt'，决定写出哪种文件再用 Dataloader 读回。
 
     tmp_path 是 pytest 内置 fixture：每个测试一个独立的临时目录，
     测试结束自动清理，不会在项目里留下垃圾文件。
     """
-    def make(units, groups, fmt='csv'):
-        path = write_grouped_file(tmp_path / f'data.{fmt}', units, groups)
-        return load_file(path, columns_per_group=len(units) + 1)
+    def make(units, samples, fmt='csv'):
+        path = write_samples_file(tmp_path / f'data.{fmt}', units, samples)
+        return load_file(path, columns_per_sample=len(units) + 1)
     return make
 
 

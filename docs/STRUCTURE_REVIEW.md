@@ -4,8 +4,8 @@
 > 评估范围：`src/`、`scripts/` 逐行阅读；`tools/`、`gui/`、`tests/`、配置与文档看了结构和接口。
 > 本文分三部分：A 评估结论与问题清单（背景）；**B 分步开发指南（当前要做的）**；C 整理工作的记录（已完成）。
 > **状态**：C 部分已全部完成并提交（`92bbde6`，206 passed）。接下来由执行者（Opus 5.5）按 B 部分**指导用户**一步步做，先读 B.0。
-> **进度（2026-11-20 收工时；最新提交 `d41d98f`，之后全部未提交，520 passed；新文件 `src/plotlib/backends/matplotlib_styles.py` 提交时需要 `git add`）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已提交（`815634e`）；步骤 6.1 已提交（`2d87f86`）；步骤 6.2 已提交（`d6f7af6`；374 passed）。步骤 6.3 已提交（`b0d65dd`；385 passed）。之后绘图测试按层整理（`e0799fd`）。6.4「计划补全」、6.5「统一结果与清理」、6.6a「matplotlib 后端（搬家）」、6.6b「排版预设」、6.7「Plotly 后端」已完成（426 passed，待提交）。**后端重构完成，结构已确认**（见 6.7 之后的「结构确认」）：唯一入口 `DataPlotter(backend='matplotlib' | 'plotly')`，`plot_spec.py`（约定）/ `plan.py`（规则）/ `layouts.py` / `style.py`（翻译层）/ `backends/`；公开接口已统一命名（`plot_multiline` 等）。2026-11-19 路线调整：**先建后端，再加新功能**——原 6.4（按组翻页）挪到 6.8，新的 6.4 ~ 6.7 依次是计划补全、统一结果、matplotlib 后端、Plotly 后端。**2026-11-20 插入「第三方审查修复」（6.7 之后、6.8 之前；第一组、第二组（E + G）、双 Y 轴版式与 `legend_title`、F（`plotly>=6.3`）全部完成，472 passed）。
-**6.8「Plotly 翻页」也已完成，步骤 6 全部完成；之后加了刻度 `TickStyle`、再把格式参数全部样式对象化（`LineStyle` / `AxisStyle` / `FrameStyle` / `LegendStyle` / `TickStyle`，预设也用它们写；520 passed，未提交）。下一步：步骤 7**，之后才是 6.8「Plotly 按组翻页」（在新架构上加新功能），先读 6.7 执行记录、审查修复小节和 6.8 小节**。
+> **进度（2026-11-20；最新提交 `55576fb`（样式对象化），之后的「55576fb 复审修复」和步骤 7、全面评审、1.0 发布前复审修复未提交，564 passed，版本 1.0.0；新文件 `src/plotlib/backends/plotly_styles.py` 提交时需要 `git add`）**：B 部分步骤 1 ~ 4.2 已提交（`a36503b`）；步骤 4.3「样式约定」、4.4「结果带分组名」已提交（`813da17`；355 passed）。4.5 已取消；步骤 4 已验收。步骤 5 已提交（`815634e`）；步骤 6.1 已提交（`2d87f86`）；步骤 6.2 已提交（`d6f7af6`；374 passed）。步骤 6.3 已提交（`b0d65dd`；385 passed）。之后绘图测试按层整理（`e0799fd`）。6.4「计划补全」、6.5「统一结果与清理」、6.6a「matplotlib 后端（搬家）」、6.6b「排版预设」、6.7「Plotly 后端」已完成（426 passed，待提交）。**后端重构完成，结构已确认**（见 6.7 之后的「结构确认」）：唯一入口 `DataPlotter(backend='matplotlib' | 'plotly')`，`plot_spec.py`（约定）/ `plan.py`（规则）/ `layouts.py` / `style.py`（翻译层）/ `backends/`；公开接口已统一命名（`plot_multiline` 等）。2026-11-19 路线调整：**先建后端，再加新功能**——原 6.4（按组翻页）挪到 6.8，新的 6.4 ~ 6.7 依次是计划补全、统一结果、matplotlib 后端、Plotly 后端。**2026-11-20 插入「第三方审查修复」（6.7 之后、6.8 之前；第一组、第二组（E + G）、双 Y 轴版式与 `legend_title`、F（`plotly>=6.3`）全部完成，472 passed）。
+**6.8「Plotly 翻页」也已完成，步骤 6 全部完成；之后加了刻度 `TickStyle`、再把格式参数全部样式对象化（`LineStyle` / `AxisStyle` / `FrameStyle` / `LegendStyle` / `TickStyle`，预设也用它们写；520 passed，已提交 `55576fb`）；之后修了第三方复审的 4 条回归（「6.8 之后：55576fb 复审修复」，539 passed，未提交）；**步骤 7 全部完成**（7.1 ~ 7.3，550 passed），之后全面评审、测试精简、诊断清零（「步骤 7 之后：全面评审」，549 passed），再修 1.0 发布前复审（564 passed）。**版本定为 1.0.0（用户：库「暂时杀青」，正式命名 plotlib 1.0，由用户提交）**。下一步：步骤 8「让脚本可复现」**，之后才是 6.8「Plotly 按组翻页」（在新架构上加新功能），先读 6.7 执行记录、审查修复小节和 6.8 小节**。
 > **2026-11-18 路线调整**：步骤 5、6 按「先抽绘图计划、两个后端按同一份计划画」重排，不再先在 Plotly 里复制一份 `group_plotter`（理由见步骤 5 的「讲」）。
 > 4.3 引入了标准样式写法（`src/plotlib/style.py`，见 4.3 执行记录）。6.1 起绘图规则集中在 `plot_common.plan_figures`，两个后端只按计划画。
 > 新文件 `src/plotlib/style.py`、`tests/test_style.py` 提交时需要 `git add`。
@@ -162,7 +162,7 @@ matplotlib 坐标轴回调把刻度线宽写死为 3（`formatters.py:134`、`14
 - 不跨步骤，不顺手修本文没列出的问题；发现了就记下来告诉用户。
 - 本文的行号对应提交 `92bbde6`，改动后会漂移，**以函数名为准**。本文与代码不一致时以代码为准，并告诉用户。
 - 测试跟着需求走（2026-11-19 用户改定，原为「只增不减」）：重构途中旧测试是安全网，不改；结构变了以后，测已消失的结构、或在多层重复同一规则的测试，经用户同意清理。
-  绘图测试按层放（见 `tests/README.md` 约定第 1 条）。基线是 520 passed（6.8 之后的样式对象化；此前 507（刻度 TickStyle）、484（6.8 翻页）、472（第三方审查修复：双 Y 轴版式与图例标题）、451（第二组）、438（第一组）、428（结构确认之后）、426；6.8 先写的 10 条 xfail 随 InteractivePlotter 删除，6.8 按新入口重写；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354 → 355 → 359 → 364 → 370 → 374 → 385）。
+  绘图测试按层放（见 `tests/README.md` 约定第 1 条）。基线是 564 passed（1.0.0：1.0 发布前复审修复之后；此前 549（全面评审与测试精简）、此前 550（步骤 7.2、7.3）、此前 547（步骤 7.1）、539（55576fb 复审修复及 plotly_styles 搬家）、此前 520（样式对象化）、507（刻度 TickStyle）、484（6.8 翻页）、472（第三方审查修复：双 Y 轴版式与图例标题）、451（第二组）、438（第一组）、428（结构确认之后）、426；6.8 先写的 10 条 xfail 随 InteractivePlotter 删除，6.8 按新入口重写；此前依次为 206 → 209 → 218 → 236 → 242 → 350 → 354 → 355 → 359 → 364 → 370 → 374 → 385）。
 - 本文给出的名字、签名都是建议。「定」这个动作里用户改了主意，就按用户的来，并把决定写回本文对应小节。
 - 修改代码用编辑工具逐处修改，让用户能看到 diff。注释和文档保持中文。
 
@@ -1054,6 +1054,35 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 - 行为变化：默认无框（以前 matplotlib 不用工厂时四面都有，用了工厂只剩 L 形；Plotly 是 L 形），双 Y 轴两个后端都是完整的框；
   空的轴工厂什么都不改（以前默认隐藏上 / 右边、重置刻度类型）；Plotly 格式化器里的线宽、字号单位从像素改为磅；Plotly 图例图内位置离边 0.02。
 
+#### 6.8 之后：55576fb 复审修复（2026-11-20，`docs/ThirdPary_review.md`「55576fb 复审」，538 passed）
+
+样式对象化提交（`55576fb`）后第三方复审列了 4 条回归，执行者逐条复现全部属实，另补了两处同类问题；用户定：四条先修。
+流程照旧：先写测试（18 条，新失败 15 条：txt 格式、matplotlib 全局标记原本就对），再改代码。
+
+1. **数字样品名**（高）：标识列除了第 0 行全空，pandas 把整列推断成浮点数，`'101'` 读成 `101.0`，双 Y 轴替换 `'{name}'`（两个后端）、
+   Plotly 翻页滑块取标签长度都报 `TypeError`；执行者补：多线图的曲线滑块同样会报错。复审建议在计划层转字符串，但那里只能得到 `'101.0'`，
+   所以改在源头：`Dataloader` 三种格式都 `dtype=str` 读，样品名、单位原样是文本（`'1.50'` 也不会变 `1.5`），数据列照旧 `pd.to_numeric`。
+2. **Plotly 全局 marker**（高）：模板重复传 `marker_symbol`，绘图器建不起来；修好后折线仍是纯线。改为：全局 marker 不进模板（模板的默认样式也作用于散点，散点固定圆点，
+   与 matplotlib 的 rc `lines.marker` 不管 scatter 一致），折线在 `_native_style` 里按「全局 < 分组」叠上，有标记就 `lines+markers`。
+3. **Plotly 对数轴分步设范围**（高）：先设对数、再单独设 `limits=(10, 1000)`，range 写成 `[10, 1000]`（Plotly 当 log10，即 10¹⁰ ~ 10¹⁰⁰⁰）；
+   执行者补：反过来先设范围再改对数也错（已写的范围没换算）；实测单侧边界 `minallowed / maxallowed` 在对数轴上同样用 log10。
+   改为：新建 `backends/plotly_styles.py`（对照 `matplotlib_styles.py`）的 `apply_axis(fig, 轴名, AxisStyle, 方向)`，应用时按这根轴「应用后的类型」翻译，
+   改了类型（线性 ↔ 对数）时把轴上已写的边界一起换算；`translate_axis_style` 加参数 `log`（Plotly 用）。轴工厂和后端的预设都走它。
+   约定统一成「`limits` 永远写数据值，分几个回调设、先设哪个结果都一样」，与 matplotlib 相同。分步时对数轴边界 ≤ 0 在应用时报错。
+4. **翻页隐藏共享参考线**（中）：整图回调加的参考线不属于任何一页，翻页滑块每档都把它设成隐藏。改为：不在任何一档里的 trace 每档保持原来的显隐
+   （含 `'legendonly'`）。曲线滑块同理（执行者建议，一并改）：`add_slider` 加参数 `curves`，`DataPlotter` 传计划画出的曲线，参考线不再多出一档。
+
+- **随后搬家**（用户同意）：`formatters.py` 里 Plotly 的边框、刻度应用（`_apply_plotly_frame` / `_apply_plotly_ticks` / `_minor_ticks_shown`）和 `_figure_dpi`
+  挪进 `plotly_styles.py`（`apply_frame` / `apply_ticks` / `figure_dpi`），与 `matplotlib_styles.py` 结构对应；全部收样式对象、按这张图的 dpi 应用时翻译。
+  后端自己的 `_apply_frame` 删掉，改为逐根轴调 `apply_frame`（对照 matplotlib 后端逐个 ax 调）。
+  搬家时发现一个原有的 bug：判断有没有右轴时直接读 `fig.layout.yaxis2`，单轴图上 `make_axes_formatter(frame=FrameStyle(right=True), backend='plotly')` 抛 `AttributeError`
+  （后端以前靠 `'right' in axes` 绕开了）；先补回归测试再改成 `getattr`。539 passed。
+
+**未闭环、暂不做（用户定）：**
+- **柱状图、散点图的格式化从 `draw` 里独立出去**（用户提出）：它们有自己的格式参数和设置方式，现在跟折线共用一套（线条回调对柱图改色时 matplotlib 报 `AttributeError`，
+  Plotly 跳过 Bar，复审「尚未闭环」第 1 条）。用户手头没有这两种数据，不直观，等有需要时把两者对应的格式化流程从 `draw` 中分出去（记在 BACKEND_PLAN 第 7 节）。
+- Bode 脚本全部样品无峰时 `IndexError`：脚本问题，按原计划留到步骤 8。
+
 #### 6.4 ~ 6.8 期间的记录
 
 **参数对照（6.3 时讨论；决定 2、3 已定处理方式）：**
@@ -1105,6 +1134,23 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 脚本里 `INPUT_COLUMNS_PER_DATASET` 旁「每组数据集的列数」的注释改为「每个样品」。
 三个分组脚本在数据加载后紧接着写 `groups = Group(data, data_groups)`，改加载写法时保持这个顺序。
 
+**7.1 执行记录（2026-11-20，547 passed）。** 用户：「这个好懂，直接改」，全按建议：
+1. 写法 `Dataloader(columns_per_sample=6).load_data(path=None)`：传路径直接读，不传才弹窗。`columns_per_sample` 必填（原默认 6 只适合 piezo），
+   不小于 2 的整数，写错 `ValueError`。
+2. `DATASET_FRACTION` 删除，`COLUMNS_PER_DATASET` 改名 `columns_per_sample`，不留别名；6 个脚本改成 `COLUMNS_PER_SAMPLE = N` + 一行加载
+   （实际每个脚本 4 处，不是估计的约 50 处）；README 5 处示例同步。
+3. 取消选择抛 `NoFileSelected`（继承 `Exception`，不继承 `OSError`，与 `FileNotFoundError` 区分开；包顶层导出）；隐藏的 Tk 主窗口用完 `destroy`。
+4. 扩展名不区分大小写（`Path.suffix.lower()`），报错列出支持的格式（`SUPPORTED_SUFFIXES`，对话框的过滤条件也用它）；`tkinter` 改到 `select_data_file` 里导入。
+5. （执行者补充）加载器只存 `columns_per_sample`：中间结果都是局部变量，`load_data` 拆成 `_read_table`（按扩展名读表）和 `_to_dataset`（按列宽拆开装进 DataSet）；
+   `file_path` 属性删除。原来的维度一致性校验随之删掉（列表由同一个 `range` 生成，不会不一致）。列数不整除的报错改成中文并写出总列数和 `columns_per_sample`。
+- 测试辅助一起改名：`write_grouped_file` → `write_samples_file`、`groups` → `samples`、`columns_per_group` → `columns_per_sample`。
+- **教学点的答案**：现有测试替换的是 `Dataloader.select_data_file`（类上的属性，调用时才查找），与 tkinter 在哪里导入无关，不用改；
+  若替换的是 `plotlib.dataloader.filedialog.askopenfilename`，挪进函数后模块上已没有 `filedialog` 这个名字，替换会失败，要改成替换 `tkinter.filedialog` 模块本身的属性
+  （新测试 `test_cancel_file_dialog_raises` 就是这样做的，函数每次执行时才从 tkinter 模块里取）。
+- 顺带修（测试隔离）：改完后全量测试从 11 秒变 55 秒并多一条 warning。原因是 `test_data_reorder_app.py` 建的 tk 变量挂在循环引用里，
+  自动回收碰巧落在 Kaleido 渲染的后台线程，tk 对象在非主线程析构要等主线程的事件循环，卡住约 45 秒后报 "main thread is not in main loop"。
+  该 fixture 销毁窗口后立即在主线程 `gc.collect()`，恢复到 15 秒、无 warning。
+
 #### 7.2 逐样品变换
 
 **读。** 脚本里出现 5 次的三行循环（行号会漂移，搜 `iter('samples')`）：`eis_bode.py` 两处，`eis_nyquist.py`、`tensile.py`、`select_demo.py` 各一处。
@@ -1115,11 +1161,72 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 
 **测。** 新方法的结果与手写循环的结果完全相同（数值、名字、样品号）。**改。** 实现后把 5 处循环换掉。
 
+**7.2 执行记录（2026-11-20，550 passed）。** 执行者给了两种写法：A `DataTransformer(…, per_sample=True)`、B `DataSet.map_samples(lambda s: …)`（推荐 B）。
+用户都没选：B 的 lambda 不直观，A 和现在区别不大；**改为仿照 `Group.__iter__`，给 `DataSet` 加 `__iter__`，用 for 直接遍历样品**：
+`for sample in dataset:` 等同于 `iter('samples')`（按样品出现的顺序，子数据集保留原样品号）。逐样品变换仍写成显式的 for + `expandata`，循环在调用处看得见。
+- 5 处脚本循环 `for dataslice in X.iter('samples'):` → `for dataslice in X:`；`iter(method)` 保留（按名字、单位、通道遍历还要用）。
+- 没加 `__len__`：加了会让空 DataSet 在 `if dataset:` 里变成假值，改变现有判断的含义。
+- 用户问「for 只能按样品、其他字段仍用 `iter`，与 B 有区别吗」：执行者答 B 只是把「循环 + 拼接」包起来，同样只管样品；
+  for 是默认按最常用的一维遍历（同 dict 遍历键、Group 遍历组名），其他维度用 `iter(...)` 明确指定。
+  另提了 `DataSet.concat(… for s in selected)` 把累加写成一行，**用户定不加**：循环里的计算（尤其换成复杂的 `apply`）写开才看得清算了什么、用什么算的。
+- 测试：for 与 `iter('samples')` 相同（稀疏样品号 0、5、9）、空数据集、逐样品 `Norm` 拼回后样品号不变（名字是 DataTransformer 的自动命名 `Results_0_of_S0`）。
+- README 补「逐样品遍历与变换」一小节，GLOSSARY 样品一行加上 `for sample in dataset`。
+
 #### 7.3 公开的列排序
 
 `DataSet._rearrange_columns` 是私有方法，但脚本在用（`eis_bode.py`、`eis_nyquist.py` 各一处，搜 `_rearrange_columns`）。
 它按「样品号 → 通道号」排序（测试 `test_rearrange_columns_sorts_by_sample_then_channel`）。
 定一个公开的名字（建议 `sort_columns`），改名并更新 2 处脚本、相关测试。机械工作，只需用户定名字。
+
+**7.3 执行记录（2026-11-20，550 passed）。** 用户同意 `sort_columns`。改名并补 docstring（原地排序、返回自己，可接在 `expandata` 后面）；删掉 `self.num_samples = self.num_samples` 等三行自我赋值；不留旧名（测试断言 `_rearrange_columns` 已不存在）；`eis_bode.py`、`eis_nyquist.py` 各一处、tests/README 同步。
+
+#### 步骤 7 之后：全面评审、测试精简与诊断（2026-11-20，546 passed）
+
+用户：「内部已经构建完，正式进入脚本之前，以客观角度把整个代码完全评审一遍；测试很多，检查必要性去除冗余；修复诊断问题」。
+
+**评审结论（src 共 4500 行，逐文件通读）。** 分层清楚、各层只依赖下层：`DataPlotter` → `plan`（规则）→ `plot_spec`（约定）← `backends`；
+样式对象 + 翻译层让两个后端逐段对应，叠加顺序只写在 `layouts.resolve_*`；报错都在创建时、信息带写错的值。绘图这一半结构稳定，可以「拿来用」。
+数据层（`DataSet` / `DataProcessLayer` / `DataTransformer`）是最早的代码，接口风格较旧（`Selected_data`、`Norm`、`indicies` 等命名，B.9 已记暂不改）。
+
+**已修（先写测试）：**
+- `ColumnList.__len__` 按元素个数算，零行数据集（有列、没有行，如全部样品无峰的峰表）列数为 0，逐样品遍历 `IndexError` → 按列数算。
+- `DataSet.update_attributes` 长度不一致时先 `print` 六行再抛异常 → 各项长度写进异常信息，不打印。
+- 过时注释：`style.py` 三处（旧参数名 `x_format`、`DataPlotter 的 linestyle`、已改名的 `matplotlib_ticks.py`）、matplotlib 后端「见 `_layer`」、`DataSet.status` 的取值说明；
+  matplotlib 后端图例回调循环里的局部变量 `legend` 与同名参数（原生参数字典）混用，改名 `made`。未使用的导入 3 处（`dataset.py` 的 `re` / `copy`、`processor.py` 的 `ColumnList`）。
+
+**诊断（pyright：src / tests / tools / scripts 全部 0 错误）：**
+- `tests/test_groups_code.py` 7 个：测试把 `None` 当 `self` 传给工具方法。`DataReorderGUI._get_ordinal_name` / `_get_linestyle_for_group` 不读界面状态，改成 `@staticmethod`
+  （调用处 `self._xxx(i)` 不变）；读 `self` 的两个生成方法用替身对象，`cast` 标明（`fake_gui`）。
+- `tools/data_reorder_qt.py` 4 个：`self.names` 可能为 None（两个分支都赋值，改读局部变量）；委托的 `parent()` 类型只是 `QObject`（`cast` 成 `CheckableListWidget`）。
+- `tests/test_data_reorder_qt.py` 未使用的导入 1 处。
+
+**测试精简（550 → 546；删 13 条用例、合并新增 8 条，另加 2 条回归）。** 按「别处已覆盖」去掉：
+- `test_plotter` 的 `test_result_shape_is_uniform`（及 `make_all_kinds`，每个用例都把四种方法全画一遍）与 `test_plotly_backend` 的 `test_dataplotter_with_plotly_backend`
+  → 合并为 parity 的 `test_result_shape_is_uniform`（后端 × 方法）；
+- `test_plot_multiline_one_line_per_sample`（形状测试已覆盖）；两个后端的 `test_sparse_sample_ids_colors`（位置在计划层测，位置 → 颜色在 `test_backend_draws_only_from_plan`）；
+- `test_iter_by_samples`（`test_for_loop_iterates_samples` 已与 `iter('samples')` 对比）；`test_reused_loader_with_unsupported_extension_raises`（加载器不再存状态，这类 bug 不会再有）。
+- 其余 500 多条多是参数化的词表与回归测试，各测一件事，保留。
+
+**留给用户定（未改）：**
+1. ~~`naming_func` 返回 `sample_idx` 列表时 `TypeError`~~：执行者评估全部计算路径都是「一次计算一个样品」（逐样品沿用原号、跨样品合成一个新样品、`Group.apply` 每组一个），用户定收窄：`TransformMetadata.sample_idx` 只收 `int`，写成列表 / 小数 / 布尔值时给中文 `TypeError`（3 条测试）。
+2. ~~`DataProcessLayer.__init__` 的 `input_data` / `input_dataname` / `input_dataunits` / `data_Process_Index` 与 `Processed_data` / `called_process` 全项目无人使用~~：用户定「预估以后用不上就删」——计算已由 `DataTransformer`（逐样品）和 `Group.apply`（逐分组）承担，这一层只管选列，已删；类说明改为「数据选择层」。
+3. 柱状图、散点图的格式化从 `draw` 中独立出去（已记 BACKEND_PLAN 第 7 节，有数据时再做；用户确认）。
+4. ~~报错语言不统一~~：用户定都改中文。`dataset.py` 的 4 处英文报错（单位不一致、列字段不存在 / 不可改、列号越界）改成中文并补上上下文，4 条测试改按中文匹配。用户问以后组员用能不能换语言：可以，到时把报错文字集中成消息表（或 gettext 的 `_()`）按语言取，现在不做。`plotlib.color_positions` 在包顶层导入但不在 `__all__`（步骤 3 用户暂留）。
+
+#### 1.0 发布前复审修复（2026-11-20，`docs/ThirdPary_review.md`「1.0 发布前复审和建议 diff」，564 passed）
+
+执行者逐条复现全部属实，第三方给的改法也对；用户：「直接修」。先写测试（新增 15 条，含 1 条渲染），全部先失败再改：
+1. 双 Y 轴共用 X 轴的约定（不改代码）：左右 X 通道可以不同，但必须同一物理量、同一单位；写进 `plot_dual_y` 的 `left, right` 说明。
+2. `select('samples', [0, 77])` 静默只选出 0 → 报「找不到样品号：[77]」并列出已有样品号；
+   `DataTransformer` 先显式写到样品 3（`input_sample_idx` / `naming_func`）再 `new_sample=True` 曾也分到 3、两次结果并成一个样品 → 新样品号同时避开已累计的结果。
+3. 读取时 pandas 默认把 `NA`、`N/A`、空格子当缺失值，样品名 `NA`、单位 `N/A` 读成 nan（7.1 改文本读取时留下的）→ 三种格式都 `keep_default_na=False`，
+   数值区仍由 `pd.to_numeric` 转 NaN；样品名为空直接报错并指出文件第几列。
+4. Plotly：`TickStyle(label_pad=...)` 换算后是小数，`ticklabelstandoff` 只收整数，绘图器建不起来 → 取整；
+   这次写了 `limits` 时两端整体替换上一次的（写 None 的一端恢复自动），不再换算旧边界——先 `(-1, 30)` 再 `log + (1, 30)` 曾报「边界必须大于 0」，
+   `(5, None)` 再 `(None, 30)` 下界曾残留；只改刻度类型时才换算已有边界。
+5. 低优先级两项：`expandata` 回滚时连 `status` 一起恢复（`'loaded'` 曾变 `'written'`）；matplotlib 对数轴的单轴 `TickStyle(minor=True)` 盖不过全局 `minor=False`
+   （只「保留默认定位器」仍算默认值，被后端补全局时关掉）→ 显式装对数次刻度定位器。
+- 未处理（等发布时再说）：PyPI 上 `plotlib` 已被占用（发行名需另起，导入名可不变）；源码包缺 `tests/conftest.py`、`tools/`，包内测试跑不起来。
 
 ---
 
@@ -1161,9 +1268,9 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 | 5 交互图接上 Group、共用取数 | 完成   | 2026-11-18 | 路线调整：原步骤 5 的分组绘图移到 6.3。5.1、5.2 全按建议；`_ensure_ready` 删除不搬（见 5.2 执行记录）。基线 364 |
 | 6 绘图计划与后端 | 完成   | 2026-11-20 | 6.1（`2d87f86`）、6.2（`d6f7af6`）、6.3（`b0d65dd`）已提交；之后绘图测试按层整理（用户提出，B.0 改为「测试跟着需求走」）；路线调整：先建后端（6.4 计划补全 → 6.5 统一结果 → 6.6 matplotlib 后端 → 6.7 Plotly 后端，删除 `InteractivePlotter`），原 6.4 按组翻页挪到 6.8（测试已写，标 xfail）。6.4 完成：计划补全（图层面单位 / neglog / 版式，xy 与双 Y 轴计划），`subplotter_yy` 改名 `subplotter_xy`，xy 颜色不变（色带位置可为 None），`figsize` 对所有方法生效。6.5 完成：结果统一为 `figures = {key: DrawnFigure}`（替换 `axesset`），颜色一次赋值（分组颜色对散点 / 柱也生效），删 `color_positions` 属性。6.6a 完成：建 `backends/`，`MatplotlibBackend.draw` 只读计划，`DataPlotter` 只剩「计划 → `_render` → 存结果」，`Appearance` / `AxesFormatter`，整图回调统一 `(fig, axes)`。6.6b 完成：`layouts.py` 排版预设，后端三种版式合成一段 `_draw`，双 Y 轴红蓝只由预设定。6.7 完成：`PlotlyBackend`、翻译层（`style.py`）、显式 dpi、`DataPlotter.add_slider`，删除 `InteractivePlotter`。之后结构确认：拆出 `plot_spec.py` / `plan.py`，公开接口统一命名。之后第三方审查修复（插在 6.8 前；第一组、第二组、双 Y 轴版式与 `legend_title`、F 全部完成，基线 472）。6.8 完成：凡是多张计划，Plotly 都画成一个 Figure 多页（`draw_pages`），
 翻页滑块 `add_page_slider`（原定 `add_group_slider`，范围扩大后改名；用户要求也支持 single / cumulative，两种滑块共用 `_install_slider`），约定新增 `FigureSpec.name`。基线 484。6.1 完成：重复样品保持先到先得、归属单独一步；拆成三个内部函数（用户提出）。6.2 完成：合并模式柱状图改为组首色（选 A）；新增 `figsize`；删除 `plot_artists`。6.3 完成：Plotly 按计划画，新增 `plot_plotly_group`（合并模式）、`_LINE_WIDTH`；删除 `_get_color`；按组翻页改为按 `FigureSpec` 分页（现 6.8）；颜色统一为一次赋值（用户决定，现 6.5）。基线 385 |
-| 7.1 `Dataloader` 接口    | 未开始 |          |                                |
-| 7.2 逐样品变换             | 未开始 |          |                                |
-| 7.3 公开的列排序           | 未开始 |          |                                |
+| 7.1 `Dataloader` 接口    | 完成   | 2026-11-20 | 全按建议：`Dataloader(columns_per_sample=N).load_data(path=None)`，删 `DATASET_FRACTION`；取消选择抛 `NoFileSelected`；扩展名不区分大小写；tkinter 函数内导入；加载器不存中间状态（见 7.1 执行记录）。基线 547 |
+| 7.2 逐样品变换             | 完成   | 2026-11-20 | 用户定：不加新方法，仿照 `Group.__iter__` 给 `DataSet` 加 `__iter__`（`for sample in dataset` 同 `iter('samples')`），5 处循环改成直接 for（见 7.2 执行记录）。基线 550 |
+| 7.3 公开的列排序           | 完成   | 2026-11-20 | `_rearrange_columns` → `sort_columns`（用户同意推荐名），不留旧名；删掉三行多余的自我赋值；2 处脚本、测试同步。步骤 7 完成。基线 550 |
 | 8 脚本可复现               | 未开始 |          |                                |
 
 ---

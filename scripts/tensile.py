@@ -12,8 +12,7 @@ from plotlib.plot_spec import AxisStyle
 
 plt.close('all')
 
-INPUT_COLUMNS_PER_DATASET = 5  # 每组数据集的列数
-INPUT_DATASET_FRACTION = 1/INPUT_COLUMNS_PER_DATASET
+COLUMNS_PER_SAMPLE = 5  # 每个样品的列数（含 1 列标识）
 
 dataRowNum_unit1 = 0  
 dataRowNum_unit2 = 1  
@@ -27,10 +26,7 @@ Tensile_formatter = make_axes_formatter(
 )
 
 
-data = Dataloader(
-    DATASET_FRACTION = INPUT_DATASET_FRACTION,
-    COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
-).load_data()
+data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
 
 
 def cal_EB(data):
@@ -57,7 +53,7 @@ def cal_EB(data):
 
 Selected_data = DPL(data).select("应变","应力(MPa)").Selected_data
 EB_data = DataSet()
-for dataslice in Selected_data.iter('samples'):
+for dataslice in Selected_data:
     EB_slice = DT(dataslice).apply(func = cal_EB)
     EB_data.expandata(EB_slice)
 print(EB_data.data)

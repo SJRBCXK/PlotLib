@@ -1,5 +1,7 @@
 # PlotLib 第三方代码审查
 
+> 当前版本见 [55576fb 复审](#55576fb-复审)。下方初版记录反映当时的工作树及开发进度。
+
 2026-11-20 · 审查对象为 `main` 工作树，基点 `e0799fd`，包含尚未提交的后端重构。审查覆盖 `src/plotlib/`、`tests/` 和 `scripts/`，并核对了两份规划文档、包配置和上游数据归集工具。
 
 **PlotLib 已实现以 DataSet 和 Group 为基础、面向多样品批处理的双后端绘图 API。** 同一份实验数据可以经过选择、分组计算和绘图计划，交给 Matplotlib 或 Plotly。通用性成立于约定好的“样品 × 通道”表格和公共绘图配置。入口可能少读样品，EIS 脚本可能配错频点，部分公共配置切换后端后还会改变图上的量程与标注。
@@ -69,3 +71,132 @@ Bode 的电导率比和 Nyquist 的阻抗差都按行相除或相减，并直接
 - **六个现有脚本。** 在临时目录写真实 CSV，运行原脚本，仅替换文件选择和 `plt.show()`，Matplotlib 使用 Agg。两类 EIS 各用 18 个样品，压电和选择示例各 10 个，拉伸 2 个。Bode、Nyquist、压电静态、拉伸分别生成 **13、56、49、2** 张图。选择示例完成计算，压电交互脚本写出并读回含 **10 条 trace、10 档滑块**的 HTML。脚本验证覆盖文件读写和图对象，使用合成数据，未人工操作桌面窗口或浏览器中的侧栏联动。
 
 **建议顺序。** 先修复丢样品、EIS 错配与误标、零行拼接，并用最终渲染结果锁定刻度、图例和右轴行为。随后按 6.8 的既定设计实现分组翻页，将步骤 7～8 的路径入口和脚本测试接入日常回归。现有计划层和两个渲染器可以承载这些修改。
+
+## 55576fb 复审
+
+2026-11-20 · 对照上一版 `d41d98f` 与当前版 `55576fb`。提交涉及 30 个文件。在独立临时目录运行两个提交的完整测试，旧版 **428 项通过**，新版 **520 项通过**。使用相同的合成数据对照加载、拼接、右轴回调和分页结果，另外用 Matplotlib Agg 检查实际刻度文字和图例位置、用 Kaleido 核对 Plotly 的实际坐标范围。
+
+**现有分层可以保留。** 本次统一的是样式对象及其叠加顺序。选列、分组和画什么图仍由 `DataPlotter` 与计划层决定，后端负责把样式应用到实际图上。优先补的回归是数字样品名、Plotly 全局标记和分步设置对数轴范围。
+
+### 两版的关键变化
+
+| 模块 | `d41d98f` | `55576fb` |
+|---|---|---|
+| 样式接口 | 构造器和格式化器接收各自的散参数，预设用图例位置、刻度格式和轴色等独立字段。 | 公共样式按主题归入 `LineStyle`、`AxisStyle`、`FrameStyle`、`LegendStyle` 和 `TickStyle`。图例和边框按库默认、版式预设、用户显式设置依次叠加。分组字段在计划层转成 `LineStyle`。Plotly 的线宽、标记大小和图例字号按磅输入，再按 DPI 换算。[样式定义](../src/plotlib/plot_spec.py#L35) · [预设叠加](../src/plotlib/layouts.py#L57) · [分组转换](../src/plotlib/plan.py#L260) |
+| 回调与双 Y 轴 | Plotly 的三个格式回调都接收整个 Figure，单独设置右轴范围会同时修改左轴。双 Y 轴图例只收左线。 | 轴回调接收轴名和 Figure，线回调接收对应的 trace 列表，图例回调接收共享图例。实测只给右轴设 `(10, 25)`，左轴保留自动范围。两条线都进图例，各标对应通道标题，图例标题默认是样品名。旧版自定义回调 `fn(fig)` 需要按用途调整签名。[回调分发](../src/plotlib/backends/plotly_backend.py#L218) · [双轴计划](../src/plotlib/plan.py#L151) |
+| Plotly 多页结果 | 每份计划生成一个独立的 Figure。 | 分组分离、逐样品 XY 和逐样品双 Y 轴共用一个 Figure，默认只显示第一页。两样品实测仍有两个 `DrawnFigure`，底层 Figure 数量和整图回调次数都从 2 变成 1。原来逐项遍历 `figures` 导出独立图的代码需要按新语义迁移。翻页由 `add_page_slider()` 提供。[页面分发](../src/plotlib/plotter.py#L138) · [多页渲染](../src/plotlib/backends/plotly_backend.py#L70) |
+| 数据层 | 两个各占 49 列的样品只读入一个。加载器复用遇到未知后缀会返回上一份数据。零行样品插在首位会破坏拼接。 | 三项均复测通过。两样品读入 96 个数据列，未知后缀抛 `ValueError`，零行样品的两列保留并在拼接时补 `NaN`。单位冲突时目标数据和列元数据恢复到拼接前。[文件读取与计数](../src/plotlib/dataloader.py#L150) · [拼接与恢复](../src/plotlib/dataset.py#L181) |
+| 渲染与依赖 | Matplotlib 负号刻度可能只显示 `-`，线回调触发的图例重建可能把图例移出画布。包声明 Plotly 最低版本为 6.1。 | 同一用例实际渲染后，负号刻度显示数值，线回调前后图例位置一致。包声明的 Plotly 下限已改为 6.3，本次运行的版本为 7.1.0。[Matplotlib 图例](../src/plotlib/backends/matplotlib_backend.py#L199) · [负号刻度](../src/plotlib/backends/matplotlib_backend.py#L279) · [依赖声明](../pyproject.toml#L23) |
+
+### 已复现的回归
+
+1. **高｜数字样品名会中断双 Y 轴和 Plotly 翻页。** 同一份 CSV 用 `101`、`102` 作样品名，读取后样品名为浮点数。旧版两个后端都能画双 Y 轴。新版替换图例标题的 `{name}` 时直接传入数字，两个后端都抛 `TypeError`。新版 Plotly 的逐样品 XY 可以生成图，调用 `add_page_slider()` 时又会对数字取长度而报错。建议在计划层统一生成显示用的样品名，回归测试覆盖真实 CSV 和两个后端。[图例标题](../src/plotlib/plan.py#L209) · [滑块标签](../src/plotlib/backends/plotly_backend.py#L383)
+2. **高｜Plotly 全局标记使绘图器无法初始化。** `DataPlotter(..., backend='plotly', lines=LineStyle(marker='diamond'))` 在创建模板时重复传入 `marker_symbol`。修复后需要检验折线实际显示标记，因为仅有标记样式的纯线 trace 还需要显示标记的绘制模式。[模板构造](../src/plotlib/backends/plotly_backend.py#L303) · [折线绘制模式](../src/plotlib/backends/plotly_backend.py#L165)
+3. **高｜Plotly 对数轴分步设置范围会使用错误单位。** 同一个 `AxisStyle` 设置 `scale='log'` 和 `limits=(10, 1000)` 时，实际对数坐标范围为 `(1, 3)`。用 `combine_formatters` 先设对数尺度、再设相同范围，实际渲染为 `(10, 1000)`。范围需要在应用时结合轴的当前尺度换算。分别测试双端范围和单端范围，并直接断言渲染结果。[回调构造](../src/plotlib/formatters.py#L126) · [范围转换](../src/plotlib/style.py#L356)
+4. **中｜分页会隐藏整图回调添加的共享参考线。** 通过 `figure_formatter` 添加的参考线在安装滑块前可见。安装后，实测所有档位都把它设为隐藏。滑块只从各页计划登记的曲线生成可见性。应为共享辅助 trace 明确保留规则，并验证翻页前后可见性。[分页滑块](../src/plotlib/backends/plotly_backend.py#L341)
+
+### 尚未闭环的行为
+
+- **柱图改色问题在两版都存在。** 把公共线条格式化器传给柱图并指定颜色，Matplotlib 抛 `AttributeError`，Plotly 保持原色。分组配色能在建图时给柱图设置颜色。[线条格式化器](../src/plotlib/formatters.py#L213)
+- **Bode 脚本仍需处理全部样品无峰。** 旧版在拼接时中断，新版容器可以拼接完毕，但脚本随后固定读取峰值表的第 0 行，仍抛 `IndexError`。EIS 频点对齐、比值单位和选峰规则继续按原计划单独处理。[峰值汇总](../scripts/eis_bode.py#L172) · [审查修复范围](STRUCTURE_REVIEW.md#L914)
+
+## 1.0 发布前复审和建议 diff
+
+2026-11-20 · 审查对象为 `55576fb` 之后的当前 1.0.0 工作树。本轮逐文件读过 `src/` 和 `tests/`，基线为 **549 项测试通过，覆盖率 96%**。用独立安装的 wheel 验证了 Matplotlib、Plotly、滑块和 HTML 导出。以下 diff 是待实施的建议，针对性用例在临时进程中验证过。源码和仓库测试尚未应用这些修改。
+
+### 1. XYY 共用 X 轴的约定
+
+`plot_dual_y()` 按样品 ID 生成图，同一幅图的左右曲线来自同一样品。左右可以读取不同的 X 通道 ID，例如压电脚本分别取位移时间和电压时间。这两列可以有各自的采样点，共轴要求它们表达相同物理量、使用相同单位，并采用相容的轴变换。实测同一样品的左右 X 列分别用秒和毫秒时，两个后端都会原样绘制各自的数值，并用左侧单位标轴。建议继续支持两个 X 通道，按上述约定选择输入。多样品叠图的通道标题通常由 `DataSet` 校验，手动单独修改某列单位仍能绕过这一校验。[双 Y 绘图计划](../src/plotlib/plan.py#L151) · [压电脚本](../scripts/piezo.py#L159) · [通道单位校验](../src/plotlib/dataset.py#L273)
+
+### 2. 批量选样和新样品编号
+
+`select('samples', [0, 77])` 遇到不存在的 77 时应报告缺失编号。自动分配样品号时同时考虑累计结果，保留显式指定编号的合并语义。验收用例包括先显式写入样品 2、再触发自动分配，输出编号为 `[2, 3]`。由 `naming_func` 指定样品 2 后再调用 `Norm(new_sample=True)`，结果也应为 `[2, 3]`。[选样入口](../src/plotlib/processor.py#L151) · [编号分配](../src/plotlib/processor.py#L594)
+
+```diff
+--- a/src/plotlib/processor.py
++++ b/src/plotlib/processor.py
+@@
+                         sample_idx_list = list(select_rc[i+1])
++                        missing = set(sample_idx_list).difference(dataset_for_select.sample_idx)
++                        if missing:
++                            raise ValueError(f"找不到样品号：{sorted(missing)}")
+                         varlist_idx = [idx
+@@
+         elif new_sample:
+-            data_sample_idx = self._next_new_sample
+-            self._next_new_sample += 1
++            max_result_id = max(
++                (idx for idx in self.result_dataset.sample_idx if idx is not None),
++                default=-1,
++            )
++            data_sample_idx = max(self._next_new_sample, max_result_id + 1)
++            self._next_new_sample = data_sample_idx + 1
+             self.num_samples += 1
+```
+
+### 3. 保留表头文本，数值缺失继续转成 NaN
+
+Pandas 的默认缺失值规则会把样品名 `NA` 或列标题 `N/A` 变成缺失值。读取阶段保留表头原样，数值区继续由现有的 `pd.to_numeric(errors='coerce')` 转换。样品名为空时建议报告其在文件中的列号。验收用例覆盖 `NA`、`N/A`、`001`、空样品名和数值区的缺失值。[文件读取与转换](../src/plotlib/dataloader.py#L139)
+
+```diff
+--- a/src/plotlib/dataloader.py
++++ b/src/plotlib/dataloader.py
+@@
+     if suffix == '.csv':
+-        return pd.read_csv(path, low_memory=False, header=None, dtype=str)
++        return pd.read_csv(path, low_memory=False, header=None, dtype=str, keep_default_na=False)
+     if suffix in ('.xlsx', '.xls'):
+-        return pd.read_excel(path, header=None, dtype=str)
++        return pd.read_excel(path, header=None, dtype=str, keep_default_na=False)
+@@
+-        return pd.read_csv(path, sep=r'\s+', header=None, dtype=str)
++        return pd.read_csv(path, sep=r'\s+', header=None, dtype=str, keep_default_na=False)
+@@
+-    dataset.names = [table.iloc[0, start] for start in starts for _ in range(channels)]
++    sample_names = table.iloc[0, list(starts)].tolist()
++    for column, name in zip(starts, sample_names):
++        if not isinstance(name, str) or not name.strip():
++            raise ValueError(f"第 {column + 1} 列的样品名为空。")
++    dataset.names = [name for name in sample_names for _ in range(channels)]
+```
+
+### 4. Plotly 的刻度间距和轴范围
+
+`TickStyle(label_pad=4)` 在 Plotly 6.3.0 和 7.1.0 都能复现校验错误，`ticklabelstandoff` 需要整数像素。显式传入 `limits` 时，本次两个端点替换原来的范围，`None` 的一侧恢复自动。只改 `scale` 时，仍按新轴类型换算原来的边界。[刻度转换](../src/plotlib/style.py#L545) · [轴范围更新](../src/plotlib/backends/plotly_styles.py#L33)
+
+```diff
+--- a/src/plotlib/style.py
++++ b/src/plotlib/style.py
+@@
+     if ticks.label_pad is not None:
+-        native['ticklabelstandoff'] = px(ticks.label_pad)
++        native['ticklabelstandoff'] = round(px(ticks.label_pad))
+
+--- a/src/plotlib/backends/plotly_styles.py
++++ b/src/plotlib/backends/plotly_styles.py
+@@
+-    if is_log != was_log:
++    native = translate_axis_style(style, 'plotly', letter, log=is_log)
++    if style.limits is not None:
++        native.setdefault('range', None)
++        native.setdefault('autorange', True)
++        native['autorangeoptions'] = (
++            {'minallowed': None, 'maxallowed': None}
++            | native.get('autorangeoptions', {})
++        )
++    elif is_log != was_log:
+         _convert_bounds(current, _to_log if is_log else _from_log)
+-    fig.update_layout({axis: translate_axis_style(style, 'plotly', letter, log=is_log)})
++    fig.update_layout({axis: native})
+```
+
+把刻度转换用例中的 `ticklabelstandoff` 单独断言为 `round(5 * PX)`，再通过绘图器或格式化器验证能应用到实际 Figure。范围回归用 Kaleido 核对 `(5, None) → (None, 30)` 时下界恢复自动，以及 `(-1, 30) → log + (1, 30)` 时成功采用新范围。[刻度用例](../tests/test_style.py#L398) · [范围渲染用例](../tests/test_formatters.py#L349)
+
+### 发布判断与其余已知事项
+
+现有架构可以定型。建议落实上面第 2～4 条，在最终提交上重跑测试并重新构建发布包，第 1 条沿用同一样品、X 通道可分别指定的约定。
+
+- **PyPI。** `plotlib` 已由另一个项目占用，公开版本为 `0.3`。若发布到 PyPI，需确定发行名。项目名与 Python 导入名可以保留。[PyPI 上的 plotlib](https://pypi.org/project/plotlib/)
+- **源码发行包。** 本轮的 `sdist` 能重建 wheel，但附带的测试因缺少 `tests/conftest.py` 和 `tools/` 而出现 4 项收集错误。若源码包要支持运行测试，应包含这两处。
+- **低优先级边界。** 单位冲突导致 `expandata()` 回滚时，数据和列元数据恢复，但原先的 `status='loaded'` 会变成 `'written'`。Matplotlib 对数轴的局部 `TickStyle(minor=True)` 也可能无法覆盖全局 `minor=False`。这两项在当前工作树均已复现，可单独补回归。[拼接回滚](../src/plotlib/dataset.py#L200) · [次刻度覆盖](../src/plotlib/backends/matplotlib_styles.py#L110)
+- **原计划中的后续工作。** 柱图和散点图的格式化，以及步骤 8 的脚本可复现性、EIS 频点对齐和 Bode 无峰处理，继续按原计划排期。[脚本处理范围](STRUCTURE_REVIEW.md#L914) · [已排期的格式化事项](STRUCTURE_REVIEW.md#L1081) · [步骤 8](STRUCTURE_REVIEW.md#L1218)

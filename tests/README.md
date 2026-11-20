@@ -3,7 +3,7 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**520 个全部通过**（2026-11-20 样式对象化之后）。曾记录的 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**564 个全部通过**（2026-11-20，1.0.0，含 1.0 发布前复审的回归）。曾记录的 bug 已全部修复（见文末「已修复的 bug」）。
 
 > 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各样品都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
@@ -66,7 +66,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `eis_dataset` | fixture | 3 个样品 × 3 行 EIS 数据（见下表）；**S1 = S0×2，S2 = S0×3**，期望结果可心算 |
 | `sparse_dataset` | fixture | 样品号不连续（0、5、9）的数据集，每个样品 2 个通道；测试配色用 |
 | `make_dataset(units, groups, fmt)` | fixture（工厂） | 按需造任意列数、任意格式（`csv`/`xlsx`/`txt`）的数据集 |
-| `write_grouped_file` / `load_file` | 普通函数 | 写文件 / 读文件，需要单独控制文件时用 |
+| `write_samples_file` / `load_file` | 普通函数 | 写文件 / 读文件，需要单独控制文件时用（步骤 7.1 起参数叫 `samples`、`columns_per_sample`） |
 | `close_figures` | 自动 fixture | 每个测试后关闭所有图窗 |
 | — | 全局设置 | matplotlib 切到 `Agg` 后端，不弹窗口 |
 
@@ -88,8 +88,12 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 空单元格读成 NaN，不影响其他数值
 - txt 中多个空格、制表符混用都当作一个分隔符（pandas 3 兼容的回归测试）
 - 列数不是每个样品列数的整数倍 → `ValueError`；不支持的扩展名 → `ValueError`，信息里有文件名
-- 每样品 49 列时两个样品都读到（样品数用整数除法）；同一个 loader 读成功后再读不支持的后缀 → 报错，不返回上一份数据
+- 每样品 49 列时两个样品都读到（样品数用整数除法）
 - 不给文件路径时走「选择文件」对话框（测试中用 `monkeypatch` 替换掉弹窗）
+- 接口（步骤 7.1）：`Dataloader(columns_per_sample=N).load_data(path)` 直接读；`columns_per_sample` 必填、不小于 2 的整数，旧参数名 `TypeError`；扩展名不区分大小写（`.CSV`、`.Xlsx`、`.TXT`）；不支持的扩展名报错里有文件名和支持的格式；文件不存在 `FileNotFoundError`
+- 不传路径时弹窗：取消选择抛 `NoFileSelected`（不是 `OSError`，不再 `exit()`；替换 `tkinter.filedialog` 的属性模拟取消）；导入 `plotlib.dataloader` 不导入 tkinter（新进程里检查）
+- 同一个加载器先后读两个文件各得各的数据，加载器上只有 `columns_per_sample`
+- 三种格式的数字样品名都原样是文本：`'101'`、`'1.50'` 不变成 `101.0`、`1.5`，数据照常是数字（55576fb 复审 1）
 
 ### 数据容器 — `test_dataset.py`
 - `form_array`：自动补全样品号、通道号、father/initial 索引；标量和一维数组转成二维
@@ -101,9 +105,11 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 通过 `column[i].sample_idx` 改样品号：样品数、通道号随之更新；破坏单位约束时报错并回滚
 - 字典式访问 `col['unit']`；未知键、只读键 → `KeyError`
 - `column` 支持负索引、切片、迭代；越界 → `IndexError`
-- `iter('samples' / 'units')` 按样品 / 按单位产出子数据集；不支持的方式 → `ValueError`
+- `iter('units')` 按单位产出子数据集；不支持的方式 → `ValueError`（按样品见下一条）
+- 零行数据集（有列、没有行）：`column` 的长度是列数，照样能按列、按样品遍历（回归：曾按元素个数算成 0）
+- `for sample in dataset`（步骤 7.2）：与 `iter('samples')` 相同，样品号不连续时保留原号；空数据集不执行；逐样品用 `DataTransformer.Norm` 计算再拼回，结果仍按原样品号对应
 - `columns_to_dataset`：`extended=False` 生成新数据集并记住原位置，`True` 追加到自身
-- `_rearrange_columns` 按「样品号 → 通道号」排序
+- `sort_columns`（步骤 7.3，原 `_rearrange_columns`）按「样品号 → 通道号」原地排序并返回自己
 
 ### 选列 — `test_processor.py`
 - `select('all')` 选全部列；`by('all')` 时 `initial_idx` 仍指向原始数据
@@ -252,7 +258,6 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 对数轴次刻度文字：`none` 不写、`short` 只写 2 ~ 9、`full` 每个都写；线性轴 `full` 也能写且可单独设字号，`short` 不写
 
 **配色**
-- 样品号 0、5、9：三条线依次取 plasma 色带 0、1/3、2/3 处的颜色（回归：5、9 曾被截断成同一个末端色）
 - 柱状图也按计划的位置上色：合并模式同组的柱子统一为组首色（步骤 6.2 起；以前 `BarContainer` 没有 `set_color`，各用各的样品色）
 
 **`plot_xy`（原 `subplotter_yy`）/ `plot_dual_y`**（都按计划画）
@@ -278,6 +283,8 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 坐标轴边界：两侧都给时固定 `range`；只给一侧时用 `autorangeoptions.minallowed` / `maxallowed`，另一侧自动；对数轴边界取 log10；只影响设置了边界的那根轴（没写的轴根本不写）
 - 渲染测试（标记 `render`）：用 kaleido 调真实的 Plotly.js，断言实际画出的坐标范围。
   回归：只给一侧边界时曾用 `autorange="min"/"max"`，模板开了 automargin，扩边重绘后被重置成完全自动，边界失效
+- `limits` 永远写数据值：刻度类型和范围分两个回调设、先设哪个、改回线性，两侧和单侧边界结果都一样；分步时对数轴边界 ≤ 0 在应用时报错；
+  渲染测试断言分步设置后实际范围就是写的数据值（55576fb 复审 3）
 - 三种回调与 matplotlib 形状对应：axes `(轴名, fig)`，Y 轴设置只写到这根轴、X 轴写到共用的 `xaxis`，`custom` 也收 `(轴名, fig)`；
   lines 收 trace 列表；legend 收 `[fig.layout.legend]`
 - lines：标准写法翻译成 Plotly 的 `line.dash` / `marker.symbol` / `line.color`；线宽是磅、按 dpi 换成像素，自定义虚线按换算后的线宽算像素；
@@ -290,9 +297,8 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 
 **按计划画**
 - 后端只读计划：手工写一张 `FigureSpec` 交给 `PlotlyBackend.draw`，trace 的数据、名字、颜色、轴标题，以及图尺寸（figsize × dpi）就是计划写的；`axes` 是 `{'left': 'yaxis'}`
-- `DataPlotter(backend='plotly')` 的四种方法都能画，结果形状与 matplotlib 相同；双 Y 轴 `axes = {'left': 'yaxis', 'right': 'yaxis2'}`
 - 每条 trace 与不分组计划的曲线一一对应；重复调用生成新的 Figure
-- 样品号 0、5、9 取 Plasma 色带 0、1/3、2/3 处（回归：曾在样品 5 处 `IndexError`）；合并模式用组首色
+- 合并模式用组首色
 - 分组样式翻译到 trace：`'dash'` → `line.dash`；`(3, 5)` 按线宽（3 磅 → 像素）换算成像素；`'square'` → `marker.symbol` 且 `mode` 变 `'lines+markers'`；RGB → `'rgb(255,0,0)'`；写了 marker 时点色等于线色
 - 散点、柱状图也按计划上色（`go.Bar` 只写 marker 颜色）
 - 空数据集 → 明确的 `RuntimeError`（`数据集为空`）
@@ -314,6 +320,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
   图例回调 `[fig.layout.legend]`（回归：三种回调曾都只收 `fig`）；双 Y 轴的整图回调拿到 Plotly 配置里的轴名（用 `fig.layout['yaxis2']` 改右轴）
 - `DataPlotter.add_slider`：`single` / `cumulative` 的档位与可见性、档位标签和标题是样品名（标题用带点的路径 `'title.text'`）、重复添加只保留一个；默认外观与 `slider_formatter` 覆盖；名称太长时隐藏刻度标签
 - 报错：未绘图、图中没有曲线、`mode` 写错（不改动已有的图）、matplotlib 后端
+- 两种滑块只管计划登记的曲线：整图回调加的参考线不分档，每档保持原来的显隐（含 `'legendonly'`）（回归：翻页滑块曾每档隐藏它，曲线滑块曾多出一档；55576fb 复审 4）
 
 **多页与翻页滑块（6.8）**
 - 分组分离模式：两页共用一个 Figure、共 4 条 trace，每页的 `artists` 只有自己那页的；刚画完只显示第一页
@@ -327,6 +334,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 ### 两个后端对照 — `test_backend_parity.py`
 - 分组参数（两个后端各测一遍）：只接受 `Group` 对象，传字典 → `TypeError`；基于别的数据集的 `Group` → `ValueError`；不传时是建在本数据集上的空 `Group`
 - 计划里的版式、画法写错时，两个后端都明确报错（`ValueError`）
+- 结果同一形状（两个后端 × 四种方法）：`figures` 的键是计划的 key，每张图（页）的线与 `spec.curves` 一一对应，`axes` 单轴 `{left}`、双 Y 轴 `{left, right}`
 - **同一个入口、同一个 `Group`，换后端**：多线、合并、分离、xy、双 Y 轴五种画法，图的 key 相同，每张图（Plotly 是每页）的曲线条数、顺序、标签、数据相同；
   按页比较，不比 Figure 个数（多张计划时 Plotly 是一个 Figure 多页）
 - 按轴回调只作用在自己那根轴上（第三方审查 E）：只给右轴配范围和线色，左轴范围、左线颜色不变；
@@ -336,6 +344,8 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - `combine_formatters` 合并同一种回调，两个后端都能接进绘图器
 - 分组 `marker` 对散点图也生效（Plotly 散点仍是 `'markers'`）
 - 图例标题：四种方法、六种情况，每张图画出的标题与计划一致（没有就不画）
+- 数字样品名（真实 CSV 的 `'101'`、`'102'`）：双 Y 轴图例标题、Plotly 两种滑块的档位标签都是原样文本（55576fb 复审 1）
+- `DataPlotter(lines=LineStyle(marker=...))` 全局标记：折线都带标记（Plotly `lines+markers`），分组写的盖过全局，散点仍是圆点（复审 2）
 - 颜色不在这里比：两个库的色带实现不同，各自「位置 → 颜色」分别在 `test_plotter.py`、`test_plotly_backend.py` 里测
 
 ### HTML 导出 — `test_html_export.py`
@@ -372,6 +382,20 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | matplotlib 重建图例（第三方审查 D） | 锚点被换算两次，图例移到画布外 | 按排版预设重建（`_make_legend`），不复制旧锚点 |
 | matplotlib 轴工厂（样式对象化时修） | 总调用 `set_*scale`，冲掉预设的刻度格式 | `AxisStyle.scale` 没写就不调用 |
 | Plotly 双 Y 轴右轴刻度（样式对象化时渲染发现） | 叠加轴默认 `tickmode='sync'`，刻度值成了 1.0007、0.9022 | 右轴 `tickmode='auto'` |
+| `Dataloader` 数字样品名（55576fb 复审 1） | `'101'` 读成 `101.0`，双 Y 轴替换 `'{name}'`、Plotly 滑块标签 `TypeError` | 三种格式都按文本读（`dtype=str`），数据列再转数字 |
+| Plotly 全局 marker（复审 2） | 模板重复传 `marker_symbol`，绘图器建不起来；折线不显示标记 | 全局 marker 不进模板，折线按「全局 < 分组」叠上并用 `lines+markers` |
+| Plotly 对数轴分步设范围（复审 3） | 先设对数再设范围，range 写成数据值（被当 log10）；反过来已写的范围不换算 | `plotly_styles.apply_axis` 按轴的实际类型翻译，改类型时换算已写的边界 |
+| Plotly 滑块与参考线（复审 4） | 翻页滑块每档隐藏整图回调加的参考线；曲线滑块把它多算一档 | 只给计划登记的曲线分档，其余 trace 保持原来的显隐 |
+| 测试隔离：tk 变量在后台线程回收（步骤 7.1 时出现） | `test_data_reorder_app.py` 的 tk 变量被 Kaleido 线程回收，卡约 45 秒并报 "main thread is not in main loop" | fixture 销毁窗口后在主线程 `gc.collect()` |
+| `DataTransformer` 的 `naming_func`（全面评审） | 标注允许 `sample_idx` 写列表，实际传列表在深处报 unhashable | 只收一个整数，写错给中文 `TypeError` |
+| `select('samples', …)`（1.0 发布前复审） | 不存在的样品号静默跳过 | 报「找不到样品号」 |
+| `DataTransformer` 新样品号（1.0 发布前复审） | 先显式写到某样品再自动分配会撞号 | 同时避开已累计的结果 |
+| `Dataloader` 表头（1.0 发布前复审） | 样品名 `NA`、单位 `N/A` 读成 nan；样品名为空不报错 | `keep_default_na=False`；空样品名报出列号 |
+| Plotly 刻度间距、轴范围（1.0 发布前复审） | `label_pad` 换算成小数被拒；改对数时换算会被替换的旧边界而报错；单侧边界残留 | 取整；写了 `limits` 就整体替换 |
+| `expandata` 回滚状态、对数轴单轴次刻度（1.0 发布前复审） | `'loaded'` 变 `'written'`；单轴 `minor=True` 被全局关掉 | 回滚恢复状态；显式装对数次刻度定位器 |
+| `ColumnList` 长度（全面评审） | 按元素个数算，零行数据集的列数是 0，逐样品遍历 `IndexError` | 按列数算（与 `expandata` 判断空的方式一致） |
+| `DataSet.update_attributes`（全面评审） | 元数据长度不一致时先 print 六行到标准输出 | 各项长度写进异常信息，不打印 |
+| Plotly 轴工厂边框（plotly_styles 搬家时发现） | 单轴图上 `frame=FrameStyle(right=True)` 读 `fig.layout.yaxis2` 抛 `AttributeError` | 用 `getattr` 判断有没有叠加的右轴 |
 | Plotly 按轴回调（第三方审查 E） | 回调都只收 `fig`，右轴回调改了左轴和左线；matplotlib 右轴图例回调收到 `None` | 后端按轴交出轴名 / trace / 图例（做法 2）；没有图例的轴报 `ValueError` |
 | 轴工厂刻度宽、分组 marker、Plotly `linecolor`（第三方审查 G） | 刻度宽写死 3；散点忽略分组 marker；纯散点只改隐藏线色 | 不写刻度宽；`STYLE_FIELDS_BY_KIND`；点也一起改色 |
 

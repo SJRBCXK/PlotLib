@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt, QPoint
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QSpinBox
 
-from tools.data_reorder_qt import CheckableListWidget, BorderDelegate
+from tools.data_reorder_qt import CheckableListWidget
 
 
 @pytest.fixture

@@ -47,10 +47,8 @@ from plotlib.dataloader import Dataloader
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
 
-# 1. 加载数据（弹出文件选择对话框）
-data = Dataloader(
-    COLUMNS_PER_DATASET=6  # 每个样品在文件中占的列数（含标识列）
-).load_data()
+# 1. 加载数据（不传路径时弹出文件选择对话框）
+data = Dataloader(columns_per_sample=6).load_data()   # 每个样品在文件中占的列数（含标识列）
 
 # 2. 一行代码绘制所有样品
 DataPlotter(
@@ -87,11 +85,9 @@ plt.show()
 ```python
 from plotlib.dataloader import Dataloader
 
-# 自动弹出文件选择对话框
-data = Dataloader(
-    COLUMNS_PER_DATASET=6,      # 每个样品的列数（含标识列）
-    DATASET_FRACTION=1/6        # 样品数计算系数
-).load_data()
+loader = Dataloader(columns_per_sample=6)   # 每个样品的列数（含标识列），必填
+data = loader.load_data('piezo.csv')       # 直接读这个文件（.csv / .xlsx / .xls / .txt / .dat，不区分大小写）
+data = loader.load_data()                  # 不传路径：弹出文件选择对话框；取消选择抛 NoFileSelected
 
 # 返回 DataSet 对象，包含：
 # - data: np.ndarray        数值矩阵
@@ -100,6 +96,22 @@ data = Dataloader(
 # - sample_idx: list[int]   各列所属的样品号
 # - channel_idx: list[int]  各列在样品内的通道号
 ```
+
+### 逐样品遍历与变换
+
+`for sample in dataset` 逐样品遍历，每次得到一个样品的子 `DataSet`（等同于 `dataset.iter('samples')`）。
+逐样品变换时，每个样品各用一个 `DataTransformer` 计算，再拼回一个 `DataSet`；结果仍按原样品号对应：
+
+```python
+from plotlib import DataSet, DataTransformer
+
+impedance = DataSet()
+for sample in selected:                     # selected：选好列的 DataSet
+    impedance.expandata(DataTransformer(sample).Norm(norm_unit='|Z|(ohm)'))
+```
+
+逐列遍历用 `dataset.column`；按名字、单位、通道遍历用 `dataset.iter('names' / 'units' / 'channels')`。
+（与 `Group.apply` 的区别：那里是一组样品一起算，每个分组的结果是一个新样品。）
 
 ### DataPlotter - 绘图器
 
@@ -305,7 +317,7 @@ from plotlib.formatters import make_axes_formatter
 from plotlib.html_export import write_fit_html
 from plotlib.plot_spec import AxisStyle
 
-data = Dataloader(COLUMNS_PER_DATASET=6).load_data()
+data = Dataloader(columns_per_sample=6).load_data()
 
 # Plotly 版坐标轴格式化器：参数与 matplotlib 版相同，另加 backend="plotly"
 axes_fmt = make_axes_formatter(x=AxisStyle(scale='log', limits=(0.001, None), format='{x:.0e}'), backend="plotly")
@@ -331,6 +343,7 @@ write_fit_html(fig, "plot.html", title="压电极化测试")
   - `add_page_slider(mode=...)`：翻页滑块，一页一档，用于多页图；档位标签是组名 / 样品名，翻页时标题和图例标题跟着换；默认 `"single"`；
   - 两种 `mode` 一样：`"single"` 每档只显示当前这一条 / 一页；`"cumulative"` 显示第一条 / 页到当前。用错（一页图用翻页滑块，或反过来）会报错并提示该用哪个。
   - 档位名称太长、放不下时，刻度标签自动隐藏；`slider_formatter=fn` 最后执行，可改前缀等（翻页滑块默认不加前缀）。
+  - 滑块只管计划画出的曲线：`figure_formatter` 里加的参考线等不分档，每一档都保持原来的显隐。
 - **尺寸与字号**：`figsize`（英寸）和字号、线宽（磅）按 `dpi`（默认 100）换成像素，与 matplotlib 后端画出来比例一致；
   例如多线图默认 (10, 8) 英寸 → 1000 × 800 像素，字号 22 磅 → 约 31 像素。
 - **默认排版**与 matplotlib 共用排版预设（`layouts.py`）：图例位置与标题、刻度格式、双 Y 轴左红右蓝；双 Y 轴的右轴是 `yaxis2`。
@@ -343,6 +356,7 @@ write_fit_html(fig, "plot.html", title="压电极化测试")
 - **Plotly 版格式化器的限制**：不支持 `AxisStyle.scaler`；刻度类型只支持 `'linear'` 和 `'log'`；
   刻度格式只支持 `'{x:.Nf}'`、`'{x:.Ne}'`、`'{x:.Ng}'`、`'{x:.N%}'`；次刻度文字不能单独设字号等；图例拖动在显示时设置。
   不支持的设置在创建格式化器时直接报错。
+  `AxisStyle.limits` 与 matplotlib 一样写数据值（对数轴也是，库按轴的实际刻度类型换算）；刻度类型和范围分在几个格式化器里设、先后顺序不同，结果都一样。
 - **双 Y 轴的右轴**按自己的数据选刻度（Plotly 对叠加的轴默认让刻度位置对齐左轴，刻度值会不整齐；与 matplotlib 的 twinx 一致）。
 - **HTML 导出** `write_fit_html(fig, path, side_html=None, side_width=300, gap=24, title=..., include_plotlyjs=True)`：
   - 页面按图的固定尺寸排版（Plotly 后端按 `figsize × dpi` 定尺寸，多线图默认 1000 × 800），打开时按窗口大小整体等比缩放并居中；
@@ -363,13 +377,10 @@ from plotlib.plot_spec import AxisStyle
 import matplotlib.pyplot as plt
 
 # 配置
-COLUMNS_PER_DATASET = 8
+COLUMNS_PER_SAMPLE = 8  # 每个样品的列数（含 1 列标识）
 
 # 加载数据
-data = Dataloader(
-    COLUMNS_PER_DATASET=COLUMNS_PER_DATASET,
-    DATASET_FRACTION=1/COLUMNS_PER_DATASET
-).load_data()
+data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
 
 # Nyquist 图格式化器
 nyquist_fmt = make_axes_formatter(
@@ -417,7 +428,7 @@ from plotlib.plot_spec import AxisStyle
 import matplotlib.pyplot as plt
 
 # 加载数据
-data = Dataloader(COLUMNS_PER_DATASET=6).load_data()
+data = Dataloader(columns_per_sample=6).load_data()
 
 # Displacement-Voltage 格式化器
 dv_fmt = make_axes_formatter(
@@ -465,7 +476,7 @@ PlotLib/
 │       ├── layouts.py          # 排版预设：每种版式的默认排版，用样式对象写（两个后端共用）；叠加顺序
 │       ├── style.py            # 翻译层：标准写法 / 样式对象 → 各后端原生值（按 dpi 换算）
 │       ├── backends/           # 绘图后端，只管渲染：matplotlib_backend.py、plotly_backend.py、
-│       │                       #   matplotlib_styles.py（matplotlib 应用样式，后端与格式化器共用）
+│       │                       #   matplotlib_styles.py / plotly_styles.py（应用样式，后端与格式化器共用）
 │       ├── formatters.py       # 格式化器工厂（matplotlib / Plotly）
 │       ├── html_export.py      # 导出随窗口缩放的 HTML 页面
 │       └── templates/ppt_fit_shell.html   # html_export 的页面外壳

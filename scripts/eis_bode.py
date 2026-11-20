@@ -25,8 +25,7 @@ plt.close('all')
 # ============================================================
 # 数据配置常量
 # ============================================================
-INPUT_COLUMNS_PER_DATASET = 10  # 每组数据集的列数
-INPUT_DATASET_FRACTION = 1/INPUT_COLUMNS_PER_DATASET
+COLUMNS_PER_SAMPLE = 10  # 每个样品的列数（含 1 列标识）
 
 # 数据列索引定义（从0开始）
 dataRowNum_unit1 = 0  # Frequency
@@ -88,10 +87,7 @@ def Group_lines_formatter(lines):
 # ============================================================
 # 数据加载
 # ============================================================
-data = Dataloader(
-    DATASET_FRACTION = INPUT_DATASET_FRACTION,
-    COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
-).load_data()
+data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
 groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图和计算都用它
 
 # ============================================================
@@ -154,10 +150,10 @@ RevCampdata_v2_pltsubsyy = DataPlotter(
 
 Selected_data = DPL(dataset=data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data
 Conductivity = DataSet()
-for dataslice in Selected_data.iter('samples'):
+for dataslice in Selected_data:
     conductivity_slice = DT(dataslice).Norm(extended=False,norm_unit='|C|(S/cm)')
     Conductivity.expandata(conductivity_slice)
-data = data.expandata(Conductivity)._rearrange_columns()
+data = data.expandata(Conductivity).sort_columns()
 Conductivity_pltliner1 = DataPlotter(
     dataset=data,
     channel_x = 0,
@@ -180,7 +176,7 @@ def f_peak(data):
 
 Selected_data = DPL(dataset=data).select("Tan(Delta)","Frequency(Hz)").Selected_data
 f_delta_peak = DataSet()
-for dataslice in Selected_data.iter('samples'):
+for dataslice in Selected_data:
     f_delta_peak_slice = DT(dataslice).apply(func=f_peak,extended=False)
     f_delta_peak.expandata(f_delta_peak_slice)
 

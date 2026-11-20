@@ -64,33 +64,6 @@ def test_backend_draws_only_from_plan():
     assert drawn.axes == {'left': 'yaxis'}
 
 
-@pytest.mark.parametrize("method, keys, axes", [
-    ('plot_multiline',   ['main'],    {'left': 'yaxis'}),
-    ('plot_groups',  ['A', 'B'],  {'left': 'yaxis'}),
-    ('plot_xy',  [0, 1, 2],   {'left': 'yaxis'}),
-    ('plot_dual_y', [0, 1, 2],   {'left': 'yaxis', 'right': 'yaxis2'}),
-])
-def test_dataplotter_with_plotly_backend(eis_dataset, method, keys, axes):
-    """DataPlotter(backend='plotly')：四种方法都能画，结果形状与 matplotlib 相同。"""
-    groups = Group(eis_dataset, {'A': {'num': [0, 1]}, 'B': {'num': [1, 2]}})
-    plotter = DataPlotter(eis_dataset, groups=groups, backend='plotly')
-    match method:
-        case 'plot_multiline':   plotter.plot_multiline()
-        case 'plot_groups':  plotter.plot_groups()
-        case 'plot_xy':  plotter.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM)
-        case 'plot_dual_y': plotter.plot_dual_y(right=(FREQ, ZS_IM))
-
-    assert plotter.backend.name == 'plotly'
-    assert list(plotter.figures) == keys
-    # 多张计划在 Plotly 里是同一个 Figure 的多页（6.8）：fig 只有一个，trace 是各页之和
-    [fig] = {id(drawn.fig): drawn.fig for drawn in plotter.figures.values()}.values()
-    assert isinstance(fig, go.Figure)
-    assert len(cast(tuple, fig.data)) == sum(len(drawn.spec.curves) for drawn in plotter.figures.values())
-    for drawn in plotter.figures.values():
-        assert len(drawn.artists) == len(drawn.spec.curves)
-        assert drawn.axes == axes
-
-
 # ══════════════════════════════════════════════
 # 双 Y 轴：右轴是 layout 里的 yaxis2，右线挂到 y2；左红右蓝来自排版预设
 # ══════════════════════════════════════════════
@@ -196,6 +169,14 @@ def test_global_legend_and_lines_in_template(eis_dataset):
     assert (lay['legend']['x'], lay['legend']['xanchor']) == (0.02, 'left')     # 盖过预设的图外右侧
 
 
+def test_label_pad_applies_as_whole_pixels(eis_dataset):
+    """全局 TickStyle(label_pad=4) 能画：4 磅换成整数像素写进模板（回归，1.0 发布前复审：曾传 5.56 被 Plotly 拒绝）。"""
+    from plotlib.plot_spec import TickStyle
+
+    fig = DataPlotter(eis_dataset, backend='plotly', ticks=TickStyle(label_pad=4)).plot_multiline().figures['main'].fig
+    assert layout(fig)['template']['layout']['xaxis']['ticklabelstandoff'] == round(4 * 100 / 72)
+
+
 def test_minor_label_style_rejected_by_plotly(eis_dataset):
     """Plotly 的次刻度没有文字属性：全局或单轴设了次刻度文字的字号 → 创建时就报错（用户定）。"""
     from plotlib.formatters import make_axes_formatter
@@ -299,15 +280,6 @@ def test_plot_data_and_repeated_calls(eis_dataset):
     second = plotter.plot_multiline().figures['main']
     assert second.fig is not first.fig
     assert all(a is b for a, b in zip(second.artists, cast(go.Figure, second.fig).data))
-
-
-def test_sparse_sample_ids_colors(sparse_dataset):
-    """
-    样品号 0、5、9：计划给的位置 0、1/3、2/3 换成 Plasma 色带上的颜色。
-    回归：曾把样品号当作颜色列表的下标，画到样品 5 时 IndexError。
-    """
-    plotter = plotly_plotter(sparse_dataset).plot_multiline()
-    assert [t.line.color for t in traces_of(plotter)] == [plasma(p) for p in (0, 1/3, 2/3)]
 
 
 def test_merge_mode_group_head_color(eis_dataset):
@@ -533,6 +505,33 @@ def test_page_slider_labels_are_sample_names(eis_dataset):
     """每个样品一页（xy）：档位标签是样品名。"""
     fig = plotly_plotter(eis_dataset).plot_xy(channel_x=ZS_RE, channel_y=ZS_IM).add_page_slider()
     assert [step['label'] for step in layout(fig)['sliders'][0]['steps']] == ['S0', 'S1', 'S2']
+
+
+def add_reference_lines(fig, axes):
+    """整图回调：加两条不属于任何样品的参考线，一条显示、一条只在图例里（visible='legendonly'）。"""
+    _ = axes
+    fig.add_trace(go.Scatter(x=[1, 100], y=[15, 15], name='ref'))
+    fig.add_trace(go.Scatter(x=[1, 100], y=[25, 25], name='ref hidden', visible='legendonly'))
+
+
+@pytest.mark.parametrize("draw, add, labels", [
+    (lambda p: p.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM, figure_formatter=add_reference_lines),
+     lambda p: p.add_page_slider(), ['S0', 'S1', 'S2']),
+    (lambda p: p.plot_multiline(figure_formatter=add_reference_lines),
+     lambda p: p.add_slider('single'), ['S0', 'S1', 'S2']),
+], ids=['page_slider', 'curve_slider'])
+def test_sliders_keep_shared_traces(eis_dataset, draw, add, labels):
+    """
+    整图回调加的参考线不属于计划里的任何曲线：两种滑块都不给它分档，每一档都保持它原来的显隐；
+    滑动的只有计划登记的曲线（55576fb 复审 4）。
+    回归：翻页滑块曾在每一档都把参考线设为隐藏；曲线滑块曾把参考线也当成一档。
+    """
+    plotter = draw(plotly_plotter(eis_dataset))
+    fig = add(plotter)
+    steps = layout(fig)['sliders'][0]['steps']
+    assert [step['label'] for step in steps] == labels
+    assert all(list(step['args'][0]['visible'])[-2:] == [True, 'legendonly'] for step in steps)
+    assert fig.data[-2].visible in (None, True) and fig.data[-1].visible == 'legendonly'
 
 
 def test_two_sliders_misuse(eis_dataset):

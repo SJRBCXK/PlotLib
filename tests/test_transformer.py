@@ -81,6 +81,31 @@ def test_apply_naming_func_overrides(eis_dataset):
     assert result.sample_idx == [9, 9]
 
 
+@pytest.mark.parametrize("explicit", [
+    lambda dt: dt.apply(lambda d: d, indicies=[1], input_sample_idx=3, input_unit='|Z|'),
+    lambda dt: dt.apply(lambda d: d, indicies=[1], naming_func=lambda: {'sample_idx': 3, 'units': ['|Z|']}),
+], ids=['input_sample_idx', 'naming_func'])
+def test_new_sample_skips_ids_already_in_results(eis_dataset, explicit):
+    """
+    先显式把结果写到样品 3（数据集已有 0 ~ 2），再 new_sample=True 自动分配：新样品是 4，不与已累计的结果撞号。
+    回归（1.0 发布前复审）：自动编号只看输入数据集，也分到 3，两次结果被并成同一个样品。
+    """
+    dt = DataTransformer(eis_dataset)
+    explicit(dt)
+    assert dt.Norm(indicies=[1, 2], new_sample=True, norm_unit='|Z|').sample_idx == [3, 4]
+
+
+@pytest.mark.parametrize("sample_idx", [[3, 4], 1.5, True], ids=['list', 'float', 'bool'])
+def test_apply_naming_func_sample_idx_must_be_one_int(eis_dataset, sample_idx):
+    """
+    一次计算只产出一个样品（逐样品、逐分组、跨样品合成都如此），naming_func 的 sample_idx 只收一个整数，
+    写错 → 中文 TypeError。回归（2026-11-20 全面评审）：标注曾写 int | list[int]，传列表在深处报「unhashable type」。
+    """
+    with pytest.raises(TypeError, match='sample_idx 只收一个整数'):
+        DataTransformer(eis_dataset).apply(lambda d: d, indicies=[1, 2],
+                                           naming_func=lambda: {'sample_idx': sample_idx})
+
+
 def test_apply_with_column_objects(eis_dataset):
     """用 column= 传 Column 对象，效果等同 indicies=。"""
     cols = [eis_dataset.column[4]]

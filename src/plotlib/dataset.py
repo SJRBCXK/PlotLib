@@ -1,7 +1,7 @@
 """数据集容器模块。"""
+from collections.abc import Iterator
 from typing import overload
-import re
-import copy
+
 import numpy as np
 
 
@@ -109,12 +109,12 @@ class Column:
 
     def __getitem__(self, key):
         if key not in self._ALLOWED_KEYS and key not in ('local_idx', 'channel_idx', 'father_idx', 'initial_idx'):
-            raise KeyError(f"Unknown column key: '{key}'")
+            raise KeyError(f"列没有字段 '{key}'")
         return getattr(self, key)
 
     def __setitem__(self, key, value):
         if key not in self._ALLOWED_KEYS:
-            raise KeyError(f"Cannot set '{key}': only {list(self._ALLOWED_KEYS)} are writable")
+            raise KeyError(f"不能修改列的 '{key}'：只能改 {sorted(self._ALLOWED_KEYS)}")
         setattr(self, key, value)
 
 
@@ -140,11 +140,12 @@ class ColumnList:
         if idx < 0:
             idx = len(self) + idx
         if idx < 0 or idx >= len(self):
-            raise IndexError(f"Column index {idx} out of range")
+            raise IndexError(f"列号 {idx} 超出范围（共 {len(self)} 列）")
         return Column(self._dataset, idx)
 
     def __len__(self) -> int:
-        return self._dataset.data.shape[1] if self._dataset.data.size > 0 else 0
+        # 列数看列，不看元素个数：零行的数据集（如找不到峰的峰表，形状 (0, 2)）size 是 0，但有 2 列（与 expandata 同一判断）
+        return self._dataset.data.shape[1]
 
     def __iter__(self):
         for i in range(len(self)):
@@ -168,7 +169,7 @@ class DataSet():
         self.initial_idx: list = []
         self.num_samples: int = 0
         self.generation: int = 0
-        self.status: str = 'empty'  # empty, selected, processed
+        self.status: str = 'empty'  # 'empty' 新建；'written' 经 update_attributes 校验过；'loaded' 由 Dataloader 读出
 
     @property
     def column(self) -> ColumnList:
@@ -199,6 +200,7 @@ class DataSet():
         # 先记下原状（与 Column.sample_idx 的 setter 同一做法）：update_attributes 校验失败时恢复
         fields = ('data', 'names', 'units', 'sample_idx', 'father_idx', 'initial_idx')
         backup = {field: getattr(self, field) for field in fields}
+        status = self.status        # update_attributes 会把状态改成 'written'，回滚时连状态一起恢复（如 'loaded'）
         self.data = new_data
         for field in fields[1:]:
             setattr(self, field, getattr(self, field) + getattr(other, field))   # 新列表，原列表留作备份
@@ -208,6 +210,7 @@ class DataSet():
             for field, value in backup.items():
                 setattr(self, field, value)
             self.update_attributes()
+            self.status = status
             raise
         return self
     
@@ -215,20 +218,12 @@ class DataSet():
     def update_attributes(self):
         """更新内部属性并验证一致性"""
 
-        if  not (self.data.shape[1] \
-            == len(self.names) \
-            == len(self.units) \
-            == len(self.sample_idx) \
-            == len(self.father_idx) \
-            == len(self.initial_idx) \
-                                        ):
-            print("数据维度:", self.data.shape)
-            print("names 长度:", len(self.names))
-            print("units 长度:", len(self.units))
-            print("sample_idx 长度:", len(self.sample_idx))
-            print("father_idx 长度:", len(self.father_idx))
-            print("initial_idx 长度:", len(self.initial_idx)) 
-            raise RuntimeError("数据解析错误：数据维度与元数据不匹配。")
+        lengths = {field: len(getattr(self, field))
+                   for field in ('names', 'units', 'sample_idx', 'father_idx', 'initial_idx')}
+        if any(length != self.data.shape[1] for length in lengths.values()):
+            # 各项长度写进异常信息（以前先 print 到标准输出，再抛一个不带细节的异常）
+            detail = '，'.join(f"{field} {length}" for field, length in lengths.items())
+            raise RuntimeError(f"数据解析错误：数据维度与元数据不匹配（数据 {self.data.shape[1]} 列；{detail}）")
         # numpy 无需重置列索引，直接更新 local_idx
         self.local_idx = list(range(self.data.shape[1]))
 
@@ -278,22 +273,29 @@ class DataSet():
     
 
     def _channel_units_unify_check(self):
-        unit_by_local = {}
-        for i, local_idx in enumerate(self.channel_idx):
+        """约定 2：同一通道在各样品里单位相同（通道 0 都是频率、通道 1 都是 Zs' ...）。"""
+        unit_by_channel = {}
+        for i, channel in enumerate(self.channel_idx):
             unit = self.units[i]
-            if local_idx in unit_by_local and unit_by_local[local_idx] != unit:
+            if channel in unit_by_channel and unit_by_channel[channel] != unit:
                 raise RuntimeError(
-                    "Unit mismatch for same channel_idx: "
-                    f"idx={local_idx}, {unit_by_local[local_idx]} vs {unit}"
+                    f"同一通道的单位不一致：通道 {channel} 已经是 '{unit_by_channel[channel]}'，"
+                    f"第 {i} 列（样品 {self.sample_idx[i]}）却是 '{unit}'"
                 )
-            unit_by_local[local_idx] = unit
+            unit_by_channel[channel] = unit
     
-    def _rearrange_columns(self):
+    def sort_columns(self) -> DataSet:
+        """
+        各列按「样品号 → 通道号」原地排序，返回自己（可接在 expandata 后面链式调用）。
+        用在把逐样品算出的结果拼回原数据之后，让同一样品的列重新挨在一起：
 
-        
+            data = data.expandata(impedance).sort_columns()
+
+        （步骤 7.3：原私有方法 _rearrange_columns，脚本一直在用，改成公开名字，不留旧名。）
+        """
         indices = np.column_stack([self.local_idx,self.sample_idx,self.channel_idx])
 
-        order = np.lexsort((indices[:,2], indices[:,1])) 
+        order = np.lexsort((indices[:,2], indices[:,1]))
 
         self.data = self.data[:, order]
         self.names = [self.names[i] for i in order]
@@ -303,9 +305,6 @@ class DataSet():
         self.local_idx = list(range(len(order)))
         self.father_idx = [self.father_idx[i] for i in order]
         self.initial_idx = [self.initial_idx[i] for i in order]
-        self.num_samples = self.num_samples
-        self.generation = self.generation
-        self.status = self.status
         self.update_attributes()
 
         return self
@@ -370,6 +369,19 @@ class DataSet():
         for key in dict.fromkeys(attr):  # type: ignore
             cols = [self.column[j] for j in self.local_idx if attr[j] == key]  # type: ignore
             yield DataSet().columns_to_dataset(cols, extended=False)  # type: ignore
+
+    def __iter__(self) -> Iterator[DataSet]:
+        """
+        for sample in dataset：逐样品遍历，每次产出一个样品的子 DataSet（同 iter('samples')；步骤 7.2，仿照 Group 的 __iter__）。
+        按样品在数据集里出现的顺序；子数据集保留原样品号，所以逐样品变换的结果仍按原样品对应：
+
+            norms = DataSet()
+            for sample in dataset:
+                norms.expandata(DataTransformer(sample).Norm())
+
+        逐列遍历用 dataset.column；按名字、单位、通道遍历用 iter('names' / 'units' / 'channels')。
+        """
+        return self.iter('samples')
     
     def form_array(self, data, name, unit, sample_idx, repeat_times=1):
         """根据输入数据和元信息创建一个新的 DataSet 切片。"""

@@ -8,6 +8,7 @@
     python -m pytest tests/test_groups_code.py -v
 """
 from types import SimpleNamespace
+from typing import cast
 
 import numpy as np
 import pytest
@@ -48,14 +49,24 @@ def test_qt_groups_code_is_standard():
     assert groups.names[:4] == ['1st', '2nd', '3rd', '4th']
 
 
+def fake_gui(**attributes):
+    """
+    代替 DataReorderGUI 实例：生成代码的两个方法只读 user_groups 和两个静态的命名方法，不需要真窗口。
+    cast 告诉类型检查器「当作 DataReorderGUI 用」（鸭子类型的替身，运行时不检查）。
+    """
+    from tools.data_reorder_app import DataReorderGUI
+
+    return cast(DataReorderGUI, SimpleNamespace(
+        _get_ordinal_name=DataReorderGUI._get_ordinal_name,
+        _get_linestyle_for_group=DataReorderGUI._get_linestyle_for_group,
+        **attributes,
+    ))
+
+
 def test_tk_groups_code_from_user_groups_is_standard():
     from tools.data_reorder_app import DataReorderGUI
 
-    fake = SimpleNamespace(
-        user_groups=[[i] for i in range(9)],
-        _get_ordinal_name=lambda i: DataReorderGUI._get_ordinal_name(None, i),
-        _get_linestyle_for_group=lambda i: DataReorderGUI._get_linestyle_for_group(None, i),
-    )
+    fake = fake_gui(user_groups=[[i] for i in range(9)])
     code = DataReorderGUI._generate_groups_dict_from_user_groups(fake)
     assert linestyles(run_groups_code(code, 9)) == EXPECTED_LINESTYLES
 
@@ -63,10 +74,7 @@ def test_tk_groups_code_from_user_groups_is_standard():
 def test_tk_groups_code_from_selection_is_standard():
     from tools.data_reorder_app import DataReorderGUI
 
-    fake = SimpleNamespace(
-        _get_ordinal_name=lambda i: DataReorderGUI._get_ordinal_name(None, i),
-        _get_linestyle_for_group=lambda i: DataReorderGUI._get_linestyle_for_group(None, i),
-    )
+    fake = fake_gui()
     # 连续的序号合成一组：9 组，单元素组生成 int，多元素组生成 range
     selected = [0, 1, 3, 5, 6, 7, 9, 11, 13, 15, 17, 19]
     code = DataReorderGUI._generate_groups_dict(fake, selected)
@@ -84,7 +92,7 @@ EXPECTED_ORDINALS = {0: '1st', 1: '2nd', 2: '3rd', 3: '4th', 9: '10th',
 def test_ordinal_names_are_the_same_in_both_tools():
     from tools.data_reorder_app import DataReorderGUI
 
-    tk_names = {i: DataReorderGUI._get_ordinal_name(None, i) for i in EXPECTED_ORDINALS}
+    tk_names = {i: DataReorderGUI._get_ordinal_name(i) for i in EXPECTED_ORDINALS}
     assert tk_names == EXPECTED_ORDINALS
 
     pytest.importorskip('PySide6')

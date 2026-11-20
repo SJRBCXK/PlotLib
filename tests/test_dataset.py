@@ -50,10 +50,14 @@ def test_form_array_reshapes_to_2d(data, shape):
     assert ds.data.shape == shape
 
 
-def test_metadata_length_mismatch_raises():
-    """2 列数据只给 1 个名字 → 约定 1 被破坏。"""
-    with pytest.raises(RuntimeError, match="不匹配"):
+def test_metadata_length_mismatch_raises(capsys):
+    """
+    2 列数据只给 1 个名字 → 约定 1 被破坏；各项长度写在异常信息里，不打印到标准输出。
+    回归（2026-11-20 全面评审发现）：曾先 print 六行长度、再抛一个不带细节的异常。
+    """
+    with pytest.raises(RuntimeError, match=r"不匹配.*数据 2 列.*names 1"):
         DataSet().form_array(np.ones((3, 2)), ['a'], ['x', 'y'], 0, repeat_times=2)
+    assert capsys.readouterr().out == ''
 
 
 def test_none_sample_idx_gives_consistent_metadata():
@@ -111,7 +115,7 @@ def test_unit_mismatch_between_samples_raises():
     """样品 1 的通道 1 单位和样品 0 不同 → 约定 2 被破坏。"""
     g0 = make([[1, 2]], ['a', 'b'], ['x', 'y'], 0)
     g1 = make([[1, 2]], ['c', 'd'], ['x', 'z'], 1)
-    with pytest.raises(RuntimeError, match="Unit mismatch"):
+    with pytest.raises(RuntimeError, match="同一通道的单位不一致"):
         g0.expandata(g1)
 
 
@@ -140,13 +144,34 @@ def test_expandata_all_zero_rows():
     assert ds.num_samples == 2
 
 
+def test_zero_row_dataset_columns_and_samples():
+    """
+    零行数据集（有列、没有行）照样能按列、按样品访问：列数看列，不看元素个数。
+    回归（2026-11-20 全面评审发现）：ColumnList 的长度曾用 data.size 判断，零行时为 0，
+    column 一列都取不到，for 逐样品遍历时 IndexError。
+    """
+    ds = DataSet().expandata(zero_rows(0)).expandata(zero_rows(1))
+    assert len(ds.column) == 4
+    assert [column.sample_idx for column in ds.column] == [0, 0, 1, 1]
+    assert [sample.data.shape for sample in ds] == [(0, 2), (0, 2)]
+
+
+def test_expandata_failure_keeps_status():
+    """拼接失败回滚时状态也恢复：读进来的 'loaded' 不变成 'written'（1.0 发布前复审）。"""
+    ds = make([[1, 2]], ['a', 'a'], ['x', 'y'], 0)
+    ds.status = 'loaded'
+    with pytest.raises(RuntimeError, match="同一通道的单位不一致"):
+        ds.expandata(make([[1, 2]], ['c', 'c'], ['x', 'z'], 1))
+    assert ds.status == 'loaded'
+
+
 def test_expandata_failure_leaves_dataset_unchanged():
     """
     回归（第三方审查 B）：拼接失败（单位冲突）后原对象不变，之后还能继续正确拼接。
     曾先改数据和元数据、后校验，报错时原对象已经多了这次的列。
     """
     ds = make([[1, 2]], ['a', 'a'], ['x', 'y'], 0)
-    with pytest.raises(RuntimeError, match="Unit mismatch"):
+    with pytest.raises(RuntimeError, match="同一通道的单位不一致"):
         ds.expandata(make([[1, 2]], ['c', 'c'], ['x', 'z'], 1))
 
     assert ds.data.shape == (1, 2)
@@ -200,7 +225,7 @@ def test_column_sample_change_breaking_units_raises_and_rolls_back(eis_dataset):
     把 S0 的频率列移走后，S0 的第 0 列变成 Zs'，而 S1/S2 的第 0 列仍是频率 → 违反约束 2。
     要报错，且回滚到原状态，不能留下半改的数据集。
     """
-    with pytest.raises(RuntimeError, match="Unit mismatch"):
+    with pytest.raises(RuntimeError, match="同一通道的单位不一致"):
         eis_dataset.column[0].sample_idx = 7
     assert eis_dataset.sample_idx[0] == 0
     assert eis_dataset.num_samples == 3
@@ -247,11 +272,6 @@ def test_column_list_indexing(eis_dataset):
 # ══════════════════════════════════════════════
 # 遍历与重组
 # ══════════════════════════════════════════════
-def test_iter_by_samples(eis_dataset):
-    parts = list(eis_dataset.iter('samples'))
-    assert [p.names for p in parts] == [['S0'] * 3, ['S1'] * 3, ['S2'] * 3]
-
-
 def test_iter_by_units(eis_dataset):
     """按单位遍历：每次产出所有样品中该单位的列。"""
     parts = list(eis_dataset.iter('units'))
@@ -262,6 +282,43 @@ def test_iter_by_units(eis_dataset):
 def test_iter_unknown_method_raises(eis_dataset):
     with pytest.raises(ValueError, match="不支持的遍历方式"):
         next(eis_dataset.iter('colors'))
+
+
+# 逐样品（步骤 7.2，用户定：仿照 Group 的 __iter__，for 直接遍历 DataSet）
+def test_for_loop_iterates_samples(sparse_dataset):
+    """
+    for sample in dataset：每次一个样品的子 DataSet，按样品在数据集里出现的顺序，与 iter('samples') 相同；
+    样品号不连续（0、5、9）时子数据集保留原样品号。
+    """
+    parts = list(sparse_dataset)
+    expected = list(sparse_dataset.iter('samples'))
+    assert [p.sample_idx for p in parts] == [[0, 0], [5, 5], [9, 9]]
+    assert [p.names for p in parts] == [e.names for e in expected] == [['S0'] * 2, ['S5'] * 2, ['S9'] * 2]
+    for part, sample in zip(parts, (0, 5, 9)):
+        np.testing.assert_array_equal(part.data, np.arange(6.0).reshape(3, 2) + sample)
+
+
+def test_for_loop_on_empty_dataset():
+    """空数据集没有样品：for 一次也不执行。"""
+    assert list(DataSet()) == []
+
+
+def test_per_sample_transform_keeps_sample_idx(eis_dataset):
+    """
+    脚本里的逐样品变换：for 遍历样品，每个样品各用一个 DataTransformer 计算，结果拼回一个 DataSet。
+    结果仍按原样品号对应（与 Group.apply 不同：那里每个分组的结果是新样品）。
+    """
+    from plotlib.processor import DataTransformer
+
+    norms = DataSet()
+    for sample in eis_dataset:
+        norms.expandata(DataTransformer(sample).Norm(norm_unit='|Z|(ohm)'))
+
+    assert norms.sample_idx == [0, 1, 2]
+    assert norms.names == ['Results_0_of_S0', 'Results_0_of_S1', 'Results_0_of_S2']   # DataTransformer 的自动命名
+    assert norms.units == ['|Z|(ohm)'] * 3
+    expected = np.column_stack([np.linalg.norm(eis_dataset.data[:, 3 * k:3 * k + 3], axis=1) for k in range(3)])
+    np.testing.assert_allclose(norms.data, expected)
 
 
 def test_columns_to_new_dataset(eis_dataset):
@@ -281,11 +338,16 @@ def test_columns_appended_to_self(eis_dataset):
     assert len(eis_dataset.names) == 10
 
 
-def test_rearrange_columns_sorts_by_sample_then_channel():
+def test_sort_columns_sorts_by_sample_then_channel():
+    """
+    sort_columns（步骤 7.3：原私有方法 _rearrange_columns，脚本在用，改成公开名字）：按「样品号 → 通道号」原地排序，
+    返回自己（脚本里接在 expandata 后面链式调用）；旧名字不再保留。
+    """
     ds = make([[1, 2, 3, 4]], ['a', 'b', 'c', 'd'], ['x', 'x', 'y', 'y'])
     ds.sample_idx = [1, 0, 1, 0]
     ds.update_attributes()
-    ds._rearrange_columns()
+    assert ds.sort_columns() is ds
+    assert not hasattr(ds, '_rearrange_columns')
 
     assert ds.names == ['b', 'd', 'a', 'c']
     assert ds.sample_idx == [0, 0, 1, 1]

@@ -29,7 +29,7 @@ class MatplotlibBackend:
         """
         翻译外观：Appearance（后端无关）→ rc_params（绘图时由 rc_context 生效）；解析色带名。
         样式对象按「库默认 < 用户在 DataPlotter 写的那一层」叠加；跟版式有关的（边框的上 / 右边、图例位置）
-        还要叠上版式预设，在画每张图时处理（见 _layer）。
+        还要叠上版式预设，在画每张图时处理（见 _draw 开头的 resolve_*）。
         """
         self.appearance = appearance
         lines = DEFAULT_LINES.updated(appearance.lines)
@@ -253,10 +253,10 @@ class MatplotlibBackend:
 
         for axis, fm in fms.items():
             if fm.legend is not None:
-                legend = axes[axis].get_legend()
-                if legend is None:
+                made = axes[axis].get_legend()      # 不叫 legend：那是参数名（图例的原生参数字典），别混用
+                if made is None:
                     raise ValueError(NO_LEGEND_MESSAGE)
-                fm.legend([legend])
+                fm.legend([made])
 
     @staticmethod
     def _apply_figure_formatter(fig, axes: dict, figure_formatter):

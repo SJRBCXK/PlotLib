@@ -170,7 +170,8 @@ class DataPlotter:
             raise RuntimeError(f"当前结果有 {len(self.figures)} 页，曲线滑块只能加在一页图上；"
                                f"按页翻请用 add_page_slider()")
         [drawn] = self.figures.values()
-        return add_slider(drawn.fig, mode, slider_formatter)
+        # 只给计划画出的曲线分档；整图回调加的参考线等不分档、保持原样（55576fb 复审 4）
+        return add_slider(drawn.fig, mode, slider_formatter, curves=drawn.artists)
 
     def add_page_slider(self, mode: str = 'single', slider_formatter=None):
         """
@@ -348,7 +349,9 @@ class DataPlotter:
         Parameters
         ----------
         left, right : (int, int)
-            左线、右线的 (X 通道, Y 通道)。
+            左线、右线的 (X 通道, Y 通道)。两条线共用一根 X 轴：X 通道可以不同（如位移、电压各有自己的时间列，
+            采样点可以不一样），但必须是同一个物理量、同一个单位（秒和毫秒混用不报错，会按数值直接叠在一起），
+            X 轴标题取左侧 X 通道的单位。
         axes_formatter, lines_formatter, legend_formatter : callable, optional
             左轴的回调；right_axes_formatter、right_lines_formatter 是右轴的回调。
             图例只有一个（两条线都在里面），归 legend_formatter；给 right_legend_formatter 会报错。

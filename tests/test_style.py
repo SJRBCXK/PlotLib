@@ -400,7 +400,9 @@ def test_translate_ticks_plotly():
     # pytest.approx 不支持嵌套字典：数值逐项比
     assert set(native) == {'ticks', 'ticklen', 'tickwidth', 'minor', 'tickfont', 'ticklabelstandoff', 'minorloglabels'}
     assert (native['ticks'], native['minorloglabels']) == ('outside', 'small digits')
-    assert (native['ticklen'], native['tickwidth'], native['ticklabelstandoff']) == pytest.approx((6 * PX, 3 * PX, 5 * PX))
+    assert (native['ticklen'], native['tickwidth']) == pytest.approx((6 * PX, 3 * PX))
+    # Plotly 的 ticklabelstandoff 只收整数像素：取整（回归，1.0 发布前复审：5 磅 → 6.94 像素曾直接报错）
+    assert native['ticklabelstandoff'] == round(5 * PX) and isinstance(native['ticklabelstandoff'], int)
     assert native['minor']['ticks'] == 'outside'
     assert (native['minor']['ticklen'], native['minor']['tickwidth']) == pytest.approx((3 * PX, 2 * PX))
     assert native['tickfont']['family'] == 'Arial' and native['tickfont']['size'] == pytest.approx(14 * PX)

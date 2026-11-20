@@ -1,6 +1,6 @@
 """PlotLib - 科学数据绘图库。"""
 from .dataset import DataSet
-from .dataloader import Dataloader
+from .dataloader import Dataloader, NoFileSelected
 from .processor import DataProcessLayer, DataTransformer
 from .plotter import DataPlotter
 from .formatters import (
@@ -16,6 +16,7 @@ from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
 __all__ = [
     'DataSet',
     'Dataloader',
+    'NoFileSelected',
     'DataProcessLayer',
     'DataTransformer',
     'DataPlotter',

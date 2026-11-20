@@ -10,7 +10,7 @@ Data Reorder App - PySide6 版本
 
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import numpy as np
@@ -88,22 +88,22 @@ class ReorderLogic:
 
         if self.is_new_format:
             self.units = df.iloc[0].tolist()
-            self.names = df.iloc[0].tolist()
+            self.names = names = df.iloc[0].tolist()
             self.data = df.iloc[1:].reset_index(drop=True).apply(pd.to_numeric, errors='coerce')  # type: ignore
         else:
             self.units = df.iloc[0].tolist()
-            self.names = df.iloc[1].tolist()
+            self.names = names = df.iloc[1].tolist()
             self.data = df.iloc[2:].reset_index(drop=True).apply(pd.to_numeric, errors='coerce')  # type: ignore
 
         total_cols = len(df.columns)
         num_groups = total_cols // columns_per_group
         remainder = total_cols % columns_per_group
 
-        # 构建组名列表
+        # 构建组名列表（读局部变量 names：类型检查器只知道属性 self.names 可能是 None）
         group_names = []
         for i in range(num_groups):
             col_idx = columns_per_group * i
-            name = self.names[col_idx] if col_idx < len(self.names) else f"列组 {i}"
+            name = names[col_idx] if col_idx < len(names) else f"列组 {i}"
             group_names.append(str(name))
 
         if remainder > 0:
@@ -292,7 +292,8 @@ class BorderDelegate(QStyledItemDelegate):
 
     def setModelData(self, editor, model, index):
         editor.interpretText()
-        self.parent().move_item(index.row(), editor.value() - 1)
+        # 这个委托由 CheckableListWidget 创建（BorderDelegate(self)），parent() 就是那个列表；Qt 的类型标注只写 QObject
+        cast(CheckableListWidget, self.parent()).move_item(index.row(), editor.value() - 1)
 
     def updateEditorGeometry(self, editor, option, index):
         rect = option.rect.adjusted(2, 2, 0, -2)

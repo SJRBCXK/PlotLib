@@ -45,7 +45,7 @@ DataPlotter.figures = {FigureSpec.key: DrawnFigure}；取线 figures[key].artist
 | `plot_spec.py` | 约定：样式对象 `LineStyle` / `AxisStyle` / `FrameStyle` / `LegendStyle` / `TickStyle` 与库默认 `DEFAULT_*`（2026-11-20 样式对象化）；`CurveSpec`（`style` 是 `LineStyle`）、`FigureSpec`、`DrawnFigure`、`Appearance`（用户写的那一层样式、`dpi`）、`AxesFormatter`；不含规则、不导入绘图库 | numpy |
 | `layouts.py` | 排版预设：每种版式的图例（`LegendStyle`）、边框（`FrameStyle`）、各轴（`AxisStyle`：刻度格式、着色）、边距；`resolve_legend` / `resolve_frame` 是唯一写叠加顺序的地方（库默认 < 预设 < 全局） | plot_spec |
 | `style.py` | 翻译层：线型 / 标记 / 颜色 / 图例位置 / 刻度格式 / 刻度（`TickStyle`）的标准写法 → 各后端原生值；磅、英寸按 dpi 换算 | plot_spec |
-| `backends/` | `get_backend(name, appearance, cmap)`；`MatplotlibBackend`、`PlotlyBackend`：公开方法 `draw`（一张计划一张图）；Plotly 另有 `draw_pages`（多张计划画成一个 Figure 多页，6.8）、`add_slider` / `add_page_slider`；`DataPlotter` 按「后端有没有这个方法」决定用不用；只依赖约定，不依赖规则；`matplotlib_styles.py` 把翻译好的样式用到 matplotlib 对象上（后端与格式化器共用，不导入 pyplot） | plot_spec、layouts、style |
+| `backends/` | `get_backend(name, appearance, cmap)`；`MatplotlibBackend`、`PlotlyBackend`：公开方法 `draw`（一张计划一张图）；Plotly 另有 `draw_pages`（多张计划画成一个 Figure 多页，6.8）、`add_slider` / `add_page_slider`；`DataPlotter` 按「后端有没有这个方法」决定用不用；只依赖约定，不依赖规则；`matplotlib_styles.py` 把翻译好的样式用到 matplotlib 对象上（后端与格式化器共用，不导入 pyplot）；`plotly_styles.py` 是 Plotly 一侧的对应（`apply_axis` / `apply_frame` / `apply_ticks`、`figure_dpi`；与 matplotlib 不同，收样式对象、应用时才翻译：磅按这张图的 dpi 换算、对数轴边界按轴的实际类型换算；不导入 plotly） | plot_spec、layouts、style |
 | `formatters.py` | 用户回调工厂 `make_*_formatter(backend=...)`、`combine_formatters`（前端接口，按 backend 参数区分，不按后端拆文件）。回调由后端按轴调用，两个后端形状对应：axes `(ax \| 轴名, fig)`、lines（这根轴的线）、legend（图例列表） | style |
 | `html_export.py` | 把 Plotly Figure 导出成随窗口缩放的 HTML | plotly |
 
@@ -191,6 +191,9 @@ Plotly backend，删除 `InteractivePlotter`（6.7）→ Plotly 按组翻页（6
 - **功能待办（不影响结构）**：Plotly 的上轴 `x2`；参照脚本做「前端模板」；~~Plotly 分离模式按组翻页~~（6.8 完成：凡是多张计划都翻页）。
 - ~~样式对象化~~（2026-11-20 完成）：格式参数按主题打包成 `LineStyle` / `AxisStyle` / `FrameStyle` / `LegendStyle` / `TickStyle`，全局、预设、分组、格式化器同一种写法（STRUCTURE_REVIEW「6.8 之后：样式对象化」）。
 - ~~matplotlib 轴工厂冲掉排版预设的刻度格式~~（随样式对象化修：`AxisStyle.scale` 没写就不调用 `set_*scale`）。
+- **柱状图、散点图的格式化从 `draw` 里独立出去**（2026-11-20 用户提出，暂不做）：两者有自己的格式参数和设置方式（柱的填充 / 边框、散点的大小映射等），
+  现在跟折线共用 `LineStyle`、共用 `draw` 里的一套流程，线条回调对柱图改色时 matplotlib 还会报 `AttributeError`（Plotly 跳过 Bar）。
+  用户手头没有这两种数据、不直观，等有需要时再把两者对应的格式化流程从 `draw` 中分出去（STRUCTURE_REVIEW「55576fb 复审修复」）。
 - **Plotly 次刻度文字字号**（2026-11-20 记录）：Plotly 没有这个属性，只能在导出的 HTML 里用 JS 改；静态图、notebook 不生效，缩放重画会被冲掉。真需要时作为 html_export 的增强。
 - ~~分组样式只对折线生效~~（第三方审查 G 起标记对散点也生效，样式对象化起按 `STYLE_FIELDS_BY_KIND` 取字段）（2026-11-18 记录；2026-11-19 STRUCTURE_REVIEW 6.5 起颜色已对所有画法生效，下面说的是线型、标记）：scatter / bar 写了 linestyle / marker / color 也不应用（scatter 创建后改不了 marker，bar 没有 `set_color`）。
   按原则 5 以后应改为明确报错或在创建时传入。数据点很密时标记会糊成一片，以后可能需要 `markevery` 类参数。

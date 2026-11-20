@@ -19,6 +19,8 @@ from plotlib.group import Group
 from plotlib.plot_spec import AxisStyle, LegendStyle, LineStyle
 from plotlib.plotter import DataPlotter
 
+from conftest import EIS_UNITS
+
 BACKENDS = pytest.mark.parametrize("backend", ['matplotlib', 'plotly'])
 FREQ, ZS_RE, ZS_IM = 0, 1, 2
 
@@ -70,6 +72,30 @@ def test_default_groups_is_empty_group(eis_dataset, backend):
 # ══════════════════════════════════════════════
 # 同一个 Group、同一个入口，换后端：画出的东西一致
 # ══════════════════════════════════════════════
+@BACKENDS
+@pytest.mark.parametrize("draw, keys, axes", [
+    (lambda p: p.plot_multiline(), ['main'], {'left'}),
+    (lambda p: p.plot_groups(), ['A', 'B'], {'left'}),
+    (lambda p: p.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM), [0, 1, 2], {'left'}),
+    (lambda p: p.plot_dual_y(right=(FREQ, ZS_IM)), [0, 1, 2], {'left', 'right'}),
+], ids=['multiline', 'groups', 'xy', 'dual_y'])
+def test_result_shape_is_uniform(eis_dataset, backend, draw, keys, axes):
+    """
+    两个后端、四种方法的结果同一形状：figures 的键是计划的 key；每张图（Plotly 是每页）是 DrawnFigure，
+    线与 spec.curves 一一对应；axes 单轴图为 {'left'}，双 Y 轴图为 {'left', 'right'}。
+    （2026-11-20 由 test_plotter / test_plotly_backend 各一条合并；Plotly 多页共用一个 Figure 见 test_pages_share_one_figure）
+    """
+    from plotlib.plot_spec import DrawnFigure
+
+    plotter = draw(DataPlotter(eis_dataset, groups=Group(eis_dataset, overlap_config()), backend=backend))
+    assert plotter.backend.name == backend
+    assert list(plotter.figures) == keys
+    for key, drawn in plotter.figures.items():
+        assert isinstance(drawn, DrawnFigure) and drawn.spec.key == key
+        assert len(drawn.artists) == len(drawn.spec.curves)
+        assert set(drawn.axes) == axes
+
+
 @pytest.mark.parametrize("draw", [
     lambda p: p.plot_multiline(),
     lambda p: p.plot_groups(merge_groups=True),
@@ -249,6 +275,57 @@ def test_legend_title_drawn(eis_dataset, backend, draw, expected):
         titles = [step.args[1]['legend.title.text'] or None for step in steps]
 
     assert dict(zip(plotter.figures, titles)) == expected
+
+
+# ══════════════════════════════════════════════
+# 55576fb 复审的回归（2026-11-20）
+# ══════════════════════════════════════════════
+@BACKENDS
+def test_numeric_sample_names(make_dataset, backend):
+    """
+    数字样品名（复审 1）：真实 CSV 读进来的 '101'、'102'，双 Y 轴的图例标题就是它们；
+    Plotly 翻页滑块、曲线滑块的档位标签也是它们。回归：样品名曾读成 101.0，替换 '{name}'、取标签长度都报 TypeError。
+    """
+    rows = [[1, 10, -1], [10, 20, -2]]
+    ds = make_dataset(EIS_UNITS, {'101': rows, '102': rows})
+    plotter = DataPlotter(ds, backend=backend).plot_dual_y(right=(FREQ, ZS_IM))
+
+    if backend == 'matplotlib':
+        titles = [drawn.axes['left'].get_legend().get_title().get_text() for drawn in plotter.figures.values()]
+    else:
+        steps = plotter.add_page_slider().layout.sliders[0].steps
+        titles = [step.args[1]['legend.title.text'] for step in steps]
+        assert [step.label for step in steps] == ['101', '102']
+        curve_steps = DataPlotter(ds, backend=backend).plot_multiline().add_slider().layout.sliders[0].steps
+        assert [step.label for step in curve_steps] == ['101', '102']
+    assert titles == ['101', '102']
+
+
+@BACKENDS
+def test_global_marker(eis_dataset, backend):
+    """
+    DataPlotter 全局的 marker（复审 2）：折线都带这个标记（Plotly 改成「线 + 点」）；分组写的 marker 盖过全局；
+    散点不受影响，仍是圆点（matplotlib 的全局 lines.marker 本来就不管 scatter）。
+    回归：Plotly 建模板时重复传 marker_symbol，绘图器建不起来；修好后折线仍是纯线，不显示标记。
+    """
+    groups = Group(eis_dataset, {'A': {'num': [0], 'marker': 'square'}, 'B': {'num': [1, 2]}})
+    plotter = DataPlotter(eis_dataset, groups=groups, backend=backend, lines=LineStyle(marker='diamond'))
+
+    lines = plotter.plot_multiline().figures['main'].artists
+    grouped = plotter.plot_groups(merge_groups=True).figures['main']
+    scatter = plotter.plot_multiline(plot_kind='scatter').figures['main'].artist(0)
+    if backend == 'matplotlib':
+        from matplotlib.markers import MarkerStyle
+        assert [line.get_marker() for line in lines] == ['D'] * 3
+        assert [grouped.artist(k).get_marker() for k in (0, 1)] == ['s', 'D']
+        circle = MarkerStyle('o')
+        expected = circle.get_path().transformed(circle.get_transform())
+        np.testing.assert_allclose(np.asarray(scatter.get_paths()[0].vertices), np.asarray(expected.vertices))
+    else:
+        assert [(t.mode, t.marker.symbol) for t in lines] == [('lines+markers', 'diamond')] * 3
+        assert [grouped.artist(k).marker.symbol for k in (0, 1)] == ['square', 'diamond']
+        template = scatter.figure.layout.template.data.scatter[0]
+        assert (scatter.mode, scatter.marker.symbol, template.marker.symbol) == ('markers', None, 'circle')
 
 
 @BACKENDS

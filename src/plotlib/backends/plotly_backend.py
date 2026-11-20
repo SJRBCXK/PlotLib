@@ -12,6 +12,7 @@ Plotly 没有轴对象，坐标轴是 layout 里的一段配置：DrawnFigure.ax
 {'left': 'yaxis', 'right': 'yaxis2'}（两根轴共用 'xaxis'），用 fig.layout[轴名] 读写。
 """
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, Literal, cast
 
 import plotly.colors as plyc
@@ -19,10 +20,10 @@ import plotly.graph_objects as go
 
 from ..layouts import LAYOUTS, NO_LEGEND_MESSAGE, LayoutPreset, resolve_frame, resolve_legend
 from ..plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_TICKS, Appearance, AxesFormatter,
-                         CurveSpec, DrawnFigure, FigureSpec)
-from ..style import (STYLE_FIELDS_BY_KIND, only_fields, translate_axis_style, translate_color, translate_figsize,
-                     translate_frame, translate_legend_style, translate_line_style, translate_points,
-                     translate_ticks)
+                         CurveSpec, DrawnFigure, FigureSpec, LineStyle)
+from ..style import (STYLE_FIELDS_BY_KIND, only_fields, translate_color, translate_figsize, translate_frame,
+                     translate_legend_style, translate_line_style, translate_points, translate_ticks)
+from .plotly_styles import apply_axis, apply_frame
 
 # 滑块模式：single 每档只显示一条曲线；cumulative 每档累加显示到当前曲线
 type SliderMode = Literal['single', 'cumulative']
@@ -146,7 +147,12 @@ class PlotlyBackend:
         折线写了 marker 时要改成 'lines+markers' 才显示点（matplotlib 不需要这一步）；散点本来就是 'markers'。
         """
         fields = STYLE_FIELDS_BY_KIND.get(curve.kind, ())     # 画法写错时由 _plot_data 报错
-        native = translate_line_style(only_fields(curve.style, fields), 'plotly', self.dpi, dash_width=self.line_width)
+        style = curve.style
+        if curve.kind == 'line':
+            # DataPlotter 全局的 marker 只给折线，分组写的盖过它（对照 matplotlib 的 rc lines.marker：只管 plot，不管 scatter）。
+            # 不放进模板：模板的标记同时作用于散点（55576fb 复审 2）
+            style = LineStyle(marker=self.appearance.lines.marker).updated(style)
+        native = translate_line_style(only_fields(style, fields), 'plotly', self.dpi, dash_width=self.line_width)
         if 'marker_symbol' in native and curve.kind == 'line':
             native['mode'] = 'lines+markers'
         return native
@@ -190,27 +196,15 @@ class PlotlyBackend:
             # 刻度值会变成 1.0007、0.9022 这样不整齐的数（2026-11-20 渲染时发现）；matplotlib 的 twinx 也是各算各的
             fig.update_layout(yaxis2=dict(overlaying='y', side='right', title_text=spec.y2_unit, tickmode='auto'))
 
-        # 各轴（AxisStyle）：刻度格式、着色（标题、刻度、轴线同色）
+        # 各轴（AxisStyle）：刻度格式、着色（标题、刻度、轴线同色）；与轴工厂同一个应用函数（plotly_styles，对照 matplotlib_styles）
         for axis_name, axis_style in preset.axes.items():
-            letter = 'x' if axis_name == 'x' else 'y'
-            fig.update_layout({_LAYOUT_AXIS[axis_name]: translate_axis_style(axis_style, 'plotly', letter)})
+            apply_axis(fig, _LAYOUT_AXIS[axis_name], axis_style, 'x' if axis_name == 'x' else 'y')
 
-        self._apply_frame(fig, axes, translate_frame(resolve_frame(preset, self.appearance), 'plotly', self.dpi))
-
-    @staticmethod
-    def _apply_frame(fig: go.Figure, axes: dict, frame: dict):
-        """
-        边框（对照 matplotlib 的 spines）：上边 = X 轴的镜像线，右边 = 左 Y 轴的镜像线。
-        有右轴时右边就是右轴自己的轴线，左 Y 轴不再镜像（否则左轴着色的镜像线会叠在右轴上）。
-        """
-        names = ['xaxis', 'yaxis'] + (['yaxis2'] if 'right' in axes else [])
-        if 'linewidth' in frame:
-            for name in names:
-                fig.update_layout({name: dict(linewidth=frame['linewidth'])})
-        if 'top' in frame:
-            fig.update_layout(xaxis_mirror=frame['top'])
-        if 'right' in frame:
-            fig.update_layout(yaxis_mirror=frame['right'] and 'right' not in axes)
+        # 边框（FrameStyle）：逐根轴应用，与轴工厂同一个函数（对照 matplotlib 后端逐个 ax 调 apply_frame）。
+        # 右轴要在这之前建好：左轴看到有叠加的右轴才不镜像右边
+        frame = resolve_frame(preset, self.appearance)
+        for axis_name in axes.values():
+            apply_frame(fig, axis_name, frame)
 
     # ========================================================================
     # 渲染：用户 formatter & 负对数刻度（对照 matplotlib 后端）
@@ -273,14 +267,15 @@ class PlotlyBackend:
         axis_style = dict(
             title_font_size=font_size,
             title_font_weight=appearance.font_weight,
-            # 轴线宽（FrameStyle）；上 / 右边框跟版式有关，画每张图时设 mirror（_apply_frame）
+            # 轴线宽（FrameStyle）；上 / 右边框跟版式有关，画每张图时设 mirror（_apply_layout 里的 plotly_styles.apply_frame）
             showline=True, linecolor='black', mirror=False,
             linewidth=translate_frame(DEFAULT_FRAME.updated(appearance.frame), 'plotly', appearance.dpi)['linewidth'],
             tickcolor='black',
             showgrid=False, zeroline=False, automargin=True,
             **ticks,
         )
-        line = translate_line_style(lines, 'plotly', appearance.dpi)
+        # 全局 marker 不进模板（这里的默认样式也作用于散点，散点固定用圆点）；折线的标记在 _native_style 里逐条给
+        line = translate_line_style(replace(lines, marker=None), 'plotly', appearance.dpi)
         return go.layout.Template(
             layout=go.Layout(
                 font_family=appearance.font_family,
@@ -302,7 +297,7 @@ class PlotlyBackend:
                 # 列表中的一项是一套默认样式，不是图中的第一条曲线；不指定颜色，让不同样品保留各自的配色。
                 scatter=[go.Scatter(
                     **line,             # 线宽、线型、标记大小（LineStyle，磅 → 像素）
-                    marker_symbol=line.get('marker_symbol', 'circle'),
+                    marker_symbol='circle',
                     connectgaps=False,
                 )],
                 bar=[go.Bar(marker_line_width=0)],
@@ -316,18 +311,22 @@ class PlotlyBackend:
     _SLIDER_FONT_SIZE = 16  # 滑块档位标签字号（像素）；也用于估算标签是否放得下
 
     def add_slider(self, fig: go.Figure, mode: SliderMode = 'cumulative',
-                   slider_formatter: Callable[[go.layout.Slider], object] | None = None) -> go.Figure:
+                   slider_formatter: Callable[[go.layout.Slider], object] | None = None,
+                   curves: list | None = None) -> go.Figure:
         """
         曲线滑块：一条线一档，原地修改并返回这张图。拖动时标题换成当前曲线名。
         mode：'single' 每档只显示当前曲线；'cumulative' 每档显示第一条到当前曲线。
         slider_formatter：接收安装后的 Slider 并原地修改，在默认外观之后执行。
+        curves：参与滑动的 trace（DataPlotter 传计划画出的曲线 DrawnFigure.artists）；其余 trace（如整图回调加的参考线）
+            不分档、每档保持原来的显隐（55576fb 复审 4）。不传时图里每条 trace 一档。
         """
         # Plotly 的 data 类型标注较宽，在此明确它是 trace 元组；cast 不复制对象
         traces = cast(tuple[go.Scatter | go.Bar, ...], fig.data)
-        if not traces:
+        indices = list(range(len(traces))) if curves is None else self._positions(fig, curves)
+        if not indices:
             raise RuntimeError("图中没有曲线，无法添加滑块")
-        names = [cast(str, trace.name) or str(i) for i, trace in enumerate(traces)]
-        steps = [(name, [i], {'title.text': name}) for i, name in enumerate(names)]
+        names = [cast(str, traces[i].name) or str(i) for i in indices]
+        steps = [(name, [i], {'title.text': name}) for i, name in zip(indices, names)]
         return self._install_slider(fig, steps, mode, 'Trace: ', slider_formatter)
 
     def add_page_slider(self, pages: list[DrawnFigure], mode: SliderMode = 'single',
@@ -339,29 +338,38 @@ class PlotlyBackend:
         当前值默认不加前缀（组名、样品名都可能出现）；要加用 slider_formatter。
         """
         fig = cast(go.Figure, pages[0].fig)
-        position = {id(trace): i for i, trace in enumerate(cast(tuple, fig.data))}     # trace → 在 fig.data 里的位置
         steps = []
         for page in pages:
             label = page.spec.name if page.spec.name is not None else str(page.spec.key)
-            steps.append((label, [position[id(artist)] for artist in page.artists],
+            steps.append((label, self._positions(fig, page.artists),
                           {'title.text': label, 'legend.title.text': page.spec.legend_title or ''}))
         return self._install_slider(fig, steps, mode, '', slider_formatter)
+
+    @staticmethod
+    def _positions(fig: go.Figure, artists: list) -> list[int]:
+        """这些 trace 在 fig.data 里的位置（滑块的 visible 列表按位置对应每条 trace）。"""
+        position = {id(trace): i for i, trace in enumerate(cast(tuple, fig.data))}
+        return [position[id(artist)] for artist in artists]
 
     def _install_slider(self, fig: go.Figure, steps: list[tuple[str, list[int], dict]], mode: SliderMode,
                         prefix: str, slider_formatter) -> go.Figure:
         """
         两种滑块共用：steps 是每一档的 (标签, 这一档的 trace 在 fig.data 里的位置, 翻到这一档时改的 layout)。
         曲线滑块一档一条 trace，翻页滑块一档一页的 trace——其余（显隐、默认外观、formatter）完全一样。
+        不在任何一档里的 trace（整图回调加的参考线等）每档都保持原来的显隐（55576fb 复审 4）。
         layout 的改动用带点的路径（如 'legend.title.text'）：只改这一项，不会把图例位置等其他设置冲掉。
         """
         if mode not in ('single', 'cumulative'):
             raise ValueError(f"不支持的 mode: '{mode}'")       # 先校验再改图：写错时图保持原样
         traces = cast(tuple[go.Scatter | go.Bar, ...], fig.data)
+        managed = {i for _, idx, _ in steps for i in idx}
+        # 不归滑块管的 trace 原来的显隐：没设过（None）就是显示；'legendonly' 照原样保留
+        kept = [True if trace.visible is None else trace.visible for trace in traces]
 
-        def visible(step: int) -> list[bool]:
-            """第 step 档显示哪些 trace：single 只有这一档的，cumulative 是第 0 ~ step 档的。"""
+        def visible(step: int) -> list:
+            """第 step 档各 trace 的显隐：single 只显示这一档的，cumulative 显示第 0 ~ step 档的；不归滑块管的保持原样。"""
             shown = steps[step][1] if mode == 'single' else [i for _, idx, _ in steps[:step + 1] for i in idx]
-            return [i in shown for i in range(len(traces))]
+            return [i in shown if i in managed else kept[i] for i in range(len(traces))]
 
         for trace, shown in zip(traces, visible(0)):
             trace.visible = shown

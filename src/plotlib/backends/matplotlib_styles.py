@@ -119,7 +119,10 @@ def apply_minor(ax, native: dict, only_defaults: bool) -> None:
                 axis.set_minor_locator(NullLocator())
             elif not log:
                 axis.set_minor_locator(AutoMinorLocator())
-            # 对数轴要显示次刻度时保留对数轴默认的次刻度定位器（2 ~ 9 倍处）
+            else:
+                # 对数轴：显式装上对数次刻度（2 ~ 9 倍处，与对数轴默认的一样）。只「保留默认的」不行——它仍算默认值，
+                # 后端在回调之后补全局设置时会把单轴写的 minor=True 关掉（1.0 发布前复审）
+                axis.set_minor_locator(LogLocator(base=axis.get_transform().base, subs='auto'))
         if 'minor_labels' in native and (axis.isDefault_minfmt or not only_defaults):
             axis.set_minor_formatter(_minor_formatter(native['minor_labels'], log))
 

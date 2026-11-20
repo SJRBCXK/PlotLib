@@ -15,8 +15,7 @@ plt.close('all')
 # ============================================================
 # 数据配置常量
 # ============================================================
-INPUT_COLUMNS_PER_DATASET = 6  # 每组数据集的列数
-INPUT_DATASET_FRACTION = 1/INPUT_COLUMNS_PER_DATASET
+COLUMNS_PER_SAMPLE = 6  # 每个样品的列数（含 1 列标识）
 
 # 数据列索引定义（从0开始）
 dataRowNum_unit1 = 0  # Time for displacement
@@ -67,10 +66,7 @@ TV_axes_formatter_zoomed = make_axes_formatter(
 # ============================================================
 # 数据加载
 # ============================================================
-data = Dataloader(
-    DATASET_FRACTION = INPUT_DATASET_FRACTION,
-    COLUMNS_PER_DATASET = INPUT_COLUMNS_PER_DATASET
-).load_data()
+data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
 groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图都用它
 
 # ============================================================

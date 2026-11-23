@@ -1269,6 +1269,36 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
   index.rst 的 `|version|`）；`plotlib.__all__` 里没登记的名字自动加进 reference.rst 同模块对象所在的分节（导出的优先），没有就放进「其他」节。
   只增不删：删掉的对象构建时报导入失败。`tests/test_docs_sync.py` 同时检查 reference.rst 登记齐全。
 
+#### DataSet：列视图校验、列位置索引、使用时自动检查（2026-11-23，599 passed）
+
+起因：第三方建议给「(样品号, 通道号) → 列位置」建索引（plan 每取一列都逐列扫描，300 样品时约 85 ms）。用户的设计前提：
+元数据用平行列表是有意的（可整列替换、分步修改，中途允许不一致，`update_attributes()` 作统一检查点），不合成元数据表。
+
+- 列视图校验（用户定）：`column.unit = …` 与 `column.sample_idx = …` 一样改完即校验、失败回滚（共用 `Column._set_checked`）。
+  多样品数据集里只改一列单位通常会冲突；整体换一个通道的单位走自由入口：改 `dataset.units` 列表，使用时自动检查。
+- 删 `generation`（只加 1、没人读）；`local_idx` 保留（用户：本地索引，配合 father / initial 区分前后位置）。
+- 索引与自动检查（用户在 5 种做法里选「属性 + 使用时自动检查」）：
+  - `DataSet.column_positions`：只读 `{(样品号, 通道号): 列位置}`，派生属性，在 `_get_channel_idx` 里与通道号同一遍扫描建好；
+  - `ensure_updated()`：检查点记下快照（列数 + 7 个元数据列表的副本，只复制引用），使用前比对，变了就自动执行完整的
+    `update_attributes()` （单位校验照常）；检查点开头先作废快照，检查失败的数据集每次使用都重查，不会因为「改回原样」沿用失败时重建了一半的索引；
+  - 快照的写法：曾改用 Python `hash()`（只存一个整数），但 CPython 里 `hash(-1) == hash(-2)`，样品号 -1 改成 -2 检测不到；
+    SHA-256 要先 `repr` 成字节，150 万列实测每次 0.3 s、临时占用 186 MB（副本 54 ms、常驻 84 MB），所以改回副本（用户定）。
+    快照占数值矩阵的比例约 7 ÷ 行数，与列数无关；
+  - 调用入口：`column_positions`、各 `plan_*`（每份计划取一次索引，经 `partial` 给各条线共用）、`Group` 校验、
+    `DataProcessLayer.select`、`DataTransformer()`、`iter` / `for sample in dataset`、`sort_columns`；
+  - Dataloader 改为走检查点（不再手填派生属性），之后状态仍记 `'loaded'`；没改过的数据集使用时不重查，状态不变。
+- `iter` 改用分组索引 `{取值: [列位置]}`（一遍扫描），产出顺序不变；plan 的 `sample_name` 取 (样品, 0)，`channel_unit` 用 `list.index`；
+  找不到时报错指明哪个样品、哪个通道。
+- 正确性：对拍测试保留旧的逐列扫描作参照答案，在样品号不连续、列交错、拼接补 NaN、改样品号、排序后逐个 (样品, 通道) 比较；
+  `iter` 四种分组与旧写法逐组比较；原有计划、取数、两后端对照测试不改全部通过。计时：300 样品 × 5 通道生成多线图计划 85 ms → 2.5 ms。
+- 第三方复审的三个边界问题（都属实，605 passed）：
+  1. 入口不一致：`Column.channel_idx`（派生值）和 `DataProcessLayer.getdata`（`select` 底下的公开方法）也先 `ensure_updated()`；
+  2. 保存的索引过期：重建改为原地 `clear()` 再填，之前取到的只读视图在下次检查后也是新的；
+     docstring 写明有效期（直接改了列表、还没被使用之前视图仍是旧的，随用随取）；
+  3. 列视图修改失败回滚后状态变成 `'written'`：`Column._set_checked` 回滚时恢复原状态（与 `expandata` 一致）。
+- 测试精简（用户：「能保证运行就行」）：今天新增的测试按「一类行为一条、场景在测试里循环」合并，605 → 573
+  （索引与自动检查 4 条、Plotly 对数轴格式 1 条、文档同步 3 条、取数辅助 1 条；对拍和各边界断言都保留）。
+
 ---
 
 ### 步骤 8：让脚本可复现

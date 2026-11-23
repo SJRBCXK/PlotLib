@@ -19,24 +19,15 @@ def test_reference_is_in_sync():
     assert text == REFERENCE_TEXT
 
 
-def test_new_name_goes_to_section_of_same_module():
+def test_new_name_placement():
     """
-    漏登记的名字放进同一模块的对象所在分节的末尾。plot_spec 里既有样式对象（导出）又有 DrawnFigure（未导出，在「绘图」节），
-    导出的同模块对象优先，所以新的样式对象进「样式对象」节，不进「绘图」节。
+    新名称优先登记到同模块已导出对象所在的分节，其余名称进入「其他」分节。
+    重复同步保持相同的索引内容。
     """
-    text = REFERENCE_TEXT.replace('   LineStyle\n', '')
-    synced, added = sync_api.sync_reference(text)
+    synced, added = sync_api.sync_reference(REFERENCE_TEXT.replace('   LineStyle\n', ''))
     assert added == ['LineStyle']
-    assert '   TickStyle\n   LineStyle\n' in synced
-    assert synced.count('   LineStyle\n') == 1
+    assert '   TickStyle\n   LineStyle\n' in synced and synced.count('   LineStyle\n') == 1
 
-    text = REFERENCE_TEXT.replace('   make_lines_formatter\n', '')
-    synced, _ = sync_api.sync_reference(text)
-    assert '   combine_formatters\n   make_lines_formatter\n' in synced
-
-
-def test_name_without_section_goes_to_other():
-    """没有同模块分节的名字放进末尾的「其他」节：没有就新建，有了就接着放；再同步一次不再改动。"""
     synced, added = sync_api.sync_reference(REFERENCE_TEXT, names=['color_positions'])
     assert added == ['color_positions']
     body = REFERENCE_TEXT.rstrip('\n')

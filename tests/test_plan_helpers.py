@@ -58,10 +58,27 @@ def test_get_column_data_plotrange(eis_dataset):
 
 @pytest.mark.parametrize("sample_idx, channel_idx", [(1, 5), (7, 0)], ids=['no_channel', 'no_sample'])
 def test_get_column_data_missing_raises(eis_dataset, sample_idx, channel_idx):
+    """缺失的列会报告样品号和通道号。"""
     from plotlib.plan import get_column_data
 
-    with pytest.raises(RuntimeError, match="未找到对应的列数据"):
+    with pytest.raises(RuntimeError, match=f"没有样品 {sample_idx} 的通道 {channel_idx}"):
         get_column_data(eis_dataset, sample_idx, channel_idx)
+
+
+def test_lookup_helpers(eis_dataset):
+    """
+    验证取列函数使用传入的索引，并检查样品名及通道单位的查询行为。
+    """
+    from plotlib.plan import channel_unit, get_column_data, sample_name
+
+    data, name, _ = get_column_data(eis_dataset, 0, 0, positions={(0, 0): 4})
+    assert data.tolist() == [20, 40, 60] and name == 'S1'
+    assert sample_name(eis_dataset, 2) == 'S2'
+    assert channel_unit(eis_dataset, 2) == "Zs''(ohm)"
+    with pytest.raises(RuntimeError, match="没有样品 7"):
+        sample_name(eis_dataset, 7)
+    with pytest.raises(RuntimeError, match="没有通道 5"):
+        channel_unit(eis_dataset, 5)
 
 
 def test_get_xy_data_neglog(eis_dataset):

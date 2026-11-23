@@ -196,15 +196,35 @@ def test_column_is_a_view(eis_dataset):
     """改 Column 就是改 DataSet（约定 3）。"""
     col = eis_dataset.column[0]
     col.name = 'renamed'
-    col.unit = 'Hz'
     col.data[:] = 0                  # 原地修改视图
 
     assert eis_dataset.names[0] == 'renamed'
-    assert eis_dataset.units[0] == 'Hz'
     assert (eis_dataset.data[:, 0] == 0).all()
 
     eis_dataset.column[1].data = [5, 6, 7]     # 整体赋值也写回
     np.testing.assert_array_equal(eis_dataset.data[:, 1], [5, 6, 7])
+
+    # 单位：只有一个样品时，改一列不会和别的样品冲突
+    single = make([[1, 2]], ['a', 'a'], ['u', 'v'], sample_idx=0)
+    single.column[1].unit = 'Hz'
+    assert single.units == ['u', 'Hz']
+
+
+def test_column_unit_change_breaking_units_raises_and_rolls_back(eis_dataset):
+    """
+    逐列更新拒绝单位冲突，并保留原单位。统一修改该通道的单位可以通过校验。
+    """
+    with pytest.raises(RuntimeError, match="同一通道的单位不一致"):
+        eis_dataset.column[0].unit = 'Hz'
+    assert eis_dataset.units[0] == 'Frequency(Hz)'
+
+    with pytest.raises(RuntimeError, match="同一通道的单位不一致"):
+        eis_dataset.column[0]['unit'] = 'Hz'       # 字典式写法走同一个校验
+    assert eis_dataset.units[0] == 'Frequency(Hz)'
+
+    eis_dataset.units[0::3] = ['Hz'] * 3            # 批量更新同一通道的单位。
+    eis_dataset.update_attributes()
+    assert eis_dataset.column[3].unit == 'Hz'
 
 
 def test_column_sample_change_updates_derived_metadata():
@@ -353,3 +373,117 @@ def test_sort_columns_sorts_by_sample_then_channel():
     assert ds.sample_idx == [0, 0, 1, 1]
     assert ds.channel_idx == [0, 1, 0, 1]
     np.testing.assert_array_equal(ds.data, [[2, 4, 1, 3]])
+
+
+# 列位置索引及自动校验
+def interleaved():
+    """构造样品号不连续且列交错的输入。"""
+    ds = DataSet()
+    ds.data = np.arange(12, dtype=float).reshape(2, 6)
+    ds.names = ['b', 'a', 'b', 'c', 'a', 'b']
+    ds.units = ['u0', 'u0', 'u1', 'u0', 'u1', 'u2']
+    ds.sample_idx = [5, 2, 5, 9, 2, 5]
+    ds.father_idx = [None] * 6
+    ds.initial_idx = [None] * 6
+    return ds.update_attributes()
+
+
+def tricky_datasets():
+    """覆盖交错列、异长拼接、样品号变更以及列排序。"""
+    moved = interleaved()
+    moved.column[3].sample_idx = 11
+    return [interleaved(),
+            interleaved().expandata(make([[7, 8]], ['d', 'd'], ['u0', 'u1'], sample_idx=3)),
+            moved,
+            interleaved().sort_columns()]
+
+
+def test_index_and_iter_match_old_scan():
+    """
+    以逐列扫描验证索引和分组结果，并校验索引的只读性。
+    """
+    for ds in tricky_datasets():
+        positions = ds.column_positions
+        for sample in set(ds.sample_idx) | {max(ds.sample_idx) + 1}:
+            for channel in range(max(ds.channel_idx) + 2):
+                expected = next((i for i, (s, c) in enumerate(zip(ds.sample_idx, ds.channel_idx))
+                                 if s == sample and c == channel), None)
+                assert positions.get((sample, channel)) == expected
+        for method, values in [('samples', ds.sample_idx), ('names', ds.names),
+                               ('units', ds.units), ('channels', ds.channel_idx)]:
+            groups = [[i for i, v in enumerate(values) if v == key] for key in dict.fromkeys(values)]
+            parts = list(ds.iter(method))
+            assert [part.initial_idx for part in parts] == [[ds.initial_idx[i] for i in g] for g in groups]
+            for part, group in zip(parts, groups):
+                np.testing.assert_array_equal(part.data, ds.data[:, group])
+    with pytest.raises(TypeError):
+        positions[(0, 0)] = 5          # type: ignore[index]
+
+
+def test_direct_edit_is_checked_on_use(eis_dataset):
+    """
+    直接编辑元数据后，绘图和列视图使用更新后的样品号及通道号。
+    已取得的索引视图随重建同步，样品号的哈希碰撞也不会影响变更检测。
+    """
+    from plotlib.plotter import DataPlotter
+
+    saved = eis_dataset.column_positions
+    eis_dataset.sample_idx[0:3] = [7, 7, 7]
+    eis_dataset.sample_idx[6:9] = [0, 0, 0]                  # 将原样品 2 分配为样品 0。
+    spec = DataPlotter(eis_dataset).plot_multiline().figures['main'].spec
+    assert [curve.sample_idx for curve in spec.curves] == [0, 1, 7]
+    assert spec.curves[0].y.tolist() == [30, 60, 90]         # 新的样品 0 是原来的 S2
+    assert saved[(0, 1)] == 7
+    assert eis_dataset.status == 'written'
+
+    ds = make([[1, 2, 3]], ['a'] * 3, ['u'] * 3, sample_idx=-1)
+    ds.sample_idx[0] = -2                                    # 第 0 列单独成样品 -2 → 其余两列通道号变成 0、1
+    assert [ds.column[i].channel_idx for i in range(3)] == [0, 0, 1]
+
+
+def test_conflict_raises_at_every_entry_and_rollback(eis_dataset):
+    """
+    各入口拒绝不一致的通道单位。修正冲突后可以重新构建索引。
+    列视图的校验失败时恢复元数据、索引和状态。
+    """
+    from plotlib.group import Group
+    from plotlib.plotter import DataPlotter
+    from plotlib.processor import DataProcessLayer, DataTransformer
+
+    entries = [lambda ds: ds.column_positions, lambda ds: ds.column[1].channel_idx,
+               lambda ds: DataPlotter(ds).plot_multiline(), lambda ds: Group(ds, {'A': {'num': [0]}}),
+               lambda ds: DataProcessLayer(ds).select('samples', [0]),
+               lambda ds: DataProcessLayer(ds).getdata(varlist_idx=[1], father_dataset=ds),
+               DataTransformer, list, lambda ds: list(ds.iter('units'))]
+    original = {(s, c): 3 * s + c for s in range(3) for c in range(3)}
+
+    eis_dataset.sample_idx[0] = 7                            # 频率列移走 → 样品 0 的通道 0 变成 Zs' → 冲突
+    for use in entries:
+        with pytest.raises(RuntimeError, match="同一通道的单位不一致"):
+            use(eis_dataset)
+    eis_dataset.sample_idx[0] = 0
+    assert dict(eis_dataset.column_positions) == original
+
+    eis_dataset.status = 'loaded'
+    for field, value in [('unit', 'Hz'), ('sample_idx', 7)]:
+        with pytest.raises(RuntimeError):
+            setattr(eis_dataset.column[0], field, value)
+    assert (eis_dataset.units[0], eis_dataset.sample_idx[0]) == ('Frequency(Hz)', 0)
+    assert dict(eis_dataset.column_positions) == original
+    assert eis_dataset.status == 'loaded'
+
+
+def test_unchanged_dataset_is_not_rechecked(eis_dataset, monkeypatch):
+    """元数据与快照一致时复用索引，并保留加载状态。"""
+    from plotlib.plotter import DataPlotter
+
+    calls = []
+    original = DataSet.update_attributes
+    monkeypatch.setattr(DataSet, 'update_attributes', lambda self: calls.append(self) or original(self))
+
+    DataPlotter(eis_dataset).plot_multiline()
+    eis_dataset.units[0] = 'x'
+    eis_dataset.units[0] = 'Frequency(Hz)'
+    eis_dataset.column_positions
+    assert [ds for ds in calls if ds is eis_dataset] == []
+    assert eis_dataset.status == 'loaded'

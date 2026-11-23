@@ -137,7 +137,7 @@ class DataProcessLayer:
 
         if dataset_for_select is None:
             dataset_for_select = self.dataset
-
+        dataset_for_select.ensure_updated()
 
         select_rc = args
         skip_next = False
@@ -224,8 +224,7 @@ class DataProcessLayer:
 
 
         self.called_select = True
-        self.Selected_data.generation += 1
-        
+
         if self.Selected_data.status != 'written':
             raise RuntimeError("数据选择未执行。")
             
@@ -278,7 +277,7 @@ class DataProcessLayer:
         
         if father_dataset is None:
             raise ValueError("必须提供有效的 father_dataset 数据集以供选择。")
-
+        father_dataset.ensure_updated()
 
         # 根数据集或未经筛选的数据集可直接使用当前列位置。
         f_initial = father_dataset.initial_idx #type: ignore
@@ -375,6 +374,8 @@ class DataTransformer:
         """
         if dataset is None:
             dataset = DataSet()
+        # 校验后再获取数据和元数据的引用。
+        dataset.ensure_updated()
 
         self.dataset = dataset
         self.data = dataset.data
@@ -385,7 +386,6 @@ class DataTransformer:
         self.local_idx = dataset.local_idx
         self.initial_idx = dataset.initial_idx
         self.father_idx = dataset.father_idx
-        self.generation = dataset.generation
         self.column = dataset.column
         self.status = 'ready'
         self.result_dataset = DataSet()

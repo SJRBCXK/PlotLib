@@ -211,13 +211,11 @@ def _to_dataset(table: pd.DataFrame, columns_per_sample: int) -> DataSet:
         .to_numpy(dtype=np.float64, na_value=np.nan)
         for start in starts
     ])
-    dataset.num_samples = num_samples  # type: ignore
     dataset.sample_idx = [sample for sample in range(num_samples) for _ in range(channels)]  # type: ignore
-    dataset.channel_idx = [channel for _ in range(num_samples) for channel in range(channels)]  # type: ignore
     # 加载时三个列索引相同，后续选择可通过索引追溯来源。
-    dataset.local_idx = list(range(num_samples * channels))  # type: ignore
-    dataset.father_idx = list(dataset.local_idx)  # type: ignore
-    dataset.initial_idx = list(dataset.local_idx)  # type: ignore
+    dataset.father_idx = list(range(num_samples * channels))  # type: ignore
+    dataset.initial_idx = list(range(num_samples * channels))  # type: ignore
+    # 统一生成派生元数据并校验通道单位。
+    dataset.update_attributes()
     dataset.status = 'loaded'
-    dataset._channel_units_unify_check()
     return dataset

@@ -39,7 +39,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 |---|---|---|
 | `conftest.py` | — | 共享的测试数据与环境（见下节），不含测试 |
 | `test_dataloader.py` | `src/plotlib/dataloader.py` | 数据文件能正确读成 DataSet |
-| `test_dataset.py` | `src/plotlib/dataset.py` | DataSet 的创建、拼接、列视图、遍历、重排 |
+| `test_dataset.py` | `src/plotlib/dataset.py` | DataSet 的创建、拼接、列视图（改样品号、单位都校验并回滚）、遍历、重排；列位置索引 `column_positions` 与逐列扫描对拍；直接改列表后「使用时自动检查」（各入口、失败不留旧索引、没改不重查） |
 | `test_processor.py` | `src/plotlib/processor.py` 的 `DataProcessLayer` | `select` / `by` 按样品号、名字、单位、索引选列 |
 | `test_transformer.py` | `src/plotlib/processor.py` 的 `DataTransformer` | `apply` / `Norm` 的计算结果与自动命名 |
 | `test_group.py` | `src/plotlib/group.py` 的 `Group` | `num` 各种写法的格式化；创建时校验、读接口返回副本、增删改先校验再修改 |

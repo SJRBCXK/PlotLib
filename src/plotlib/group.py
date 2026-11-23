@@ -166,8 +166,8 @@ class Group():
                 "数据分组配置错误：分组配置必须是字典 {分组名: {'num': [...]}}，"
                 f"实际是 {type(group_config).__name__}"
             )
-        # 使用校验时的样品号，以支持数据集创建分组后继续扩展。
-        available = set(self.dataset.sample_idx)
+        # 使用数据集当前的样品号，支持创建分组后继续扩展数据集。
+        available = set(self.dataset.ensure_updated().sample_idx)
         validated: dict[str, dict] = {}
         for name, config in group_config.items():
             validated.update(_check_group(name, config, available))

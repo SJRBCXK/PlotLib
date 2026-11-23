@@ -5,7 +5,7 @@
 `~plotlib.plot_spec.FigureSpec` 列表。计划记录每张图的轴信息，以及曲线数据、顺序和样式。
 Matplotlib 和 Plotly 共用取数、去重和配色规则，渲染时再应用版式预设和格式化回调。
 """
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 from typing import Literal
 
@@ -81,7 +81,8 @@ def resolve_groups(groups: Group | None, dataset: DataSet) -> Group:
     return groups
 
 def get_xy_data(dataset: DataSet, sample_idx: int, channel_x: int, channel_y: int,
-                neglog_x: bool = False, neglog_y: bool = False, plotrange: int | None = None):
+                neglog_x: bool = False, neglog_y: bool = False, plotrange: int | None = None, *,
+                positions: Mapping[tuple[int, int], int] | None = None):
     """
     取出一个样品的 X、Y 两列数据和它们的名字、单位。
 
@@ -97,6 +98,8 @@ def get_xy_data(dataset: DataSet, sample_idx: int, channel_x: int, channel_y: in
         是否对这一列取绝对值。这里只处理数据，刻度文字补负号由后端负责。
     plotrange : int, optional
         只取前 *plotrange* 行；None 取全部。
+    positions : Mapping, optional
+        列位置索引，见 `get_column_data`。
 
     Returns
     -------
@@ -108,8 +111,8 @@ def get_xy_data(dataset: DataSet, sample_idx: int, channel_x: int, channel_y: in
     RuntimeError
         数据集里没有这个样品的这个通道。
     """
-    Row_x, x_label, x_unit = get_column_data(dataset, sample_idx, channel_x, plotrange)
-    Row_y, y_label, y_unit = get_column_data(dataset, sample_idx, channel_y, plotrange)
+    Row_x, x_label, x_unit = get_column_data(dataset, sample_idx, channel_x, plotrange, positions=positions)
+    Row_y, y_label, y_unit = get_column_data(dataset, sample_idx, channel_y, plotrange, positions=positions)
 
     if neglog_x:
         Row_x = np.abs(Row_x)
@@ -119,51 +122,73 @@ def get_xy_data(dataset: DataSet, sample_idx: int, channel_x: int, channel_y: in
     return Row_x, Row_y, x_label, y_label, x_unit, y_unit
 
 
-def get_column_data(dataset: DataSet, sample_idx: int, channel_idx: int, plotrange: int | None = None):
+def get_column_data(dataset: DataSet, sample_idx: int, channel_idx: int, plotrange: int | None = None, *,
+                    positions: Mapping[tuple[int, int], int] | None = None):
     """
-    按样品号和通道号找到一列，返回 ``(数据, 名字, 单位)``。
+    按样品号和通道号读取一列。
 
-    数据是 DataSet 的视图（取了前 *plotrange* 行），不是副本。
+    Parameters
+    ----------
+    dataset : DataSet
+        源数据集。
+    sample_idx, channel_idx : int
+        样品号和样品内的通道号。
+    plotrange : int, optional
+        返回的最大行数。``None`` 表示全部行。
+    positions : Mapping, optional
+        当前数据集经校验的列位置索引。默认读取 ``dataset.column_positions``。
+        当数据集结构固定时，可为多次读取传入同一个索引。
+
+    Returns
+    -------
+    tuple
+        ``(数值视图, 列名, 单位)``。
 
     Raises
     ------
     RuntimeError
-        数据集里没有这一列。
+        样品或通道不存在，或数据集未通过校验。
     """
-    for column in dataset.column:
-        if column.sample_idx == sample_idx and column.channel_idx == channel_idx:
-            return column.data[:plotrange], column.name, column.unit
-    raise RuntimeError("未找到对应的列数据")
+    if positions is None:
+        positions = dataset.column_positions
+    try:
+        position = positions[(sample_idx, channel_idx)]
+    except KeyError:
+        raise RuntimeError(f"数据集里没有样品 {sample_idx} 的通道 {channel_idx}") from None
+    return dataset.data[:plotrange, position], dataset.names[position], dataset.units[position]
 
 
-def sample_name(dataset: DataSet, sample_idx: int) -> str:
+def sample_name(dataset: DataSet, sample_idx: int, *,
+                positions: Mapping[tuple[int, int], int] | None = None) -> str:
     """
-    样品名。同一样品的各列名字相同（`~plotlib.dataloader.Dataloader` 按样品展开），取第一列的即可。
+    以样品的通道 0 所在列的名称作为样品名。*positions* 的用法见 `get_column_data`。
 
     Raises
     ------
     RuntimeError
         数据集里没有这个样品。
     """
-    for column in dataset.column:
-        if column.sample_idx == sample_idx:
-            return column.name
-    raise RuntimeError("未找到对应的列数据")
+    if positions is None:
+        positions = dataset.column_positions
+    try:
+        return dataset.names[positions[(sample_idx, 0)]]
+    except KeyError:
+        raise RuntimeError(f"数据集里没有样品 {sample_idx}") from None
 
 
 def channel_unit(dataset: DataSet, channel_idx: int) -> str:
     """
-    通道的单位，用作轴标题。同一通道在所有样品里单位相同（`DataSet` 会校验），取第一列的即可。
+    返回通道单位，用作轴标题。校验数据集后，读取该通道首列的单位。
 
     Raises
     ------
     RuntimeError
         数据集里没有这个通道。
     """
-    for column in dataset.column:
-        if column.channel_idx == channel_idx:
-            return column.unit
-    raise RuntimeError("未找到对应的列数据")
+    try:
+        return dataset.units[dataset.ensure_updated().channel_idx.index(channel_idx)]
+    except ValueError:
+        raise RuntimeError(f"数据集里没有通道 {channel_idx}") from None
 
 
 # ============================================================================
@@ -219,13 +244,14 @@ def plan_multiline_figures(dataset: DataSet, groups: Group | None, channel_x: in
     - **合并模式**：同一样品绘制一次，归入配置中第一个包含它的分组。
       同组的线统一用组首色，即该组写在第一位的样品的颜色，只看本组配置。
     """
+    column_index = dataset.column_positions
     _check_not_empty(dataset)
     groups = resolve_groups(groups, dataset)
     positions = color_positions(dataset.sample_idx)   # 按整个数据集排名一次
 
     # 预先绑定同一计划共用的数据选择参数。
-    make_curve = partial(_make_curve, dataset=dataset, channel_x=channel_x, channel_y=channel_y,
-                         plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=kind)
+    make_curve = partial(_make_curve, dataset=dataset, positions=column_index, channel_x=channel_x,
+                         channel_y=channel_y, plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=kind)
     make_figure = partial(_make_figure, legend_title=legend_title,
                           x_unit=channel_unit(dataset, channel_x), y_unit=channel_unit(dataset, channel_y),
                           neglog=_neglog_axes(x=neglog_x, y=neglog_y), layout='multiline')
@@ -256,13 +282,15 @@ def plan_xy_figures(dataset: DataSet, channel_x: int, channel_y: int, *,
     RuntimeError
         数据集为空。
     """
+    column_index = dataset.column_positions
     _check_not_empty(dataset)
-    make_curve = partial(_make_curve, dataset=dataset, channel_x=channel_x, channel_y=channel_y,
-                         plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=kind)
+    make_curve = partial(_make_curve, dataset=dataset, positions=column_index, channel_x=channel_x,
+                         channel_y=channel_y, plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=kind)
     make_figure = partial(_make_figure, legend_title=legend_title,
                           x_unit=channel_unit(dataset, channel_x), y_unit=channel_unit(dataset, channel_y),
                           neglog=_neglog_axes(x=neglog_x, y=neglog_y), layout='xy')
-    return [make_figure(sample, [make_curve(sample, None, None, NO_STYLE)], sample_name(dataset, sample))
+    return [make_figure(sample, [make_curve(sample, None, None, NO_STYLE)],
+                        sample_name(dataset, sample, positions=column_index))
             for sample in sorted(set(dataset.sample_idx))]
 
 
@@ -307,11 +335,12 @@ def plan_dual_y_figures(dataset: DataSet, left: tuple[int, int], right: tuple[in
     两条线不带颜色（样式为空、色带位置为 None）：左红右蓝属于呈现，由版式预设
     ``LAYOUTS['dual_y']`` 决定。
     """
+    column_index = dataset.column_positions
     _check_not_empty(dataset)
-    left_curve = partial(_make_curve, dataset=dataset, channel_x=left[0], channel_y=left[1],
+    left_curve = partial(_make_curve, dataset=dataset, positions=column_index, channel_x=left[0], channel_y=left[1],
                          plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y,
                          kind=kinds[0], axis='left', label_from='unit')
-    right_curve = partial(_make_curve, dataset=dataset, channel_x=right[0], channel_y=right[1],
+    right_curve = partial(_make_curve, dataset=dataset, positions=column_index, channel_x=right[0], channel_y=right[1],
                           plotrange=plotrange, neglog_x=neglog_x2, neglog_y=neglog_y2,
                           kind=kinds[1], axis='right', label_from='unit')
     make_figure = partial(_make_figure, legend_title=legend_title,
@@ -320,7 +349,7 @@ def plan_dual_y_figures(dataset: DataSet, left: tuple[int, int], right: tuple[in
                           neglog=_neglog_axes(x=neglog_x, y=neglog_y, x2=neglog_x2, y2=neglog_y2),
                           layout='dual_y')
     return [make_figure(sample, [left_curve(sample, None, None, NO_STYLE), right_curve(sample, None, None, NO_STYLE)],
-                        sample_name(dataset, sample))
+                        sample_name(dataset, sample, positions=column_index))
             for sample in sorted(set(dataset.sample_idx))]
 
 
@@ -336,19 +365,19 @@ def _neglog_axes(**flags: bool) -> frozenset[str]:
 
 
 def _make_curve(sample: int, group_name: str | None, color_position: float | None, style: LineStyle, *,
-                dataset: DataSet, channel_x: int, channel_y: int, plotrange: int | None,
+                dataset: DataSet, positions: Mapping[tuple[int, int], int],
+                channel_x: int, channel_y: int, plotrange: int | None,
                 neglog_x: bool, neglog_y: bool,
                 kind: CurveKind = 'line', axis: Axis = 'left',
                 label_from: Literal['name', 'unit'] = 'name') -> CurveSpec:
     """
     根据样品数据、分组和外观生成 `CurveSpec`。
 
-    ``*`` 之后的参数（取数设置、画法、所在轴、标签取样品名还是 Y 的单位）在一次计划里不变，
-    由各 ``plan_*`` 用 `functools.partial` 先绑定好，调用处只传前四个。
+    各计划函数预先绑定用于读取和渲染曲线的共用参数，包括已经校验的列位置索引。
     """
     x, y, _, name, _, unit = get_xy_data(
         dataset, sample, channel_x, channel_y,
-        neglog_x=neglog_x, neglog_y=neglog_y, plotrange=plotrange,
+        neglog_x=neglog_x, neglog_y=neglog_y, plotrange=plotrange, positions=positions,
     )
     label = name if label_from == 'name' else unit
     return CurveSpec(sample_idx=sample, x=x, y=y, label=label,

@@ -1,10 +1,14 @@
 """
 按样品和通道组织的数值数据集，以及访问数据列的视图。
 """
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from types import MappingProxyType
 from typing import overload
 
 import numpy as np
+
+# 参与列元数据变更检测的字段。
+_META_FIELDS = ('names', 'units', 'sample_idx', 'channel_idx', 'local_idx', 'father_idx', 'initial_idx')
 
 
 class Column:
@@ -54,39 +58,50 @@ class Column:
 
     @property
     def unit(self) -> str:
-        """单位，也是这个通道画图时的轴标题（可写；同一通道在各样品里单位必须相同）。"""
+        """
+        该列的单位，用作绘图时的轴标题。
+
+        赋值后校验同一通道在各样品中的单位。校验失败时恢复原值。
+        若要统一修改一个通道的单位，可批量更新 ``dataset.units``，再调用 `DataSet.update_attributes`。
+        """
         return self._dataset.units[self._idx]
 
     @unit.setter
     def unit(self, value: str):
-        self._dataset.units[self._idx] = value
+        self._set_checked('units', value)
 
     @property
     def sample_idx(self) -> int:
         """
-        所属的样品号（可写）。
+        该列所属的样品号。
 
-        改样品号后数据集会重算样品数和通道号并校验；校验失败（如通道单位冲突）时恢复原值再报错，
-        不留下改了一半的状态。
+        赋值后重新计算样品数、通道号和列位置索引。校验失败时恢复原值。
         """
         return self._dataset.sample_idx[self._idx]
 
     @sample_idx.setter
     def sample_idx(self, value: int):
-        """更新样品号并重新校验派生属性，校验失败时恢复原值。"""
-        old = self._dataset.sample_idx[self._idx]
-        self._dataset.sample_idx[self._idx] = value
+        self._set_checked('sample_idx', value)
+
+    def _set_checked(self, field: str, value) -> None:
+        """
+        更新单列元数据并校验数据集。失败时恢复原值、派生属性和数据集状态。
+        """
+        values = getattr(self._dataset, field)
+        old, status = values[self._idx], self._dataset.status
+        values[self._idx] = value
         try:
             self._dataset.update_attributes()
         except RuntimeError:
-            self._dataset.sample_idx[self._idx] = old
+            values[self._idx] = old
             self._dataset.update_attributes()
+            self._dataset.status = status
             raise
 
     @property
     def channel_idx(self) -> int:
-        """通道号：这一列在所属样品内的序号（只读，由样品号推出）。"""
-        return self._dataset.channel_idx[self._idx]
+        """校验数据集后返回该列在所属样品内的通道号。"""
+        return self._dataset.ensure_updated().channel_idx[self._idx]
 
     @property
     def data(self) -> np.ndarray:
@@ -239,10 +254,14 @@ class DataSet():
 
     Notes
     -----
-    `update_attributes` 校验以下约束：
+    `update_attributes` 重新计算通道号、样品数和列位置索引，并校验元数据约束。
 
     1. 各列元数据列表的长度等于 ``data`` 的列数。
     2. 同一通道在各样品中的单位一致，绘图时用作轴标题。
+
+    元数据列表支持批量编辑。读取 `column_positions`、绘图、选择和遍历时，库通过 `ensure_updated`
+    校验发生变化的数据集。直接读取 ``channel_idx`` 或 ``num_samples`` 等派生字段前，可以显式调用
+    `ensure_updated`，确保它们反映批量编辑后的数据集。
 
     Examples
     --------
@@ -261,13 +280,65 @@ class DataSet():
         self.father_idx: list = []
         self.initial_idx: list = []
         self.num_samples: int = 0
-        self.generation: int = 0
         self.status: str = 'empty'  # 'empty' 新建；'written' 经 update_attributes 校验过；'loaded' 由 Dataloader 读出
+        self._column_positions: dict[tuple[int, int], int] = {}
+        self._checkpoint: dict | None = self._snapshot()
 
     @property
     def column(self) -> ColumnList:
         """所有列的视图（`ColumnList`），按位置取出的 `Column` 读写的都是本数据集。"""
         return ColumnList(self)
+
+    @property
+    def column_positions(self) -> Mapping[tuple[int, int], int]:
+        """
+        返回由 ``(样品号, 通道号)`` 映射到列位置的只读视图。
+
+        读取属性时会调用 `ensure_updated`。底层索引原地重建，因此已取得的视图也会反映
+        成功校验后的更新。直接编辑元数据列表后，应重新读取此属性并在校验成功后使用映射。
+        在数据集结构固定的一次操作中，可以共用同一个映射。
+
+        Raises
+        ------
+        RuntimeError
+            数据集违反 `update_attributes` 校验的约束。
+
+        Examples
+        --------
+        >>> position = dataset.column_positions[(1, 2)]
+        >>> dataset.data[:, position], dataset.units[position]
+        """
+        self.ensure_updated()
+        return MappingProxyType(self._column_positions)
+
+    def ensure_updated(self) -> DataSet:
+        """
+        在列数或元数据发生变化时重新校验数据集。
+
+        将当前信息与最近一次成功校验的快照比较，必要时调用 `update_attributes`。
+        校验失败后，下一次调用会重新校验。
+
+        Returns
+        -------
+        DataSet
+            ``self``。
+
+        Raises
+        ------
+        RuntimeError
+            数据集违反 `update_attributes` 校验的约束。
+        """
+        if self._checkpoint != self._snapshot():
+            self.update_attributes()
+        return self
+
+    def _snapshot(self) -> dict:
+        """
+        返回供变更检测使用的列数和元数据列表浅拷贝。
+
+        比较实际字段值，以识别哈希值相同的不同样品号。
+        """
+        return {'columns': self.data.shape[1], **{field: list(getattr(self, field)) for field in _META_FIELDS}}
 
     
 
@@ -328,8 +399,8 @@ class DataSet():
         """
         重新计算派生元数据并校验数据集约束。
 
-        直接修改 ``data`` 或列元数据列表后应调用此方法。方法会补全列索引和样品号，
-        更新样品数及通道号，校验各通道的单位，并将 ``status`` 设为 ``'written'``。
+        可在批量修改列或元数据后调用。方法会补全列索引和样品号，重新计算
+        样品数、通道号和列位置索引，并在校验成功后将 ``status`` 设为 ``'written'``。
 
         Returns
         -------
@@ -347,6 +418,8 @@ class DataSet():
         缺失的父列或初始列索引采用当前列位置。
         """
 
+        # 校验前作废旧快照。若本次校验失败，下次读取时仍会重新校验。
+        self._checkpoint = None
         lengths = {field: len(getattr(self, field))
                    for field in ('names', 'units', 'sample_idx', 'father_idx', 'initial_idx')}
         if any(length != self.data.shape[1] for length in lengths.values()):
@@ -372,6 +445,7 @@ class DataSet():
         # Ensure same group-local position uses a consistent unit across groups.
         self._channel_units_unify_check()
         self.status = 'written'
+        self._checkpoint = self._snapshot()
 
         return self
     
@@ -386,14 +460,19 @@ class DataSet():
 
 
     def _get_channel_idx(self):
-        """按样品号重算通道号：每个样品的列按出现顺序依次编为 0, 1, 2, ...。"""
+        """
+        按样品内的列顺序从零编号，并同时构建列位置索引。
+        """
         counter = {}
         self.channel_idx = []
-        for g in self.sample_idx:
+        # 原地重建，使已返回的只读视图继续引用同一个索引。
+        self._column_positions.clear()
+        for position, g in enumerate(self.sample_idx):
             counter[g] = counter.get(g, 0)
             self.channel_idx.append(counter[g])
+            self._column_positions[(g, counter[g])] = position
             counter[g] += 1
-        
+
         return self
     
 
@@ -435,6 +514,7 @@ class DataSet():
         ...     impedance.expandata(DataTransformer(sample).Norm(norm_unit='|Z|(ohm)'))
         >>> data = data.expandata(impedance).sort_columns()
         """
+        self.ensure_updated()           # 校验并更新用于排序的通道号。
         indices = np.column_stack([self.local_idx,self.sample_idx,self.channel_idx])
 
         order = np.lexsort((indices[:,2], indices[:,1]))
@@ -510,6 +590,7 @@ class DataSet():
         >>> for part in dataset.iter('units'):      # 每个单位一组，含所有样品的这一列
         ...     print(part.units[0], part.names)
         """
+        self.ensure_updated()           # 在读取列表前更新派生元数据。
         attr_map = {
             'samples': self.sample_idx,
             'names': self.names,
@@ -519,9 +600,12 @@ class DataSet():
         if method not in attr_map:
             raise ValueError(f"不支持的遍历方式: '{method}'，可选: {list(attr_map.keys())}")
 
-        attr = attr_map[method]
-        for key in dict.fromkeys(attr):  # type: ignore
-            cols = [self.column[j] for j in self.local_idx if attr[j] == key]  # type: ignore
+        # 按属性值首次出现的顺序分组，组内保留原始列顺序。
+        groups: dict = {}
+        for position, key in enumerate(attr_map[method]):
+            groups.setdefault(key, []).append(position)
+        for positions in groups.values():
+            cols = [self.column[j] for j in positions]
             yield DataSet().columns_to_dataset(cols, extended=False)  # type: ignore
 
     def __iter__(self) -> Iterator[DataSet]:

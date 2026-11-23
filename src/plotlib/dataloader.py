@@ -20,9 +20,7 @@ SUPPORTED_SUFFIXES = ('.csv', '.xlsx', '.xls', '.txt', '.dat')
 
 class NoFileSelected(Exception):
     """
-    选择文件对话框被取消，没有选文件。
-
-    不继承 `OSError`，调用方可以把「用户不想选了」和「文件读不了」（`FileNotFoundError` 等）分开处理。
+    文件选择对话框关闭且未选择文件。
 
     Examples
     --------
@@ -35,14 +33,15 @@ class NoFileSelected(Exception):
 
 class Dataloader:
     """
-    数据文件加载器：读取按样品排列的表格，得到 `~plotlib.dataset.DataSet`。
+    从按样品排列的表格加载 `~plotlib.dataset.DataSet`。
 
-    加载器只记住每个样品占几列，读取过程的中间结果都是局部变量，所以同一个加载器读多少次都互不影响。
+    加载器可复用于采用相同列结构的多个文件。
 
     Notes
     -----
-    **文件格式。** 每个样品占固定的 *columns_per_sample* 列：第一列是标识列，其余是数据列。
-    第 0 行在标识列写样品名、在数据列写单位；第 1 行起是数据，标识列留空（txt 里用 ``-`` 占位）。
+    每个样品占固定的 *columns_per_sample* 列，依次为标识列和数据列。
+    首行的标识列记录样品名，数据列记录单位。从第二行起读取数据，标识列可留空。
+    在以空白分隔的文本文件中，使用 ``-`` 等占位符保留标识列。
     下例每个样品 6 列（1 列标识 + 5 列数据）::
 
         | 标识列 | 数据列1 | 数据列2 | 数据列3 | 数据列4 | 数据列5 | 标识列 | ... |
@@ -50,11 +49,9 @@ class Dataloader:
         | File1  | m/s     | Pa      | K       | J       | W       | File2  | ... |   ← 第 0 行：样品名、单位
         | -      | 1.2     | 101     | 300     | 50      | 100     | -      | ... |   ← 第 1 行起：数据
 
-    **读取规则。**
-
-    - 扩展名不区分大小写：.csv、.xlsx、.xls、.txt、.dat（txt / dat 以任意连续空白分隔）；
-    - 表头（样品名、单位）原样作为文本读入：``'101'`` 不会变成 ``101.0``，``'NA'``、``'N/A'`` 不会变成缺失值；
-    - 数据区读不成数字的格子（空格、``'nan'``、文字）变成 NaN。
+    扩展名不区分大小写。TXT 和 DAT 文件以连续空白分隔。
+    样品名和单位按文本原样保留，例如 ``'101'``、``'NA'`` 和 ``'N/A'``。
+    数据区中无法解析为数值的单元格转换为 NaN。
 
     Examples
     --------
@@ -94,11 +91,11 @@ class Dataloader:
         Raises
         ------
         NoFileSelected
-            用户取消了选择。只抛异常，不会退出调用它的程序。
+            对话框关闭且未选择文件。
 
         Notes
         -----
-        tkinter 在这里才导入：只按路径读文件时用不到它，没有图形界面的环境（服务器、CI）也能导入本模块。
+        仅打开对话框时才导入 tkinter，因此可在无图形界面的环境中按路径加载文件。
         """
         import tkinter as tk
         from tkinter import filedialog
@@ -112,7 +109,7 @@ class Dataloader:
                            ("所有文件", "*.*")],
             )
         finally:
-            root.destroy()          # 关掉隐藏的主窗口，不留在后台
+            root.destroy()          # 释放为文件对话框创建的 Tk 根窗口。
 
         if not file_path:
             raise NoFileSelected("未选择数据文件")
@@ -157,12 +154,10 @@ class Dataloader:
 
 def _read_table(path: Path) -> pd.DataFrame:
     """
-    按扩展名（不区分大小写）把整张表读成文本表格，不解析。
+    根据扩展名读取文本表格。
 
-    - ``dtype=str``：整张表按文本读，样品名、单位保持原样（``'101'`` 不会变成 ``101.0``，``'1.50'`` 不会变成 ``1.5``）；
-      标识列除了第 0 行都是空的，若让 pandas 推断类型，整列会被当成浮点数；
-    - ``keep_default_na=False``：不按 pandas 的默认规则把 ``'NA'``、``'N/A'``、空格子当缺失值，表头原样保留。
-      数据区的空格子、``'nan'`` 仍在 ``_to_dataset`` 里由 ``pd.to_numeric(errors='coerce')`` 转成 NaN。
+    ``dtype=str`` 和 ``keep_default_na=False`` 用于保留数字形式的名称以及 ``'NA'`` 等文本。
+    `_to_dataset` 再对数据区执行数值转换，并将无效数据转换为 NaN。
 
     Raises
     ------
@@ -175,17 +170,15 @@ def _read_table(path: Path) -> pd.DataFrame:
     if suffix in ('.xlsx', '.xls'):
         return pd.read_excel(path, header=None, dtype=str, keep_default_na=False)
     if suffix in ('.txt', '.dat'):
-        # sep=r'\s+'：任意连续空白（空格/制表符）作为分隔符。
-        # pandas 3 已移除 delim_whitespace=True；python engine 不支持 low_memory，此处不再传
         return pd.read_csv(path, sep=r'\s+', header=None, dtype=str, keep_default_na=False)
     raise ValueError(f"不支持的文件格式：{path}；支持 {'、'.join(SUPPORTED_SUFFIXES)}（不区分大小写）")
 
 
 def _to_dataset(table: pd.DataFrame, columns_per_sample: int) -> DataSet:
     """
-    把读进来的表按「每个样品 *columns_per_sample* 列」拆开，装进 `DataSet`。
+    按每个样品 *columns_per_sample* 列拆分表格并构建 `DataSet`。
 
-    每个样品的第一列是标识列，只取第 0 行的样品名，不进数据；数据列的第 0 行是单位，第 1 行起转成数字。
+    从标识列首行提取样品名，从各数据列首行提取单位，并转换后续行的数值。
 
     Raises
     ------
@@ -198,12 +191,11 @@ def _to_dataset(table: pd.DataFrame, columns_per_sample: int) -> DataSet:
     if total_cols % columns_per_sample != 0:
         raise ValueError(f"文件共 {total_cols} 列，不是每个样品列数（columns_per_sample={columns_per_sample}）的整数倍")
 
-    # 整数除法（第三方审查 A：以前用浮点系数 DATASET_FRACTION，int(98 * (1/49)) 得 1，静默丢样品）
     num_samples = total_cols // columns_per_sample
     channels = columns_per_sample - 1                       # 每个样品的数据列数
     starts = range(0, total_cols, columns_per_sample)       # 各样品标识列的位置
 
-    # 第 0 行：标识列是样品名（同一样品的各列重复），数据列是单位。样品名为空在这里就报错，不等到绘图时莫名出错
+    # 每个样品的名称取自标识列首行，并用于该样品的各数据列。
     sample_names = [table.iloc[0, start] for start in starts]
     for start, name in zip(starts, sample_names):
         if not isinstance(name, str) or not name.strip():
@@ -212,7 +204,7 @@ def _to_dataset(table: pd.DataFrame, columns_per_sample: int) -> DataSet:
     dataset = DataSet()
     dataset.names = [name for name in sample_names for _ in range(channels)]
     dataset.units = [unit for start in starts for unit in table.iloc[0, start + 1:start + columns_per_sample].tolist()]
-    # 第 1 行起：数值（跳过标识列）；读不成数字的格子是 NaN
+    # 数值区从第二行起读取，无法转换的单元格记为 NaN。
     dataset.data = np.hstack([  # type: ignore
         table.iloc[1:, start + 1:start + columns_per_sample]
         .apply(pd.to_numeric, errors='coerce')
@@ -222,7 +214,7 @@ def _to_dataset(table: pd.DataFrame, columns_per_sample: int) -> DataSet:
     dataset.num_samples = num_samples  # type: ignore
     dataset.sample_idx = [sample for sample in range(num_samples) for _ in range(channels)]  # type: ignore
     dataset.channel_idx = [channel for _ in range(num_samples) for channel in range(channels)]  # type: ignore
-    # 索引：本列位置、父列、初始列（加载时都相同，之后用于追溯原始位置）
+    # 加载时三个列索引相同，后续选择可通过索引追溯来源。
     dataset.local_idx = list(range(num_samples * channels))  # type: ignore
     dataset.father_idx = list(dataset.local_idx)  # type: ignore
     dataset.initial_idx = list(dataset.local_idx)  # type: ignore

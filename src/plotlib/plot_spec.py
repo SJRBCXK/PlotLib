@@ -1,21 +1,8 @@
 """
-绘图约定：入口（plotter）、计划（plan）和后端（backends）之间传递的数据类型。
+绘图计划、样式配置和渲染结果的数据类型。
 
-本模块包含三类对象：
-
-- **样式对象** `LineStyle`、`AxisStyle`、`FrameStyle`、`LegendStyle`、`TickStyle`，
-  以及作为最底层默认值的 `DEFAULT_LINES`、`DEFAULT_FRAME`、`DEFAULT_LEGEND`、`DEFAULT_TICKS`；
-- **计划与结果** `CurveSpec` （一条线）、`FigureSpec` （一张图）由 `plan` 生成并交给后端，
-  `DrawnFigure` 是后端画完交回的结果；
-- **随计划交给后端的配置** `Appearance` （全局外观）、`AxesFormatter` （一根轴上的用户回调）。
-
-这里不含任何绘图规则，也不导入任何绘图库，后端只依赖本模块（以及 `layouts`、`style`）。
-
-Notes
------
-分层原则：属于「一条线」的信息放在 `CurveSpec`，属于「一张图」的信息放在 `FigureSpec`。
-左右 Y 轴横跨两层：「这条线挂在哪根轴上」是线的属性（`CurveSpec.axis`），
-「那根轴的单位、刻度」是图的属性（`FigureSpec.y2_unit`、`FigureSpec.neglog`）。
+`CurveSpec` 描述一条曲线及其所属坐标轴。`FigureSpec` 描述整张图的版式、曲线和轴信息。
+后端接收绘图计划、外观配置和格式化回调，返回 `DrawnFigure`。
 """
 from collections.abc import Callable
 from dataclasses import dataclass, field, fields, replace
@@ -29,20 +16,13 @@ type Layout = Literal['multiline', 'xy', 'dual_y']
 
 
 # ══════════════════════════════════════════════
-# 样式对象（2026-11-20，用户提出「格式参数再加一层抽象」）
-#
-# 一个主题一个冻结 dataclass，用标准写法（style.py 的词汇），长度、宽度、字号的单位是磅；
-# 由翻译层 style.translate_* 换成各后端原生值（Plotly 按 dpi 把磅换成像素）。
-# 字段为 None 表示「不改，沿用上一层」，用 updated 一层层叠加：
-#     库默认 DEFAULT_* < 版式预设（layouts.py）< DataPlotter(...) 全局 < 分组样式 < 单轴 formatter
-# 用户明确写的盖过库的默认安排：全局写了就对所有版式生效，不会被某个版式的预设悄悄盖掉。
+# 样式对象
 # ══════════════════════════════════════════════
 class StyleLayer:
     """
-    样式对象的公共基类，提供「一层叠一层」的合并方法 `updated`。
+    样式对象的公共基类，提供 `updated` 合并方法。
 
-    样式对象的每个字段默认为 None，表示「这一层不改，沿用下面一层」。
-    库按以下顺序逐层叠加，越往后优先级越高::
+    未指定字段为 ``None``，表示沿用较低优先级的值。样式按以下顺序合并::
 
         库默认 DEFAULT_* < 版式预设（layouts）< DataPlotter 全局 < 分组样式 < 单轴 formatter
     """
@@ -54,8 +34,8 @@ class StyleLayer:
         Parameters
         ----------
         other : 同类样式对象 or None
-            上面一层。它写了的字段（不是 None）覆盖本层的值，没写的沿用本层。
-            为 None 时原样返回本层。
+            优先级更高的样式。仅覆盖其中值非 ``None`` 的字段。
+            *other* 为 ``None`` 时返回当前对象。
 
         Returns
         -------
@@ -77,11 +57,10 @@ class StyleLayer:
 @dataclass(frozen=True)
 class LineStyle(StyleLayer):
     """
-    线的样式：线宽、颜色、线型、标记和标记大小。
+    折线、散点和柱状图的通用样式。
 
-    用在三处：``DataPlotter(lines=...)`` 对所有图生效；分组配置里的 ``linestyle`` /
-    ``marker`` / ``color`` 由计划层装进 `LineStyle`；`~plotlib.formatters.make_lines_formatter`
-    改单根轴上的线。所有字段都用标准写法（见 `plotlib.style`），长度单位是磅。
+    可用于全局线条设置、分组样式和 `~plotlib.formatters.make_lines_formatter`。
+    长度单位为磅，取值见 `plotlib.style`。
 
     Parameters
     ----------
@@ -122,28 +101,28 @@ type AxisScale = Literal['linear', 'log', 'symlog', 'logit']    # 'symlog'、'lo
 @dataclass(frozen=True)
 class AxisStyle(StyleLayer):
     """
-    一个方向（X 或 Y）的坐标轴样式：刻度类型、范围、刻度文字格式、显示值缩放和着色。
+    单个方向的坐标轴样式。
 
-    X、Y 各用一个对象：``make_axes_formatter(x=AxisStyle(...), y=AxisStyle(...))``；
-    版式预设（`plotlib.layouts`）也用它写各轴的默认格式和颜色。
+    X、Y 轴分别通过 ``make_axes_formatter(x=..., y=...)`` 设置。
+    版式预设也使用该对象定义各轴的默认格式和颜色。
 
     Parameters
     ----------
     scale : {'linear', 'log', 'symlog', 'logit'}, optional
         刻度类型。``'symlog'``、``'logit'`` 只有 matplotlib 支持。
-        不写时不改刻度类型，也就不会冲掉已有的刻度格式。
+        未指定时保留当前轴类型。
     limits : tuple of (float or None, float or None), optional
-        坐标范围 ``(下限, 上限)``，写数据值（对数轴也一样）；某一侧写 None 表示这一侧自动。
-        对数轴的边界必须大于 0。
+        数据坐标中的 ``(下限, 上限)``。某侧为 ``None`` 时自动计算该侧边界。
+        对数轴的显式边界必须大于 0。
     format : str, optional
         刻度文字格式，Python 格式字符串，用 ``x`` 或 ``y`` 作变量名，如 ``'{x:.2f}'``、``'{y:.1e}'``。
-        Plotly 只支持 ``.Nf``、``.Ne``、``.Ng``、``.N%`` 四种。Plotly 的对数轴写了格式、
-        次刻度又不写文字（``TickStyle.minor_labels='none'``，默认）时，主刻度只放在整数量级（``dtick=1``）；
-        跨很多数量级嫌挤，可以在 ``custom`` 回调里自己设，如 ``fig.update_xaxes(dtick=2)`` 每两个量级一个。
+        Plotly 支持 ``.Nf``、``.Ne``、``.Ng`` 和 ``.N%``，其中 ``N`` 为精度。
+        对数轴使用显式格式且隐藏次刻度标签时，PlotLib 默认每个数量级放置一个主刻度。
+        可在 ``custom`` 回调中指定主刻度间距，例如用 ``fig.update_xaxes(dtick=2)`` 改为每两个数量级一个。
     scaler : float, optional
-        显示值缩放：刻度文字显示「刻度值 × scaler」，不修改数据。只有 matplotlib 支持。
+        仅 Matplotlib 支持。刻度显示值等于刻度值乘以 *scaler*，数据值保持原样。
     color : str or tuple of int, optional
-        轴着色：轴标题、刻度和轴线用同一颜色（双 Y 轴预设用它做左红右蓝）。
+        应用于轴标题、刻度和轴线的颜色。
 
     Examples
     --------
@@ -180,7 +159,7 @@ class FrameStyle(StyleLayer):
     """
     width: float | None = None          # 轴线宽（磅）
     top: bool | None = None             # 画不画上边框
-    right: bool | None = None           # 画不画右边框（双 Y 轴的右轴自己有轴线，不受它影响）
+    right: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -213,14 +192,14 @@ class LegendStyle(StyleLayer):
     draggable: bool | None = None       # 能不能用鼠标拖动（只有 matplotlib 的交互窗口；Plotly 在显示时设置）
 
 
-type TickDirection = Literal['out', 'in']          # Plotly 没有跨在轴线两侧的刻度，标准写法只有这两种
+type TickDirection = Literal['out', 'in']          # 两个后端均支持朝内或朝外。
 type MinorLabels = Literal['none', 'short', 'full']
 
 
 @dataclass(frozen=True)
 class TickStyle(StyleLayer):
     """
-    刻度样式：主刻度、次刻度的线和文字。
+    主、次刻度线及标签的样式。
 
     用在 ``DataPlotter(ticks=...)`` （所有图）和 ``make_axes_formatter(ticks=...)`` （单根轴）。
     长度、宽度、字号、间距的单位都是磅。
@@ -242,9 +221,10 @@ class TickStyle(StyleLayer):
     label_pad : float, optional
         刻度文字离刻度线的距离，可以为 0。
     minor_labels : {'none', 'short', 'full'}, optional
-        次刻度写什么：``'none'`` 不写；``'short'`` 在对数轴上只写首位数字（如 2、5），
-        线性轴上不写；``'full'`` 写完整数值。Plotly 只有对数轴的次刻度能写文字；
-        Plotly 的对数轴写了刻度格式（``AxisStyle.format``）时不能用 ``'short'``，画图时报错。
+        ``'none'`` 隐藏标签，``'short'`` 在对数轴显示首位数字，``'full'`` 显示完整数值。
+        线性轴上，Matplotlib 可用 ``'full'`` 显示标签，``'short'`` 时隐藏标签。
+        Plotly 仅对数轴支持次刻度标签，且显式 ``AxisStyle.format`` 与 ``'short'`` 同时使用会引发
+        ``ValueError``。
     minor_label_font, minor_label_size, minor_label_pad : optional
         次刻度文字单独的字体、字号和间距；不写时与主刻度文字相同。
         只有 matplotlib 支持，在 Plotly 后端设置会报错。
@@ -271,9 +251,9 @@ class TickStyle(StyleLayer):
 
 # 库默认值（最底下一层）
 DEFAULT_LINES = LineStyle(width=3, linestyle='solid', marker_size=6)
-DEFAULT_FRAME = FrameStyle(width=3, top=False, right=False)                 # 默认无框（用户定）
+DEFAULT_FRAME = FrameStyle(width=3, top=False, right=False)
 DEFAULT_LEGEND = LegendStyle(position='upper right', font_size=10, frame=False, draggable=False)
-# 刻度：朝外，主刻度 6 × 3 磅，显示次刻度 3 × 3 磅（用户定：默认显示，可关），次刻度不写文字
+# 默认显示主刻度和次刻度线，并隐藏次刻度标签。
 DEFAULT_TICKS = TickStyle(direction='out', length=6, width=3, minor=True,
                           minor_length=3, minor_width=3, minor_labels='none')
 
@@ -284,10 +264,9 @@ DEFAULT_TICKS = TickStyle(direction='out', length=6, width=3, minor=True,
 @dataclass
 class CurveSpec:
     """
-    绘图计划里的一条线：数据、图例文字、颜色来源、样式、画法和所在的轴。
+    单条曲线的数据、图例标签、样式和轴归属。
 
-    由 `plotlib.plan` 生成，后端照着画。颜色只存色带上的位置，样式只存标准写法，
-    换成具体的颜色值和各绘图库的原生参数是后端的事。
+    绘图计划使用色带位置和跨后端通用的样式。渲染时由后端解析为颜色和原生参数。
 
     Parameters
     ----------
@@ -331,7 +310,7 @@ class FigureSpec:
         这张图在结果字典 ``DataPlotter.figures`` 里的键：分组名或 ``'main'``；
         xy 图、双 Y 轴图是样品号。
     curves : list of CurveSpec
-        这张图的线。列表顺序就是画线顺序，也就是图例顺序。
+        曲线列表，按绘制及图例顺序排列。
     x_unit, y_unit : str
         X 轴、左 Y 轴的标题（通道单位）。同一通道的单位在各样品间一致，所以属于图而不属于线。
     y2_unit : str or None, default: None
@@ -344,8 +323,8 @@ class FigureSpec:
     legend_title : str or None, default: None
         图例标题，已是最终文字（``'{name}'`` 已替换）；None 表示不加标题。
     name : str or None, default: None
-        这张图自己的名字：每个样品一张图时是样品名，分组分离模式是组名，只有一张图时为 None。
-        Plotly 翻页滑块的档位标签用它。
+        样品名或组名。多线图和合并分组图为 ``None``。
+        Plotly 使用该名称作为翻页滑块的档位标签。
     """
     key: str | int              # 分组名或 'main'；xy、双 Y 轴图是样品号
     curves: list[CurveSpec]
@@ -353,16 +332,15 @@ class FigureSpec:
     y_unit: str
     y2_unit: str | None = None  # 右轴单位；只有双 Y 轴图有
     neglog: frozenset[str] = frozenset()    # 哪些轴的刻度补负号：'x'、'y'、'x2'（上轴，拼图时用）、'y2'
-    layout: Layout = 'multiline'   # 按哪套默认排版画（6.6 起由排版预设决定具体设置）
-    legend_title: str | None = None     # 图例标题（2026-11-20）；None 不加。计划里已是最终文字，后端照画
-    name: str | None = None     # 这张图自己的名字（6.8）：每个样品一张图时是样品名，分离模式是组名，只有一张图时 None；
-                                #   legend_title 里的 '{name}' 换成它，Plotly 翻页滑块的档位标签也用它
+    layout: Layout = 'multiline'
+    legend_title: str | None = None
+    name: str | None = None
 
 
 @dataclass
 class DrawnFigure:
     """
-    按一张 `FigureSpec` 画出的结果。
+    `FigureSpec` 对应的渲染结果。
 
     两个后端、四种绘图方法交回的结果形状相同，`~plotlib.plotter.DataPlotter` 把它们存成
     ``figures = {spec.key: DrawnFigure}``。
@@ -370,7 +348,7 @@ class DrawnFigure:
     Parameters
     ----------
     spec : FigureSpec
-        这张图的计划，画了什么都能从这里查到。
+        渲染该图所用的绘图计划。
     fig : `matplotlib.figure.Figure` or `plotly.graph_objects.Figure`
         原生的图对象。Plotly 画多张计划时，各页共用同一个 Figure。
     axes : dict
@@ -384,14 +362,14 @@ class DrawnFigure:
     --------
     DrawnFigure.artist : 按样品号取线。
     """
-    spec: FigureSpec            # 这张图的计划：画了什么都能查到
-    fig: Any                    # matplotlib 的 Figure；Plotly 多张计划时各页共用同一个 Figure（6.8，翻页）
-    axes: dict[str, Any]        # {'left': ax}，双 Y 轴再有 'right'；Plotly 没有轴对象（6.7 定）
+    spec: FigureSpec
+    fig: Any
+    axes: dict[str, Any]
     artists: list               # 曲线对象（Line2D / PathCollection / BarContainer / trace）
 
     def artist(self, sample_idx: int, axis: Axis = 'left'):
         """
-        取这张图里某个样品挂在某根轴上的那条线。
+        返回指定样品在指定轴上的绘图对象。
 
         ``artists`` 不按样品号作键，因为双 Y 轴图里同一样品有左右两条线，所以要同时给出轴。
 
@@ -443,15 +421,14 @@ class Appearance:
     font_weight : str, default: 'bold'
         字重。
     lines, frame, legend, ticks : 样式对象
-        用户在 ``DataPlotter(...)`` 里写的那一层，没写的字段为 None。
+        ``DataPlotter`` 的显式样式。未指定的字段为 ``None``。
     dpi : float, default: 100
         渲染分辨率（每英寸像素数）。后端用它把磅、英寸换成像素。
 
     Notes
     -----
-    这里只存用户写的那一层。库默认值和版式预设由后端在画每张图时按
-    「库默认 < 版式预设 < 本层」叠加（见 `plotlib.layouts.resolve_legend`），
-    所以用户明确写的设置对所有版式都生效，不会被某个版式的预设盖掉。
+    渲染时，后端合并库默认值、版式预设和显式设置。
+    显式设置的优先级最高。
     """
     font_family: str = 'Arial'
     font_size: int = 22
@@ -460,16 +437,16 @@ class Appearance:
     frame: FrameStyle = FrameStyle()
     legend: LegendStyle = LegendStyle()
     ticks: TickStyle = TickStyle()
-    dpi: float = 100            # 显式的渲染分辨率（6.7）；100 也是 matplotlib 的默认值
+    dpi: float = 100
 
 
 @dataclass(frozen=True)
 class AxesFormatter:
     """
-    一根轴上的一组用户回调；没给的回调为 None。
+    指定坐标轴的样式回调。未提供的回调为 ``None``。
 
-    绘图器按轴组成 ``{'left': AxesFormatter(...), 'right': AxesFormatter(...)}`` 交给后端，
-    后端只把这根轴自己的东西交给对应的回调。
+    后端按轴接收 ``{'left': AxesFormatter(...), 'right': AxesFormatter(...)}``，
+    并传入各轴的原生对象。
 
     Parameters
     ----------

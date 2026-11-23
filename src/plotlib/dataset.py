@@ -1,5 +1,5 @@
 """
-数据容器：`DataSet` （按「样品 × 通道」排列的数值矩阵加每列的元数据），以及按列访问的视图 `Column`、`ColumnList`。
+按样品和通道组织的数值数据集，以及访问数据列的视图。
 """
 from collections.abc import Iterator
 from typing import overload
@@ -9,9 +9,9 @@ import numpy as np
 
 class Column:
     """
-    `DataSet` 中一列的视图：读写的都是数据集本身，不是副本。
+    `DataSet` 中单列数据和元数据的可写视图。
 
-    一般通过 ``dataset.column[i]`` 得到，不直接创建。修改 `Column` 的属性就是修改数据集里对应的那一列，反之亦然。
+    通过 ``dataset.column[i]`` 取得。修改视图会直接更新数据集中的对应列。
 
     Parameters
     ----------
@@ -22,7 +22,7 @@ class Column:
 
     See Also
     --------
-    Column.to_dict : 取一份与数据集脱钩的副本。
+    Column.to_dict : 返回该列数据和元数据的副本。
 
     Examples
     --------
@@ -73,7 +73,7 @@ class Column:
 
     @sample_idx.setter
     def sample_idx(self, value: int):
-        """改样品号后重算样品数、通道号并校验；校验失败则回滚，不留下半改的状态。"""
+        """更新样品号并重新校验派生属性，校验失败时恢复原值。"""
         old = self._dataset.sample_idx[self._idx]
         self._dataset.sample_idx[self._idx] = value
         try:
@@ -90,7 +90,7 @@ class Column:
 
     @property
     def data(self) -> np.ndarray:
-        """这一列的数据，是数据矩阵的视图而不是副本：原地修改（如 ``col.data[:] = ...``）会改到数据集。"""
+        """该列数值的可写视图，例如 ``col.data[:] = ...`` 会更新数据集。"""
         return self._dataset.data[:, self._idx]
 
     @data.setter
@@ -196,8 +196,7 @@ class ColumnList:
         return Column(self._dataset, idx)
 
     def __len__(self) -> int:
-        """列数。零行的数据集（有列、没有行）也照实返回列数。"""
-        # 列数看列，不看元素个数：零行的数据集（如找不到峰的峰表，形状 (0, 2)）size 是 0，但有 2 列（与 expandata 同一判断）
+        """返回列数，包括没有数据行的情况。"""
         return self._dataset.data.shape[1]
 
     def __iter__(self):
@@ -212,16 +211,15 @@ class ColumnList:
 
 class DataSet():
     """
-    按「样品 × 通道」组织的数据集：一个数值矩阵，加上每一列的元数据。
+    按样品和通道组织的数值矩阵及列元数据。
 
-    每一列是某个样品的某个通道（如样品 0 的频率、样品 0 的阻抗实部 ……）。
-    一般由 `~plotlib.dataloader.Dataloader` 读文件得到，或由选择、计算的结果拼接而成；
-    新建的 `DataSet` 是空的。
+    每列对应一个样品的一个通道。可用 `~plotlib.dataloader.Dataloader` 从文件加载，
+    也可由筛选或计算结果构建。直接构造时得到空数据集。
 
     Attributes
     ----------
     data : numpy.ndarray
-        数值矩阵，形状为（行数, 列数），每列一个序列。各列长度不同时，短的在下面补 NaN。
+        形状为 ``(行数, 列数)`` 的数值矩阵。拼接长度不同的序列时，在较短列的末尾补 NaN。
     names : list of str
         每列的名字，一般是样品名（同一样品的各列相同）。
     units : list of str
@@ -241,11 +239,10 @@ class DataSet():
 
     Notes
     -----
-    数据集始终满足两条约定，每次修改后都由 `update_attributes` 校验：
+    `update_attributes` 校验以下约束：
 
-    1. 元数据长度一致：``data`` 的列数等于 ``names``、``units``、``sample_idx`` 等各列表的长度；
-    2. 同一通道在各样品里单位相同（通道 0 都是频率、通道 1 都是 Zs' ……），
-       所以画图时一个通道对应一个轴标题。
+    1. 各列元数据列表的长度等于 ``data`` 的列数。
+    2. 同一通道在各样品中的单位一致，绘图时用作轴标题。
 
     Examples
     --------
@@ -277,7 +274,7 @@ class DataSet():
 
     def expandata(self, other: DataSet):
         """
-        把另一个数据集的列拼接到本数据集右边（原地修改）。
+        将另一个数据集的列追加到当前数据集。
 
         Parameters
         ----------
@@ -292,16 +289,12 @@ class DataSet():
         Raises
         ------
         RuntimeError
-            拼接后违反约定（如同一通道在两个数据集里单位不同）。此时本数据集恢复原状
-            （包括 ``status``），不会留下拼了一半的状态。
+            拼接结果违反数据集约束，例如同一通道的单位不一致。失败时恢复当前数据集。
 
         Notes
         -----
-        行数不同时，短的一方在下面补 NaN。本数据集是否为空看有没有列而不是有没有元素，
-        所以零行的数据集（如找不到峰的峰表）也照常拼接。
+        行数不同时在较短数据集末尾补 NaN。零行数据集也参与拼接，并保留其列元数据。
         """
-        # 「空」看有没有列，不看 size：零行的样品（如找不到峰的峰表，形状 (0, 2)）size 也是 0，
-        # 但它有列，要照常拼接（第三方审查 B）
         if self.data.shape[1] == 0:
             new_data = other.data.copy()
         else:
@@ -313,13 +306,13 @@ class DataSet():
                 b = np.vstack([b, np.full((max_rows - b.shape[0], b.shape[1]), np.nan)])
             new_data = np.hstack([a, b])
 
-        # 先记下原状（与 Column.sample_idx 的 setter 同一做法）：update_attributes 校验失败时恢复
+        # 保留原始数据、元数据和状态，以便在校验失败时恢复。
         fields = ('data', 'names', 'units', 'sample_idx', 'father_idx', 'initial_idx')
         backup = {field: getattr(self, field) for field in fields}
-        status = self.status        # update_attributes 会把状态改成 'written'，回滚时连状态一起恢复（如 'loaded'）
+        status = self.status
         self.data = new_data
         for field in fields[1:]:
-            setattr(self, field, getattr(self, field) + getattr(other, field))   # 新列表，原列表留作备份
+            setattr(self, field, getattr(self, field) + getattr(other, field))
         try:
             self.update_attributes()
         except RuntimeError:
@@ -333,11 +326,10 @@ class DataSet():
     
     def update_attributes(self):
         """
-        重算派生的元数据并校验两条约定，修改 ``data`` 或元数据列表后调用。
+        重新计算派生元数据并校验数据集约束。
 
-        依次做：检查元数据长度与列数一致；重排 ``local_idx``；把 ``father_idx`` / ``initial_idx`` 里的 None
-        补成当前位置；把 ``sample_idx`` 里的 None 补成同一个新样品号（已有最大样品号 + 1）；
-        重算样品数和通道号；检查同一通道的单位一致；最后把 ``status`` 设为 ``'written'``。
+        直接修改 ``data`` 或列元数据列表后应调用此方法。方法会补全列索引和样品号，
+        更新样品数及通道号，校验各通道的单位，并将 ``status`` 设为 ``'written'``。
 
         Returns
         -------
@@ -351,28 +343,23 @@ class DataSet():
 
         Notes
         -----
-        未指定样品号的列（如跨样品计算的结果）属于同一次计算，所以共用一个新样品号；
-        逐列递增会把它们拆成不同样品，单位不同时还会违反约定 2。
+        未指定样品号的列共用新样品号，取已有最大样品号加一。
+        缺失的父列或初始列索引采用当前列位置。
         """
 
         lengths = {field: len(getattr(self, field))
                    for field in ('names', 'units', 'sample_idx', 'father_idx', 'initial_idx')}
         if any(length != self.data.shape[1] for length in lengths.values()):
-            # 各项长度写进异常信息（以前先 print 到标准输出，再抛一个不带细节的异常）
             detail = '，'.join(f"{field} {length}" for field, length in lengths.items())
             raise RuntimeError(f"数据解析错误：数据维度与元数据不匹配（数据 {self.data.shape[1]} 列；{detail}）")
-        # numpy 无需重置列索引，直接更新 local_idx
         self.local_idx = list(range(self.data.shape[1]))
 
-        # 先把 None 补成实际值，再计算派生属性——
-        # 顺序反了的话，样品数和通道号会按 None 统计，与补全后的样品号对不上
+        # 先补全索引，再计算样品数和通道号。
         for i, loc in enumerate(self.local_idx):
             if self.father_idx[i] is None:
                 self.father_idx[i] = loc
             if self.initial_idx[i] is None:
                 self.initial_idx[i] = loc
-        # 未指定样品号的列（如 DataTransformer 跨样品计算的结果）属于同一次计算，
-        # 共用一个新样品号；逐列递增会把它们拆成不同样品，单位不同时触发单位一致性检查
         missing = [i for i, g in enumerate(self.sample_idx) if g is None]
         if missing:
             known = [g for g in self.sample_idx if g is not None]

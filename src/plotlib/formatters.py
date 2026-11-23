@@ -1,27 +1,24 @@
 """
-格式化回调的工厂函数：参数是样式对象，按 *backend* 返回 matplotlib 或 Plotly 的回调。
+从样式对象创建 Matplotlib 或 Plotly 格式化回调。
 
 - `make_axes_formatter`：坐标轴（刻度类型、范围、刻度格式、着色、边框、刻度）；
 - `make_lines_formatter`：线条（线宽、颜色、线型、标记）；
 - `make_legend_formatter`：图例（位置、字号、边框、拖动）；
-- `combine_formatters`：把几个同一种的回调合成一个。
+- `combine_formatters`：按顺序组合相同类型的回调。
 
 生成的回调交给 `~plotlib.plotter.DataPlotter` 绘图方法的 ``axes_formatter``、``lines_formatter``、
 ``legend_formatter`` 参数，由后端逐轴调用。
 
 Notes
 -----
-- **只改写了的字段。** 样式对象里没写的字段（None）不改，沿用 ``DataPlotter(...)`` 的全局设置和版式预设，
-  所以不会覆盖按样品分配的颜色或预设的刻度格式。刻度类型也一样：没写 ``scale`` 就不改刻度类型。
-- **单位。** 线宽、标记大小、字号、刻度长短都是磅；Plotly 按这张图的 dpi 换成像素
-  （后端把 dpi 记在 ``fig.layout.meta['dpi']``）。
-- **按轴调用。** 回调只拿到这根轴自己的东西，两个后端的调用形状见 `~plotlib.plotter.DataPlotter` 的说明。
-  X 轴左右共用：右轴回调里的 ``x`` 设置也作用在共用的 X 轴上（与 matplotlib 的 ``twinx`` 一样）；
-  边框和刻度在右轴回调里只改右侧。要一次改整张图，用绘图方法的 ``figure_formatter``。
-- **创建时就报错。** 只收标准写法（如 ``'dash'``、``'circle'``、``'red'``）；后端写法（如 ``'--'``、``'o'``）
-  以及后端做不到的设置（Plotly 的 ``scaler``、``'symlog'``、次刻度文字的字号、图例拖动）在创建回调时就报错，
-  不等到画图。
-- **custom。** ``custom`` 里的自定义回调直接拿各后端的原生对象，不做翻译。
+未指定的字段保留原有样式。线宽、标记大小、字号和刻度尺寸均以磅为单位，
+Plotly 使用 ``fig.layout.meta['dpi']`` 换算为像素。
+
+按轴回调的签名见 `~plotlib.plotter.DataPlotter`。双 Y 轴图共用 X 轴，因此右侧回调中的
+``x`` 设置也会更新共用轴。右侧的边框和刻度设置只作用于右侧。
+图形级的修改可通过 ``figure_formatter`` 完成。
+
+工厂在创建回调时校验样式取值和后端支持情况。``custom`` 中的回调在应用样式后接收后端原生对象。
 
 Examples
 --------
@@ -89,9 +86,7 @@ def make_axes_formatter(x: AxisStyle | None = None, y: AxisStyle | None = None, 
                         ticks: TickStyle | None = None, custom: Iterable[Callable] | None = None, *,
                         backend: Backend = "matplotlib") -> MplAxesFormatter | PlotlyAxesFormatter:
     """
-    创建坐标轴回调，把样式对象应用到一根轴上。
-
-    只修改样式对象里写了的字段；没写的沿用 ``DataPlotter`` 的全局设置和版式预设。
+    创建应用坐标轴样式的回调。回调只更新显式指定的字段。
 
     Parameters
     ----------
@@ -102,8 +97,8 @@ def make_axes_formatter(x: AxisStyle | None = None, y: AxisStyle | None = None, 
     ticks : TickStyle, optional
         这根轴的刻度（X、Y 两个方向）。右轴的回调只改右侧的 Y 轴。
     custom : iterable of callable, optional
-        自定义回调，在上面的设置之后依次调用：matplotlib 以 ``(ax, fig)`` 调用，
-        Plotly 以 ``(轴名, fig)`` 调用。直接拿原生对象，不做翻译。
+        样式应用后按顺序执行的回调。Matplotlib 传入 ``(ax, fig)``，
+        Plotly 传入 ``(轴名, fig)``。
     backend : {'matplotlib', 'plotly'}, default: 'matplotlib'
         回调作用的后端。
 
@@ -116,8 +111,7 @@ def make_axes_formatter(x: AxisStyle | None = None, y: AxisStyle | None = None, 
     Raises
     ------
     TypeError, ValueError
-        样式对象写法不对，或这个后端做不到（如 Plotly 的 ``scaler``、``'symlog'``、次刻度文字的字号）。
-        创建时就报错。
+        样式参数无效，或所选后端不支持该设置。
 
     See Also
     --------
@@ -142,7 +136,6 @@ def make_axes_formatter(x: AxisStyle | None = None, y: AxisStyle | None = None, 
     >>> DataPlotter(data).plot_dual_y(right_axes_formatter=right)
     """
     check_backend(backend)
-    # 写错或后端做不到的，创建时就报错（不等到画图）
     for style in (x, y):
         if style is not None:
             check_axis_style(style, backend)
@@ -166,7 +159,7 @@ def make_axes_formatter(x: AxisStyle | None = None, y: AxisStyle | None = None, 
                 apply_axis(ax, 'y', y_native)
             if frame_native is not None:
                 apply_frame(ax, frame_native)
-            # 刻度放在改刻度类型之后：改类型会重置次刻度；这里照改，后端的全局补设就不会再动它
+            # 轴类型变更会重置次刻度，因此在变更后应用刻度样式。
             if tick_native is not None:
                 apply_tick_params(ax, tick_native)
                 apply_minor(ax, tick_native, only_defaults=False)
@@ -215,7 +208,7 @@ def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callab
     Parameters
     ----------
     style : LineStyle, optional
-        要改的线宽、颜色、线型、标记、标记大小；没写的字段不改。不给时什么都不改（只跑 *custom*）。
+        曲线样式。省略时只执行 *custom*。
     custom : iterable of callable, optional
         自定义回调，对每条线依次调用：matplotlib 收 ``Line2D`` 等曲线对象，Plotly 收 trace。
     backend : {'matplotlib', 'plotly'}, default: 'matplotlib'
@@ -229,15 +222,13 @@ def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callab
     Raises
     ------
     TypeError, ValueError
-        *style* 写法不对，创建时就报错。
+        *style* 含无效字段值。
 
     Notes
     -----
-    - 写了 ``color`` 会覆盖按样品分配的颜色，所有线变成同一颜色，通常只在一根轴只有一条线时使用。
-      线和标记一起改色。
-    - Plotly 里给纯线条写了 ``marker`` 时，会把绘制模式改成「线 + 点」，标记才看得见。
-    - 散点只有颜色、标记会生效；柱状图的格式化尚未独立出来：Plotly 跳过柱状图，
-      matplotlib 给柱状图改颜色目前会报错。
+    - ``color`` 统一设置该轴上曲线的颜色，包括线条和标记。
+    - 对 Plotly 折线设置 ``marker`` 会启用带标记的折线模式。
+    - 散点支持颜色和标记。Plotly 回调跳过柱状图，Matplotlib 回调对柱状图设置颜色时会报错。
 
     Examples
     --------
@@ -246,7 +237,7 @@ def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callab
     """
     check_backend(backend)
     style = style or LineStyle()
-    check_line_style(style)            # 非标准写法创建时就报错
+    check_line_style(style)
     custom = list(custom or ())
 
     if backend == "matplotlib":
@@ -298,15 +289,14 @@ def make_legend_formatter(style: LegendStyle | None = ..., custom: Iterable[Call
 def make_legend_formatter(style: LegendStyle | None = None, custom: Iterable[Callable] | None = None, *,
                           backend: Backend = "matplotlib") -> MplLegendFormatter | PlotlyLegendFormatter:
     """
-    创建图例回调，把 `LegendStyle` 写了的字段改到图例上。
+    创建更新整图图例样式的回调。
 
-    一张图只有一个图例，归左轴，所以这个回调只能交给 ``legend_formatter``
-    （双 Y 轴的 ``right_legend_formatter`` 会报错）。
+    将回调传给绘图方法的 ``legend_formatter``。
 
     Parameters
     ----------
     style : LegendStyle, optional
-        要改的位置、字号、边框、能否拖动；没写的字段不改。位置的写法与版式预设相同，见 `LegendStyle`。
+        图例的位置、字号、边框和拖动设置。未指定的字段保留原值。
     custom : iterable of callable, optional
         自定义回调，对图例依次调用：matplotlib 收 ``Legend``，Plotly 收 ``fig.layout.legend``。
     backend : {'matplotlib', 'plotly'}, default: 'matplotlib'
@@ -320,8 +310,8 @@ def make_legend_formatter(style: LegendStyle | None = None, custom: Iterable[Cal
     Raises
     ------
     ValueError
-        *style* 写法不对；或在 Plotly 后端写了 ``draggable=True``。Plotly 的图例拖动是显示时的设置：
-        ``fig.show(config={'edits': {'legendPosition': True}})``。
+        *style* 含无效字段值，或为 Plotly 指定了 ``draggable=True``。
+        Plotly 的图例拖动可在显示时通过 ``fig.show(config={'edits': {'legendPosition': True}})`` 配置。
 
     Examples
     --------

@@ -1,8 +1,8 @@
 """
-绘图入口：`DataPlotter` 是用户画图唯一需要的类。
+批量绘图的公共接口。
 
-每个绘图方法只做三件事：生成绘图计划（`plotlib.plan`）→ 交给后端画（`plotlib.backends`）→
-把结果存进 ``DataPlotter.figures``。本模块不碰任何绘图库，画图的代码全在后端里。
+`DataPlotter` 将数据选择和分组转换为绘图计划，由所选后端渲染。
+绘图结果保存在 ``DataPlotter.figures``。
 """
 from collections.abc import Callable
 from typing import Any
@@ -14,28 +14,26 @@ from .plan import plan_dual_y_figures, plan_multiline_figures, plan_xy_figures, 
 from .plot_spec import (Appearance, AxesFormatter, CurveKind, DrawnFigure, FigureSpec, FrameStyle, LegendStyle,
                         LineStyle, TickStyle)
 
-# 整图回调：整张图画完、各轴回调之后调用一次，拿到图和全部坐标轴 {'left': ..., 'right': ...}
+# 整图回调在各轴回调之后接收图形和坐标轴映射。
 type FigureFormatter = Callable[[Any, dict[str, Any]], Any]
 
 
 class DataPlotter:
     """
-    科学数据绘图器：一个入口、两个后端（matplotlib 静态图 / Plotly 交互图）。
-
-    四个绘图方法的名字是 ``plot_`` 加版式：
+    使用 Matplotlib 或 Plotly 绘制多样品科学数据。
 
     - `plot_multiline`：所有样品画在同一坐标系，每个样品一条线；
     - `plot_groups`：按分组画，分离模式每组一张图，合并模式所有分组一张图；
     - `plot_xy`：每个样品一张图，画两个通道的关系（如 Nyquist 图）；
     - `plot_dual_y`：每个样品一张图，左右两根 Y 轴共用 X 轴。
 
-    每次调用绘图方法都会清空并重新填写 `figures`：``{计划的 key: DrawnFigure}``，
-    四种方法的结果形状相同。绘图方法都返回 ``self``，可以链式调用。
+    每次绘图会更新 ``figures``。绘图方法返回 ``self``，支持链式调用。
 
     Attributes
     ----------
     figures : dict
-        ``{计划的 key: DrawnFigure}``，最近一次绘图的结果。取线用 ``figures[key].artist(样品号)``。
+        最近一次绘图的结果，格式为 ``{图键: DrawnFigure}``。
+        可用 ``figures[key].artist(样品号)`` 获取指定样品的绘图对象。
     dataset : DataSet
         绘图用的数据集。
     groups : Group
@@ -45,8 +43,7 @@ class DataPlotter:
 
     Notes
     -----
-    **格式化回调。** 每个绘图方法都接受三类按轴的回调和一个整图回调。按轴回调由后端逐轴调用，
-    只拿到这根轴自己的东西；两个后端的调用形状一一对应：
+    坐标轴、曲线和图例回调均按轴调用。可用整图回调访问图形及其全部坐标轴。
 
     - ``axes_formatter``：matplotlib 以 ``(ax, fig)`` 调用，Plotly 以 ``(轴名, fig)`` 调用，如 ``('yaxis2', fig)``；
     - ``lines_formatter``：这根轴上的线组成的列表（matplotlib 是 ``Line2D`` 等，Plotly 是 trace）；
@@ -54,12 +51,11 @@ class DataPlotter:
     - ``figure_formatter``：``(fig, axes)``，``axes`` 在 matplotlib 是 ``{'left': ax, ...}``，
       在 Plotly 是 ``{'left': 'yaxis', ...}``。
 
-    一张图只有一个图例，归左轴，所以给双 Y 轴的右轴配图例回调会报错。
-    执行顺序：默认排版 → 各轴回调 → 整图回调 → 负对数刻度。
+    图例回调配置整张图的图例，在双 Y 轴图中通过左侧处理。
+    后端先应用默认版式，再运行各轴回调和整图回调，最后处理负对数刻度。
 
-    **样式对象。** ``DataPlotter(lines=, frame=, legend=, ticks=)`` 对所有图生效；单根轴、单条线再用
-    `~plotlib.formatters.make_axes_formatter`、`~plotlib.formatters.make_lines_formatter`、
-    `~plotlib.formatters.make_legend_formatter` 修改。
+    构造时指定的 ``lines``、``frame``、``legend`` 和 ``ticks`` 应用于所有绘图方法。
+    ``plotlib.formatters`` 提供坐标轴、曲线和图例的回调工厂。
 
     See Also
     --------
@@ -129,7 +125,7 @@ class DataPlotter:
         channel_x, channel_y : int, default: 0, 1
             X、Y 数据的通道号（样品内的列序号）。`plot_xy` 不传通道时也用它们。
         figsize : tuple of (float, float), optional
-            图尺寸 ``(宽, 高)``，单位英寸，对所有绘图方法生效。不给时各方法用自己的默认值：
+            图尺寸 ``(宽, 高)``，单位为英寸。默认值由绘图方法决定。
             `plot_multiline` 为 (10, 8)，`plot_groups` 为 (16, 12)，`plot_xy` 和 `plot_dual_y` 为 (12, 8)。
         dpi : float, default: 100
             渲染分辨率（每英寸像素数）。后端按它把字号、线宽（磅）和 *figsize* （英寸）换成实际大小，
@@ -142,21 +138,20 @@ class DataPlotter:
         TypeError
             *groups* 不是 `Group`。
         ValueError
-            *groups* 建在别的数据集上；*lines* 写了颜色；样式对象写法不对，或这个后端做不到
+            *groups* 引用了不同的数据集，*lines* 指定了全局颜色，或样式设置无效或超出后端的支持范围
             （如 Plotly 设置次刻度文字的字号）；*backend* 不认识。
         ImportError
             选了 Plotly 后端但没有安装 Plotly。
 
         Notes
         -----
-        四个样式对象只写要改的字段，其余沿用库默认值和各版式的预设；这里写了的设置盖过版式预设。
+        全局样式覆盖库默认值和版式预设中与其对应的字段。
         """
         groups = resolve_groups(groups, dataset)
 
         if lines is not None and lines.color is not None:
             raise ValueError("lines 不收颜色：颜色按样品配色（cmap）；统一颜色请用分组配置的 color 或 make_lines_formatter")
-        # 外观参数打包成后端无关的 Appearance，由后端翻译（matplotlib → rc_params 等，Plotly → 模板）；
-        # 存的是用户写的那一层，库默认和版式预设由后端叠加。非标准写法、后端做不到的设置在这里创建后端时就报错
+        # 保存显式外观设置，后端负责校验并合并各层样式。
         appearance = Appearance(font_family=font_family, font_size=font_size, font_weight=font_weight,
                                 lines=lines or LineStyle(), frame=frame or FrameStyle(),
                                 legend=legend or LegendStyle(), ticks=ticks or TickStyle(), dpi=dpi)
@@ -179,7 +174,7 @@ class DataPlotter:
                 formatters: dict[str, AxesFormatter],
                 figure_formatter: FigureFormatter | None = None) -> DataPlotter:
         """
-        把计划交给后端画，结果存进 ``self.figures`` （先清空），返回 ``self``。
+        渲染绘图计划并将结果保存到 ``self.figures``，返回 ``self``。
 
         画图的事（建图、画线、排版、回调、负对数刻度）全在后端。多张计划时按后端的能力分两种：
         有 ``draw_pages`` 的后端（Plotly）画成一个 Figure 多页，其余（matplotlib）一张计划一张图。
@@ -199,11 +194,10 @@ class DataPlotter:
 
     def add_slider(self, mode: str = 'cumulative', slider_formatter=None):
         """
-        给刚画好的一页图加曲线滑块：一条线一档，拖动时只显示选中的线。
+        为单页 Plotly 图添加曲线滑块，每个档位对应一条曲线。
 
-        只有 Plotly 后端有滑块，而且只能用于一页图（`plot_multiline`、合并模式的 `plot_groups`）；
-        多页图（分组分离模式、`plot_xy`、`plot_dual_y`）请用 `add_page_slider`。
-        只给计划画出的曲线分档；``figure_formatter`` 里加的参考线等不分档，每档保持原来的显隐。
+        滑块只控制绘图计划中的曲线。通过 ``figure_formatter`` 添加的参考线保留自身的可见性。
+        多页图使用 `add_page_slider`。
 
         Parameters
         ----------
@@ -235,16 +229,14 @@ class DataPlotter:
             raise RuntimeError(f"当前结果有 {len(self.figures)} 页，曲线滑块只能加在一页图上；"
                                f"按页翻请用 add_page_slider()")
         [drawn] = self.figures.values()
-        # 只给计划画出的曲线分档；整图回调加的参考线等不分档、保持原样（55576fb 复审 4）
         return add_slider(drawn.fig, mode, slider_formatter, curves=drawn.artists)
 
     def add_page_slider(self, mode: str = 'single', slider_formatter=None):
         """
-        给多页图加翻页滑块：一页一档。
+        为多页 Plotly 图添加翻页滑块，每个档位对应一页。
 
-        分组分离模式、`plot_xy`、`plot_dual_y` 一次画出多张计划，Plotly 把它们画成一个 Figure 的多页，
-        刚画完只显示第一页。档位标签是每页的名字（组名或样品名），翻页时标题和图例标题换成这一页的。
-        不属于任何一页的 trace（如 ``figure_formatter`` 加的参考线）每档保持原来的显隐。
+        档位标签为组名或样品名。切换页时更新图标题和图例标题。
+        各页之外的轨迹（例如整图回调添加的参考线）保留自身的可见性。
 
         Parameters
         ----------
@@ -367,15 +359,11 @@ class DataPlotter:
 
         Notes
         -----
-        **分组样式。** 分组配置里写了 ``linestyle`` / ``marker`` / ``color`` 就应用到这组所有的线上
-        （两种模式一样）：``linestyle`` 只对折线生效，``marker`` 对折线和散点生效，``color`` 对所有画法生效。
-        优先级：库默认 < 分组样式 < ``lines_formatter``。
+        线型应用于折线，标记应用于折线和散点，颜色应用于所有图形类型。
+        分组样式覆盖全局样式，``lines_formatter`` 可进一步覆盖分组样式。
 
-        **颜色。** 没写 ``color`` 时，分离模式按样品配色，同一样品在各张图里同色；
-        合并模式同组的线统一为组首色（该组写在第一位的样品的颜色）。
-
-        **合并模式的去重。** 被多个分组引用的样品只画一次，归第一个包含它的分组（先到先得），
-        用那个分组的样式和颜色。
+        未指定分组颜色时，分离模式按样品配色，合并模式采用各组第一个样品的颜色。
+        合并时，属于多个分组的样品只绘制一次，采用配置中第一个包含该样品的分组样式。
 
         Examples
         --------
@@ -390,8 +378,6 @@ class DataPlotter:
                 legend_title=legend_title,
             )
 
-        # 分组规则（去重、先到先得、组首色、样式归属）都在计划里；合并模式的计划只有一张 'main' 图，
-        # 所以两种模式走同一个 _render
         specs = plan_multiline_figures(self.dataset, self.groups, self.channel_x, self.channel_y,
                                        merge_groups=merge_groups, plotrange=self.plotrange,
                                        neglog_x=neglog_x, neglog_y=neglog_y, kind=plot_kind,
@@ -474,9 +460,9 @@ class DataPlotter:
             采样点可以不一样），但必须是同一个物理量、同一个单位（秒和毫秒混用不报错，会按数值直接叠在一起），
             X 轴标题取左侧 X 通道的单位。
         axes_formatter, lines_formatter, legend_formatter : callable, optional
-            左轴的回调。图例只有一个（两条线都在里面），归 *legend_formatter*。
+            左侧的坐标轴和曲线回调，以及整张图的图例回调。
         right_axes_formatter, right_lines_formatter : callable, optional
-            右轴的回调，只拿到右轴和右线。右轴回调里的 X 轴设置也作用在共用的 X 轴上。
+            右侧的坐标轴和曲线回调。X 轴设置应用于共用的 X 轴。
         right_legend_formatter : callable, optional
             不能用：右轴没有单独的图例，给了会报 `ValueError`。
         neglog_x, neglog_y, neglog_x2, neglog_y2 : bool, default: False

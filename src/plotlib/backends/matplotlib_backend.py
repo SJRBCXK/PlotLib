@@ -1,13 +1,7 @@
 """
-matplotlib 后端：只读绘图计划，负责全部与 matplotlib 有关的事。
+将绘图计划渲染为 Matplotlib 静态图。
 
-代码分两段：
-
-- **翻译**：外观、色带位置、标准写法 → matplotlib 原生值（``__init__`` 的 rc 参数、``_curve_color``、
-  ``_native_style``）；
-- **渲染**：建图、画线、按版式预设排版、调用用户回调、负对数刻度。
-
-三种版式（多线、xy、双 Y 轴）走同一段画法 ``_draw``，差别全在计划（线挂哪根轴）和版式预设里。
+多线图、X-Y 图和双 Y 轴图共用渲染流程。绘图计划确定数据及轴归属，版式预设提供轴和图例的默认样式。
 """
 from collections.abc import Callable
 from typing import Any
@@ -25,9 +19,9 @@ from .matplotlib_styles import apply_axis, apply_frame, apply_minor, apply_tick_
 
 class MatplotlibBackend:
     """
-    matplotlib 后端：一张计划画一张静态图。
+    为每个绘图计划生成一个 Matplotlib Figure。
 
-    一般不直接使用，由 ``DataPlotter(backend='matplotlib')`` 通过 `plotlib.backends.get_backend` 创建。
+    ``DataPlotter(backend='matplotlib')`` 通过 `plotlib.backends.get_backend` 创建该后端。
 
     Parameters
     ----------
@@ -52,10 +46,9 @@ class MatplotlibBackend:
 
     def __init__(self, appearance: Appearance, cmap: str | None = None):
         """
-        把外观翻译成 rc 参数和刻度设置，并解析色带名。
+        根据全局外观生成 rc 参数和刻度设置，并解析色带名称。
 
-        样式对象按「库默认 < 用户在 DataPlotter 写的那一层」叠加；与版式有关的设置（上 / 右边框、
-        图例位置）还要叠上版式预设，在画每张图时处理（见 ``_draw`` 开头）。
+        渲染时，边框和图例样式还会合并版式预设。
         """
         self.appearance = appearance
         lines = DEFAULT_LINES.updated(appearance.lines)
@@ -114,7 +107,7 @@ class MatplotlibBackend:
         -----
         整段画法在 ``plt.rc_context`` 里执行，字号、线宽、默认线型等外观靠它生效，不改全局的 rc 设置。
         """
-        formatters = formatters or {}       # 不在参数里写 ={}：可变默认值会被所有调用共用
+        formatters = formatters or {}       # 为本次调用初始化回调映射。
         if spec.layout not in LAYOUTS:
             raise ValueError(f"不支持的绘图版式: '{spec.layout}'，可选：{', '.join(LAYOUTS)}")
 
@@ -124,17 +117,12 @@ class MatplotlibBackend:
     def _draw(self, spec: FigureSpec, figsize: tuple,
               formatters: dict[str, AxesFormatter], figure_formatter) -> DrawnFigure:
         """
-        三种版式共用的画法，顺序是：
+        创建图形和坐标轴，绘制曲线并应用版式及回调。
 
-        1. 建图，有挂右轴的线就 ``twinx``；全局刻度、边框用到每根轴上；
-        2. 画线，颜色和分组样式在画的时候一次给出；
-        3. 按版式预设排版（图例、轴标题、各轴格式、边距）；
-        4. 各轴的用户回调，然后整图回调；
-        5. 补全局的次刻度设置（只补还是默认值的，不覆盖用户回调）；
-        6. 负对数刻度补负号（左轴看 x、y，右轴看 y2）。
+        全局次刻度设置在回调之后应用于仍使用默认定位器或格式器的轴。
+        最后处理负对数刻度标签。
         """
         preset = LAYOUTS[spec.layout]
-        # 跟版式有关的样式：库默认 < 版式预设 < DataPlotter 全局（叠加顺序只写在 layouts.resolve_*）
         legend = translate_legend_style(resolve_legend(preset, self.appearance), 'matplotlib')
         frame = translate_frame(resolve_frame(preset, self.appearance), 'matplotlib')
 
@@ -148,7 +136,6 @@ class MatplotlibBackend:
 
         artists = []    # 与 spec.curves 一一对应
         for curve in spec.curves:
-            # 颜色、分组样式（线型、标记）都在画的时候一次给出：散点的标记画完就改不了
             artist = self._plot_data(axes[curve.axis], curve.x, curve.y, curve.kind, label=curve.label,
                                      **self._curve_color(curve, preset), **self._native_style(curve))
             artists.append(artist)
@@ -156,11 +143,11 @@ class MatplotlibBackend:
         self._apply_layout(fig, axes, spec, preset, legend)
         self._apply_optional_formatters(fig, axes, spec, spec.curves, artists, formatters, legend)
         self._apply_figure_formatter(fig, axes, figure_formatter)
-        # 次刻度显不显示、写什么：用户回调可能改了刻度类型（会重置次刻度），所以放在回调之后，只补还是默认值的
+        # 改变轴类型会重置次刻度。回调完成后仅补充仍采用默认值的设置。
         for axis_ax in axes.values():
             apply_minor(axis_ax, self.ticks, only_defaults=True)
 
-        # 右轴与左轴共用 X 轴（twinx），X 的负号只在左轴加一次；'x2' 是上轴（还没有），与 Plotly 一样跳过
+        # 共用的 X 轴只在左侧包装一次格式器。
         self._apply_neglog_formatter(axes['left'], 'x' in spec.neglog, 'y' in spec.neglog)
         if 'right' in axes:
             self._apply_neglog_formatter(axes['right'], False, 'y2' in spec.neglog)
@@ -168,7 +155,7 @@ class MatplotlibBackend:
         return DrawnFigure(spec=spec, fig=fig, axes=axes, artists=artists)
 
     # ========================================================================
-    # 翻译：计划里的标准写法 / 色带位置 → matplotlib 原生值
+    # 曲线颜色和样式
     # ========================================================================
 
     def _curve_color(self, curve: CurveSpec, preset: LayoutPreset) -> dict:
@@ -226,24 +213,22 @@ class MatplotlibBackend:
                 raise ValueError(f"不支持的 plot_kind: '{plot_kind}'")
 
     # ========================================================================
-    # 渲染：按排版预设排版（layouts.py；以前是三个写死的 _default_*_formatter）
+    # 版式应用
     # ========================================================================
 
     _Y_AXIS_NAME = {'left': 'y', 'right': 'y2'}     # 线挂的轴（CurveSpec.axis）→ 预设里的纵轴名
 
     def _apply_layout(self, fig, axes: dict, spec: FigureSpec, preset: LayoutPreset, legend: dict):
         """
-        按版式预设排版：图例、轴标题、各轴的刻度格式和着色、边距。
+        按版式预设设置图例、轴标题、轴样式和边距。
 
-        *legend* 是这张图图例的原生参数，已按「库默认 < 预设 < 全局」叠加并翻译好；边框在建轴时已设。
-        预设里没有列出的轴保留 matplotlib 默认。
+        *legend* 为合并后转换得到的 Matplotlib 图例参数。
         """
         left = axes['left']
 
         # 图例：一张图一个，建在左轴上，收所有轴上的线（双 Y 轴左右两条都在）；标题来自计划
         self._make_legend(axes, legend, spec.legend_title)
 
-        # 轴标题：单位属于图（计划 6.4 起）
         left.set_xlabel(spec.x_unit)
         left.set_ylabel(spec.y_unit)
         if 'right' in axes:
@@ -295,13 +280,9 @@ class MatplotlibBackend:
     def _apply_optional_formatters(self, fig, axes: dict, spec: FigureSpec, curves: list[CurveSpec],
                                    artists: list, formatters: dict[str, AxesFormatter], legend: dict):
         """
-        按轴调用用户回调，分三步：
+        执行坐标轴、曲线和图例回调。
 
-        1. 每根轴的坐标轴回调 ``(ax, fig)``、线条回调（只有挂在这根轴上的线）；
-        2. 有线条回调改过样式，就按版式预设重建一次图例（图例句柄是建图例时的样式快照）；
-        3. 图例回调：一张图一个图例，归左轴；给其他轴配了图例回调就报错。
-
-        图例回调放在最后：图例里有所有轴的线，右轴的线条回调触发的重建不会冲掉图例回调的设置。
+        图例句柄保存的是创建时的曲线样式。应用曲线回调后重建图例，再执行整图图例回调。
 
         Raises
         ------
@@ -316,30 +297,29 @@ class MatplotlibBackend:
             if fm.lines is not None:
                 fm.lines([artist for curve, artist in zip(curves, artists) if curve.axis == axis])
 
-        # 重建而不是改旧图例：不复制旧图例的锚点（get_bbox_to_anchor() 已是像素坐标，再传给 legend() 会被换算第二次，
-        # 图例移到画布外，第三方审查 D）；也不把线的样式 update_from 到句柄上（会连坐标变换一起复制，句柄画错位置）
+        # 使用原始图例参数重建，避免重复转换锚点，或从曲线复制坐标变换。
         if any(fm.lines is not None for fm in fms.values()) and axes['left'].get_legend() is not None:
             self._make_legend(axes, legend, spec.legend_title)
 
         for axis, fm in fms.items():
             if fm.legend is not None:
-                made = axes[axis].get_legend()      # 不叫 legend：那是参数名（图例的原生参数字典），别混用
+                made = axes[axis].get_legend()
                 if made is None:
                     raise ValueError(NO_LEGEND_MESSAGE)
                 fm.legend([made])
 
     @staticmethod
     def _apply_figure_formatter(fig, axes: dict, figure_formatter):
-        """整图回调：各轴回调之后调用一次，拿到图和全部坐标轴（三种版式都支持）。"""
+        """在各轴回调完成后，将图形及其坐标轴传给整图回调。"""
         if figure_formatter is not None:
             figure_formatter(fig, axes)
 
     @staticmethod
     def _apply_neglog_formatter(ax, neglog_x: bool, neglog_y: bool):
         """
-        负对数：给刻度文字补上负号（数据在计划里已取绝对值）。
+        为负对数轴的主、次刻度标签添加负号。
 
-        每个方向包装自己原来的格式器，保留原有的小数位等格式；次刻度写了文字的也一起包装。
+        用包装器保留各轴原有的数值格式。绘图计划已将相应数据转换为绝对值。
         """
         for on, axis in ((neglog_x, ax.xaxis), (neglog_y, ax.yaxis)):
             if not on:
@@ -357,7 +337,7 @@ class _NegativeFormatter(Formatter):
     Parameters
     ----------
     inner : matplotlib.ticker.Formatter
-        原来的格式器，负号后面的文字由它生成。
+        生成原始刻度标签的格式器。
 
     Notes
     -----
@@ -374,11 +354,11 @@ class _NegativeFormatter(Formatter):
         return f"-{self.inner(x, pos)}"
 
     def set_locs(self, locs):
-        """把这一轮的刻度位置转交给原格式器（它靠这个决定小数位）。"""
+        """将当前的刻度位置传给被包装的格式器。"""
         self.inner.set_locs(locs)
 
     def set_axis(self, axis):
-        """自己和原格式器都记下所属的轴。"""
+        """为当前格式器和被包装的格式器设置所属轴。"""
         super().set_axis(axis)
         self.inner.set_axis(axis)
 

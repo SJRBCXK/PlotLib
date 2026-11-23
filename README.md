@@ -1,536 +1,298 @@
 # PlotLib
 
-面向科研人员的 Python 科学数据批量绘图库，专为多样品实验数据的快速可视化设计。
+PlotLib 是一个用于多样品实验数据处理和批量绘图的 Python 库。它按「样品 × 通道」组织数据，支持按条件选列、逐样品变换和分组计算，并使用同一套绘图接口生成 Matplotlib 静态图和 Plotly 交互图。
 
-## 与 Origin 等工具的对比
-
-| 特性 | PlotLib | Origin / Excel |
-|------|---------|----------------|
-| **数据集管理** | 自动解析「样品 × 通道」结构，统一管理多个样品 | 手动逐列选择，重复操作 |
-| **批量绘图** | 一行代码绘制所有样品 | 逐个添加数据系列 |
-| **迭代选择** | 链式语法 `.select().by()` 灵活筛选 | 鼠标点选，无法复用 |
-| **分组绘图** | `plot_groups()` 自动按组绘制/合并 | 手动分组，样式逐个设置 |
-| **格式复用** | 格式化器可复用于任意图表 | 模板系统复杂，难以迁移 |
-| **版本控制** | 纯代码，Git 友好 | 二进制文件，无法 diff |
-| **自动化** | 脚本可批量处理多个文件 | 需要手动重复操作 |
-
-### 核心优势
-
-1. **智能数据集管理**：自动识别「样品 × 通道」结构，通过 `sample_idx` 和 `channel_idx` 追踪每列的归属
-2. **声明式迭代选择**：`select('samples', [0,1]).by('Pa')` 链式筛选，告别手动选列
-3. **一键分组绘图**：`plot_groups()` 支持分离/合并模式，自动应用组内样式
-4. **格式化器系统**：`axes_formatter`、`lines_formatter`、`legend_formatter` 三层定制
+[在线 API 文档](https://sjrbcxk.github.io/PlotLib/)
 
 ## 安装
 
+需要 Python 3.14 或更新版本。克隆仓库后可使用可编辑模式安装。
+
 ```bash
-git clone https://github.com/YOUR_USERNAME/PlotLib.git
+git clone https://github.com/SJRBCXK/PlotLib.git
 cd PlotLib
-pip install -e .
+python -m pip install -e .
 ```
 
-安装后在任意目录都能 `import plotlib`。按需加装可选依赖，可以组合，如 `pip install -e ".[interactive,test]"`：
+基础依赖包括 Matplotlib、NumPy、pandas，以及读取 Excel 文件所需的 openpyxl 和 xlrd。可选依赖可以组合安装，例如 `python -m pip install -e ".[interactive,test]"`。
 
-| 可选依赖 | 包含 | 用途 |
-|---|---|---|
-| `interactive` | plotly | Plotly 交互绘图：`DataPlotter(backend='plotly')`、格式化器的 `backend="plotly"`、`html_export` |
-| `gui` | PySide6 | `tools/` 下的 `*_qt.py` 工具和 `learning/gui/` 的 PySide6 学习示例 |
-| `analysis` | scipy | 分析脚本用到的科学计算（`scripts/eis_bode.py` 的寻峰） |
-| `test` | pytest、pytest-cov、plotly、kaleido | 运行测试；渲染测试（`pytest -m render`）还需要本机装有 Chrome |
+| 可选依赖 | 用途 |
+| --- | --- |
+| `interactive` | 启用 Plotly 后端和交互式 HTML 导出 |
+| `analysis` | 安装 SciPy，供 `scripts/eis_bode.py` 等分析脚本使用 |
+| `gui` | 安装 PySide6，供 `tools/` 中的 Qt 工具使用 |
+| `test` | 运行测试和覆盖率检查。Plotly 渲染测试需要本机安装 Chrome |
+| `docs` | 使用 Sphinx 生成 API 文档 |
 
 ## 快速开始
+
+以下示例读取每个样品占 6 列的文件（含 1 列标识），并在同一坐标系中绘制全部样品。通道号从 `0` 开始，仅计算数据列。
 
 ```python
 import matplotlib.pyplot as plt
 
-from plotlib.dataloader import Dataloader
-from plotlib.plotter import DataPlotter
-from plotlib.formatters import make_axes_formatter
+from plotlib import Dataloader, DataPlotter
 
-# 1. 加载数据（不传路径时弹出文件选择对话框）
-data = Dataloader(columns_per_sample=6).load_data()   # 每个样品在文件中占的列数（含标识列）
-
-# 2. 一行代码绘制所有样品
-DataPlotter(
-    dataset=data,
-    channel_x=0,  # X轴：通道 0
-    channel_y=1   # Y轴：通道 1
-).plot_multiline()
-
+data = Dataloader(columns_per_sample=6).load_data("experiment.csv")
+plotter = DataPlotter(data, channel_x=0, channel_y=1).plot_multiline()
 plt.show()
 ```
 
-> 图窗尺寸：`DataPlotter(..., figsize=(宽, 高))` 对所有绘图方法生效；不传时 `plot_multiline` 为 (10, 8)、`plot_groups` 为 (16, 12)、`plot_xy` / `plot_dual_y` 为 (12, 8)。
-> 绘图后端：`DataPlotter(..., backend='matplotlib')`（默认）或 `backend='plotly'`（交互图，见下文）；`dpi`（默认 100）是显式的渲染分辨率。
-> 格式：`DataPlotter(..., lines=LineStyle(...), frame=FrameStyle(...), legend=LegendStyle(...), ticks=TickStyle(...))`，
-> 默认无框（双 Y 轴除外）、显示次刻度，见下文「样式对象」。
+省略 `load_data()` 的路径参数可打开文件选择对话框。取消选择会引发 `NoFileSelected`。从仓库根目录运行示例时，项目的 `matplotlibrc` 默认使用 `TkAgg`。
 
-> 根目录的 `matplotlibrc`（`backend: TkAgg`）只在从项目根目录启动 Python 时生效，从其他目录启动时不会读取它。
+## 输入数据
 
-## 数据格式
+支持 `.csv`、`.xlsx`、`.xls`、`.txt` 和 `.dat` 文件，扩展名不区分大小写。文件按列横向排列样品。每个样品占相同列数，第一列为标识列，其余为数据列。首行记录样品名和通道单位，从第二行起读取数据。下表的表头用于说明列的用途，无需写入文件。
 
-输入文件按固定列宽排列，每个样品占「标识列 + 数据列」：
+| 标识列 | 通道 0 | 通道 1 | 标识列 | 通道 0 | 通道 1 |
+| --- | --- | --- | --- | --- | --- |
+| Sample 1 | Hz | Ohm | Sample 2 | Hz | Ohm |
+| | 1000 | 50.2 | | 1000 | 48.7 |
+| | 2000 | 44.9 | | 2000 | 42.1 |
 
-```
-| 标识列  | 数据列1 | 数据列2 | 数据列3 | 标识列  | 数据列1 | ...
-|---------|---------|---------|---------|---------|---------|----
-| Sample1 | Hz      | Ohm     | Ohm     | Sample2 | Hz      | ...  <- 第0行：单位
-| -       | 1000    | 50.2    | -10.5   | -       | 1000    | ...  <- 第1行起：数据
-```
+这个示例对应 `columns_per_sample=3`。同一通道在各样品中的单位应一致。`Dataloader.load_data()` 返回 `DataSet`，其中 `data` 是数值矩阵，`names`、`units`、`sample_idx` 和 `channel_idx` 分别记录各列的样品名、单位、样品号和通道号。
 
-## 核心模块
+### 选择与变换
 
-### Dataloader - 数据加载器
+`DataProcessLayer.select()` 选择数据列，`by()` 可对本次选择的结果继续筛选。通过 `Selected_data` 取得结果。
 
 ```python
-from plotlib.dataloader import Dataloader
+from plotlib import DataProcessLayer
 
-loader = Dataloader(columns_per_sample=6)   # 每个样品的列数（含标识列），必填
-data = loader.load_data('piezo.csv')       # 直接读这个文件（.csv / .xlsx / .xls / .txt / .dat，不区分大小写）
-data = loader.load_data()                  # 不传路径：弹出文件选择对话框；取消选择抛 NoFileSelected
-
-# 返回 DataSet 对象，包含：
-# - data: np.ndarray        数值矩阵
-# - names: list[str]        各列的样品名
-# - units: list[str]        各列的单位
-# - sample_idx: list[int]   各列所属的样品号
-# - channel_idx: list[int]  各列在样品内的通道号
+layer = DataProcessLayer(data)
+selected = layer.select("samples", [0, 1]).by("Ohm").Selected_data
 ```
 
-### 逐样品遍历与变换
+选择条件可以是 `"all"`、`"samples"` 加样品号序列、列名、单位或列索引。传入多个条件时按输入顺序组合选列。
 
-`for sample in dataset` 逐样品遍历，每次得到一个样品的子 `DataSet`（等同于 `dataset.iter('samples')`）。
-逐样品变换时，每个样品各用一个 `DataTransformer` 计算，再拼回一个 `DataSet`；结果仍按原样品号对应：
+`for sample in dataset` 逐样品返回子数据集，等同于 `dataset.iter("samples")`。`dataset.column` 提供按列访问的视图，也可以通过 `dataset.iter()` 按名称、单位或通道遍历。
 
 ```python
 from plotlib import DataSet, DataTransformer
 
 impedance = DataSet()
-for sample in selected:                     # selected：选好列的 DataSet
-    impedance.expandata(DataTransformer(sample).Norm(norm_unit='|Z|(ohm)'))
+for sample in selected:
+    result = DataTransformer(sample).Norm(norm_unit="|Z|(ohm)")
+    impedance.expandata(result)
 ```
 
-逐列遍历用 `dataset.column`；按名字、单位、通道遍历用 `dataset.iter('names' / 'units' / 'channels')`。
-（与 `Group.apply` 的区别：那里是一组样品一起算，每个分组的结果是一个新样品。）
+`DataTransformer.apply()` 接受自定义计算函数。需要把同一分组中的多个样品作为一组输入时，可使用 `Group.apply()`，每个分组生成一个结果样品。
 
-### DataPlotter - 绘图器
+## 绘图
 
-#### plot_multiline() - 多线图
+| 方法 | 用途 | 默认尺寸（英寸） |
+| --- | --- | --- |
+| `plot_multiline()` | 在同一坐标系中绘制所有样品 | 10 × 8 |
+| `plot_groups()` | 按组绘制。`merge_groups=True` 时将各组合并到同一张图 | 16 × 12 |
+| `plot_xy()` | 每个样品一张图，显示两个通道之间的关系 | 12 × 8 |
+| `plot_dual_y()` | 每个样品一张双 Y 轴图，左右曲线共用 X 轴 | 12 × 8 |
 
-将所有样品绘制在同一坐标系：
+`DataPlotter(figsize=(宽, 高), dpi=100)` 可统一指定图尺寸和绘图分辨率。`plotrange` 可限制每条曲线使用的数据点数。四种绘图方法均返回绘图器自身，绘图结果通过 `plotter.figures` 获取，每项是一个 `DrawnFigure`。例如，`plot_multiline()` 的结果可通过 `plotter.figures["main"].fig` 获取。
+
+### 分组绘图
+
+`Group` 在创建时校验样品号。分组对象与绘图器使用同一个 `DataSet`。
 
 ```python
-DataPlotter(
-    dataset=data,
-    channel_x=0,  # X轴数据的通道号
-    channel_y=1   # Y轴数据的通道号
-).plot_multiline(
-    axes_formatter=my_formatter,  # 可选：坐标轴格式化
-    neglog_y=True            # 可选：Y轴负对数显示
+from plotlib import DataPlotter, Group
+
+groups = Group(data, {
+    "Group A": {"num": [0, 1], "linestyle": "solid"},
+    "Group B": {"num": [2, 3], "linestyle": "dash", "marker": "circle", "color": "red"},
+})
+
+plotter = DataPlotter(data, groups=groups, channel_x=0, channel_y=1)
+plotter.plot_groups(merge_groups=False, legend_title="{name}")
+```
+
+分组线型适用于折线，标记适用于折线和散点，颜色适用于所有图形类型。分组颜色会应用到组内所有样品。
+合并绘图时，重复出现的样品采用第一个所属分组的样式。未指定分组颜色时，合并图按各组首个样品的颜色配色，独立分组图按样品配色。
+
+### 双 Y 轴和图例
+
+```python
+DataPlotter(data).plot_dual_y(
+    left=(0, 2),    # 左侧曲线的 X、Y 通道
+    right=(3, 4),   # 右侧曲线的 X、Y 通道
 )
 ```
 
-#### plot_groups() - 分组绘图
+双 Y 轴图的两条曲线可以取自不同的 X 通道，这些通道的数据应能在同一 X 轴上解释。默认将左、右 Y 轴及其对应曲线分别设为红色和蓝色，整图使用一个图例。可通过 `right_axes_formatter` 或 `right_lines_formatter` 单独设置右侧，图例使用 `legend_formatter`。
 
-按分组绘制，支持分离或合并模式。分组先用 `Group` 创建（创建时校验样品号），绘图器只接受 `Group` 对象：
+四种绘图方法均支持 `legend_title`。分组独立绘制时，`{name}` 替换为组名。`plot_xy()` 和 `plot_dual_y()` 将它替换为样品名。多线图和合并分组图会原样显示传入的文本。双 Y 轴图默认使用样品名作为图例标题，传入 `legend_title=None` 可隐藏标题。
+
+## 样式与格式化
+
+通过 `DataPlotter` 设置全局样式，通过格式化器更新图中指定坐标轴、曲线和图例。每层只覆盖明确提供的字段。样式优先级由低到高依次为库默认值、版式预设、`DataPlotter` 全局设置、分组样式和格式化器。
+
+| 样式对象 | 主要字段 | 使用位置 |
+| --- | --- | --- |
+| `LineStyle` | `width`、`color`、`linestyle`、`marker`、`marker_size` | `DataPlotter(lines=...)` 和 `make_lines_formatter()`。全局颜色由样品配色决定，单组或单轴曲线颜色可单独配置 |
+| `AxisStyle` | `scale`、`limits`、`format`、`scaler`、`color` | `make_axes_formatter(x=..., y=...)` |
+| `FrameStyle` | `width`、`top`、`right` | `DataPlotter(frame=...)` 和 `make_axes_formatter(frame=...)` |
+| `LegendStyle` | `position`、`font_size`、`frame`、`draggable` | `DataPlotter(legend=...)` 和 `make_legend_formatter()` |
+| `TickStyle` | 主、次刻度的方向、尺寸及标签 | `DataPlotter(ticks=...)` 和 `make_axes_formatter(ticks=...)` |
+
+线宽、长度和字号以磅为单位。Plotly 按 `dpi` 将它们转换为像素，例如默认的 10 × 8 英寸多线图对应 1000 × 800 像素。
+默认线宽和轴线宽度均为 3 磅，图例字号为 10 磅。双 Y 轴图默认显示完整边框。
+
+### 样式取值
+
+- 线型可选 `'solid'`、`'dash'`、`'dot'`、`'dashdot'`，也可以用 `(3, 5)` 等元组自定义虚线。虚线段长和间隔以线宽的倍数表示。
+- 标记可选 `'circle'`、`'square'`、`'triangle-up'`、`'triangle-down'`、`'diamond'`、`'cross'` 和 `'x'`。
+- 颜色支持 CSS 颜色名、`'#rrggbb'` 或由三个 0–255 整数组成的 RGB 元组。
+- 图内图例位置支持 `'upper right'`、`'upper left'`、`'lower right'`、`'lower left'`、`'upper center'`、`'lower center'`、`'center left'`、`'center right'`、`'center'` 和 `'best'`。图外支持 `'outside right'` 和 `'outside top right'`。
+
+PlotLib 会把这些跨后端取值转换为绘图库的原生参数。无效取值会引发异常。
+
+### 刻度
+
+| 字段 | 含义 | 默认 |
+| --- | --- | --- |
+| `direction` | 主、次刻度朝外 `'out'` 或朝内 `'in'` | `'out'` |
+| `length` / `width` | 主刻度的长度和线宽 | 6 / 3 磅 |
+| `minor` | 是否显示次刻度线 | `True` |
+| `minor_length` / `minor_width` | 次刻度的长度和线宽 | 3 / 3 磅 |
+| `label_font` / `label_size` / `label_pad` | 刻度标签的字体、字号及与刻度线的间距 | 字体、字号沿用全局设置，间距采用后端默认值 |
+| `minor_labels` | `'none'` 隐藏标签，`'short'` 在对数轴显示首位数字，`'full'` 显示完整数值 | `'none'` |
+| `minor_label_font` / `minor_label_size` / `minor_label_pad` | 单独设置次刻度标签的字体、字号和间距，仅 Matplotlib 支持 | 沿用主刻度标签样式 |
+
+Plotly 仅在对数轴上支持次刻度标签。对数轴同时使用显式 `AxisStyle.format` 和 `minor_labels='none'` 时，PlotLib 默认每个数量级放置一个主刻度。局部放大到不含整数量级的范围时，可能看不到主刻度标签。若要自定义主刻度间距，可在 Plotly 的 `custom` 回调中设置 `dtick` 或 `tickmode`。Plotly 对数轴的显式格式与 `minor_labels='short'` 同时使用会在绘图时引发 `ValueError`。
+
+### 格式化器
 
 ```python
-from plotlib.group import Group
-
-# 定义分组配置：{分组名: {'num': [样品号, ...], 其余字段...}}
-data_groups = {
-    'Group A': {'num': [0, 1, 2], 'linestyle': 'solid'},
-    'Group B': {'num': [3, 4, 5], 'linestyle': 'dash', 'marker': 'circle', 'color': 'red'},
-}
-groups = Group(data, data_groups)   # 与绘图器使用同一个数据集
-
-DataPlotter(
-    dataset=data,
-    groups=groups,
-    channel_x=0,
-    channel_y=1
-).plot_groups(
-    merge_groups=False,  # False: 每组单独一张图; True: 合并到一张图
-    lines_formatter=my_lines_formatter
+from plotlib import (
+    AxisStyle, DataPlotter, FrameStyle, LegendStyle, LineStyle, TickStyle,
+    make_axes_formatter, make_legend_formatter, make_lines_formatter,
 )
-```
-
-分组的 `linestyle` / `marker` / `color` 写了就应用（两种模式一样）：`linestyle` 只对折线，`marker` 对折线和散点，
-`color` 对所有画法；`color` 写了时这组所有样品都用它；优先级：默认样式 < 分组样式 < `lines_formatter`。
-
-#### 图例标题（四种绘图方法都有 `legend_title` 参数）
-
-默认不加（双 Y 轴除外，见下）。写固定文字在任何图里都照用；`'{name}'` 会换成每张图自己的名字：
-`plot_xy` / `plot_dual_y` 是样品名，`plot_groups` 分离模式是组名；只有一张图（多线图、合并模式）时没有这个名字，原样保留。
-
-```python
-plotter.plot_groups(legend_title='Group {name}')     # 每组一张图：Group A、Group B
-plotter.plot_multiline(legend_title='S1 (highlighted)')
-```
-
-#### 样式的标准写法
-
-分组配置、样式对象和格式化器只接受一套与后端无关的标准写法
-（`src/plotlib/style.py`），由 matplotlib / Plotly 各自翻译；`'--'`、`'o'` 这类后端写法会直接报错。
-
-| 字段 | 标准写法 |
-|---|---|
-| 线型 | `'solid'`、`'dash'`、`'dot'`、`'dashdot'`；或自定义虚线 `(实线长, 空白长, ...)`，单位是线宽的倍数 |
-| 标记 | `'circle'`、`'square'`、`'triangle-up'`、`'triangle-down'`、`'diamond'`、`'cross'`、`'x'` |
-| 颜色 | CSS 颜色名（W3C 标准 148 个，如 `'red'`；注意 `'green'` 是深绿，纯绿叫 `'lime'`）、`'#rrggbb'`、RGB 三个 0~255 的整数 |
-| 图例位置 | 图内 `'upper right'`、`'upper left'`、`'lower right'`、`'lower left'`、`'upper center'`、`'lower center'`、`'center left'`、`'center right'`、`'center'`、`'best'`；图外 `'outside right'`、`'outside top right'` |
-
-#### 样式对象（线、轴、边框、图例、刻度）
-
-格式设置按主题打包成 5 个样式对象（`from plotlib import LineStyle, AxisStyle, FrameStyle, LegendStyle, TickStyle`）。
-长度、宽度、字号的单位都是磅，Plotly 按 `dpi` 换成像素；**只写要改的字段**，没写的（`None`）沿用下一层：
-
-**库默认 < 版式预设 < `DataPlotter(...)` 全局 < 分组样式 < 单根轴 / 单条线的格式化器**
-
-全局写了的盖过版式预设（如 `DataPlotter(frame=FrameStyle(top=True))` 让所有版式都画上边框）。
-
-```python
-from plotlib import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
-
-plotter = DataPlotter(data,
-                      lines=LineStyle(width=2),                      # 所有图的线
-                      frame=FrameStyle(width=2),                     # 所有图的边框
-                      legend=LegendStyle(font_size=12),              # 所有图的图例
-                      ticks=TickStyle(length=8, minor_length=4))     # 所有图的刻度
-right = make_axes_formatter(y=AxisStyle(limits=(0, None)), ticks=TickStyle(minor=False))   # 只改这一根轴
-plotter.plot_dual_y(right_axes_formatter=right)
-```
-
-| 对象 | 字段 | 库默认 | 用在 |
-|---|---|---|---|
-| `LineStyle` 线 | `width`、`color`、`linestyle`、`marker`、`marker_size` | 线宽 3、实线、标记 6 | `DataPlotter(lines=)`（不收颜色：颜色按样品配色）、`make_lines_formatter(LineStyle(...))`；分组配置的 `linestyle` / `marker` / `color` 也装进它 |
-| `AxisStyle` 一个方向的轴 | `scale`（`'linear'` / `'log'`，matplotlib 另有 `'symlog'` / `'logit'`）、`limits=(下限, 上限)`（某侧不限写 `None`）、`format`（`'{x:.2f}'`）、`scaler`（显示值 = 刻度值 × scaler，只有 matplotlib）、`color`（轴标题、刻度、轴线同色） | 不改 | `make_axes_formatter(x=..., y=...)`；版式预设的刻度格式和左红右蓝 |
-| `FrameStyle` 边框 | `width`（轴线宽）、`top` / `right`（画不画上、右边） | 线宽 3、**无框**；双 Y 轴预设画完整的框 | `DataPlotter(frame=)`、`make_axes_formatter(frame=)` |
-| `LegendStyle` 图例 | `position`（写法见上表）、`font_size`、`frame`（边框和白底）、`draggable`（只有 matplotlib） | 字号 10、无边框；位置由版式预设定 | `DataPlotter(legend=)`、`make_legend_formatter(LegendStyle(...))` |
-| `TickStyle` 刻度 | 见下表 | 见下表 | `DataPlotter(ticks=)`、`make_axes_formatter(ticks=)` |
-
-2026-11-20 样式对象化起，旧参数不再接受：`line_width` / `linestyle` → `lines=LineStyle(width=, linestyle=)`，`axis_width` → `frame=FrameStyle(width=)`，
-`legend_font_size` → `legend=LegendStyle(font_size=)`，`tick_width` → `ticks=TickStyle(width=)`。
-
-**刻度 `TickStyle` 的字段：**
-
-| 字段 | 含义 | 默认 | 说明 |
-|---|---|---|---|
-| `direction` | 朝向 `'out'` / `'in'` | `'out'` | 主、次刻度一起 |
-| `length` / `width` | 主刻度长、宽 | 6 / 3 | 原 `DataPlotter(tick_width=...)` 并入 `width` |
-| `minor` | 是否显示次刻度 | `True` | 线性轴、对数轴都显示 |
-| `minor_length` / `minor_width` | 次刻度长、宽 | 3 / 3 | |
-| `label_font` / `label_size` | 刻度文字的字体、字号 | 沿用 `font_family` / `font_size` | |
-| `label_pad` | 刻度文字离刻度线的距离 | 后端默认 | |
-| `minor_labels` | 次刻度写什么：`'none'` / `'short'`（对数轴只写首位数字 2、5）/ `'full'`（完整数值） | `'none'` | `'short'` 只对对数轴；Plotly 线性轴上次刻度不写文字 |
-| `minor_label_font` / `minor_label_size` / `minor_label_pad` | 次刻度文字单独的字体、字号、间距 | 与主刻度文字相同 | **只有 matplotlib**，Plotly 下报错（Plotly 的次刻度没有文字属性；对数轴的 `'short'` 由 Plotly 自动画小一号） |
-
-单轴覆盖时，左轴回调连 X 轴一起改；双 Y 轴的右轴回调里，刻度、边框只改右侧（右侧 Y 轴、右轴自己的轴线），
-`x=AxisStyle(...)` 作用在左右共用的 X 轴上。
-
-#### plot_xy() - x-y 单线图（原 subplotter_yy）
-
-每个样品一张图、一条线，绘制两个通道的关系（如 Nyquist 图）；线用 matplotlib 默认色：
-
-```python
-DataPlotter(dataset=data).plot_xy(
-    channel_x=1,  # X方向的Y变量
-    channel_y=2,  # Y方向的Y变量
-    neglog_y=True
-)
-```
-
-#### plot_dual_y() - 双 Y 轴图
-
-每个样品一张图，左右两根 Y 轴共用 X 轴（左红右蓝），画完整的框。图例放在图外上方、右对齐，两条线都在里面，
-每条写自己的单位，图例标题是样品名（`legend_title='{name}'`，传 `None` 不加）：
-
-```python
-DataPlotter(dataset=data).plot_dual_y(
-    left=(0, 1),    # 左线：(X 通道, Y 通道)
-    right=(0, 2),   # 右线：(X 通道, Y 通道)
-    right_axes_formatter=my_right_axis_formatter,       # 右轴的回调；左轴用 axes_formatter
-    figure_formatter=lambda fig, axes: ...,             # 整图回调：axes = {'left': ax1, 'right': ax2}
-)
-```
-
-图例只有一个，归 `legend_formatter`；给 `right_legend_formatter` 会报错。
-
-### DataProcessLayer - 数据选择器
-
-链式语法筛选数据列：
-
-```python
-from plotlib.processor import DataProcessLayer
-
-layer = DataProcessLayer(data)
-
-# 选择全部数据
-layer.select('all').Selected_data
-
-# 按样品号选择（关键字必须写成 'samples'）
-layer.select('samples', [0, 1, 2]).Selected_data
-
-# 按单位筛选
-layer.select('Pa').Selected_data
-
-# 链式二次筛选
-layer.select('all').by(0, 1, 2).Selected_data
-
-# 混合选择
-layer.select('samples', [0, 1], 'Ohm', (3, 4, 5)).Selected_data
-```
-
-### Formatters - 格式化器
-
-#### 坐标轴格式化器
-
-三个工厂的参数都是样式对象（见上文「样式对象」），**只改写了的字段**，没写的沿用全局设置和版式预设
-（比如只给 `x=AxisStyle(scale='log')` 时，Y 轴仍是预设的刻度格式）。`custom` 是自定义回调列表，收各后端的原生对象。
-
-```python
-from plotlib import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
-from plotlib.formatters import make_axes_formatter, make_legend_formatter, make_lines_formatter
 
 axes_fmt = make_axes_formatter(
-    x=AxisStyle(scale='log', limits=(0, 100), format='{x:.2e}'),   # 刻度类型、范围、刻度格式
-    y=AxisStyle(limits=(0, None), format='{y:.1f}'),
-    frame=FrameStyle(top=True, right=True),     # 这根轴画完整的框
-    ticks=TickStyle(length=10),                 # 这根轴的刻度
-    custom=[lambda ax, fig: ax.grid(True)],     # 自定义回调：matplotlib (ax, fig)，Plotly (轴名, fig)
+    x=AxisStyle(scale="log", limits=(0.001, 100), format="{x:.2e}"),
+    y=AxisStyle(limits=(0, None), format="{y:.1f}"),
+    frame=FrameStyle(top=True, right=True),
+    custom=[lambda ax, fig: ax.grid(True)],
 )
-lines_fmt = make_lines_formatter(LineStyle(width=2, color='red', linestyle='dash', marker='circle'),
-                                 custom=[lambda line: line.set_alpha(0.7)])
-legend_fmt = make_legend_formatter(LegendStyle(position='upper right', font_size=12, frame=False, draggable=True))
+lines_fmt = make_lines_formatter(LineStyle(width=2, linestyle="dash", marker="circle"))
+legend_fmt = make_legend_formatter(LegendStyle(position="upper right", font_size=12))
+
+DataPlotter(data, ticks=TickStyle(length=8)).plot_multiline(
+    axes_formatter=axes_fmt,
+    lines_formatter=lines_fmt,
+    legend_formatter=legend_fmt,
+)
 ```
 
-## 交互图与 HTML 导出（Plotly）
+`AxisStyle.limits` 使用数据坐标，`None` 表示该侧边界自动计算。对数轴的显式边界必须为正值。`AxisStyle.scaler` 只缩放 Matplotlib 的刻度显示值。
 
-需要可选依赖 `pip install -e ".[interactive]"`。交互图和静态图是**同一个入口**：`DataPlotter(..., backend='plotly')`，
-四种绘图方法、分组规则、结果形状（`figures = {key: DrawnFigure}`）都与 matplotlib 相同，只是画成 Plotly 的 `go.Figure`。
-用法与 `scripts/piezo_interactive.py` 一致：
+坐标轴格式化器在 Matplotlib 中接收 `(ax, fig)`，在 Plotly 中接收 `(轴名, fig)`，例如 `('yaxis2', fig)`。曲线和图例格式化器分别接收对象序列。通过工厂的 `custom` 参数传入的曲线或图例回调，会在样式应用后逐个接收原生对象。同类回调可用 `combine_formatters()` 按顺序组合。
+
+`figure_formatter(fig, axes)` 在各轴回调之后执行。`axes` 按 `'left'` 和 `'right'` 索引，值为 Matplotlib 的轴对象或 Plotly 的轴名。
+
+## Plotly 交互图与 HTML 导出
+
+安装 `interactive` 后，可使用 `backend='plotly'` 生成交互图。格式化器也应指定相同的后端。
 
 ```python
-from plotlib.dataloader import Dataloader
-from plotlib.plotter import DataPlotter
-from plotlib.formatters import make_axes_formatter
+from plotlib import AxisStyle, Dataloader, DataPlotter, make_axes_formatter
 from plotlib.html_export import write_fit_html
-from plotlib.plot_spec import AxisStyle
 
-data = Dataloader(columns_per_sample=6).load_data()
-
-# Plotly 版坐标轴格式化器：参数与 matplotlib 版相同，另加 backend="plotly"
-axes_fmt = make_axes_formatter(x=AxisStyle(scale='log', limits=(0.001, None), format='{x:.0e}'), backend="plotly")
-
-plot = DataPlotter(
-    dataset=data,   # 分组参数 groups、外观参数、figsize、dpi 都与 matplotlib 后端相同
-    plotrange=300,
-    channel_x=2,   # Displacement
-    channel_y=4,   # Voltage
-    backend='plotly',
+data = Dataloader(columns_per_sample=6).load_data("piezo.csv")
+axes_fmt = make_axes_formatter(
+    x=AxisStyle(scale="log", limits=(0.001, None), format="{x:.0e}"),
+    backend="plotly",
 )
-# 每个样品画成一条曲线，再加一个控制曲线显示的滑块
-fig = plot.plot_multiline(axes_formatter=axes_fmt).add_slider(mode="cumulative")
-
-# 导出随窗口等比缩放的 HTML（嵌入 PPT 等页面时不出现滚动条）
+plotter = DataPlotter(data, channel_x=2, channel_y=4, plotrange=300, backend="plotly")
+fig = plotter.plot_multiline(axes_formatter=axes_fmt).add_slider(mode="cumulative")
 write_fit_html(fig, "plot.html", title="压电极化测试")
 ```
 
-- **多页**：一次画出多张图的方法（分组分离模式、`plot_xy`、`plot_dual_y`）在 Plotly 里画成**一个 Figure 多页**，
-  每页就是 matplotlib 对应的那张图；刚画完只显示第一页。`figures` 仍按页登记 `{key: DrawnFigure}`，各页共用同一个 `fig`。
-- **滑块**（只有 Plotly 后端有，返回 `go.Figure`）：
-  - `add_slider(mode=...)`：曲线滑块，一条线一档，用于一页图（`plot_multiline`、合并模式的 `plot_groups`）；默认 `"cumulative"`；
-  - `add_page_slider(mode=...)`：翻页滑块，一页一档，用于多页图；档位标签是组名 / 样品名，翻页时标题和图例标题跟着换；默认 `"single"`；
-  - 两种 `mode` 一样：`"single"` 每档只显示当前这一条 / 一页；`"cumulative"` 显示第一条 / 页到当前。用错（一页图用翻页滑块，或反过来）会报错并提示该用哪个。
-  - 档位名称太长、放不下时，刻度标签自动隐藏；`slider_formatter=fn` 最后执行，可改前缀等（翻页滑块默认不加前缀）。
-  - 滑块只管计划画出的曲线：`figure_formatter` 里加的参考线等不分档，每一档都保持原来的显隐。
-- **尺寸与字号**：`figsize`（英寸）和字号、线宽（磅）按 `dpi`（默认 100）换成像素，与 matplotlib 后端画出来比例一致；
-  例如多线图默认 (10, 8) 英寸 → 1000 × 800 像素，字号 22 磅 → 约 31 像素。
-- **默认排版**与 matplotlib 共用排版预设（`layouts.py`）：图例位置与标题、刻度格式、双 Y 轴左红右蓝；双 Y 轴的右轴是 `yaxis2`。
-- **自定义外观**：按轴回调与 matplotlib 形状对应，只拿到这根轴自己的东西：`axes_formatter(轴名, fig)`（如 `('yaxis2', fig)`）、
-  `lines_formatter(traces)`（这根轴上的 trace）、`legend_formatter([fig.layout.legend])`；所以 `right_axes_formatter` 只改右轴和右线。
-  一张图只有一个图例（归左轴），给右轴配图例回调会报错。
-  整图回调 `figure_formatter(fig, axes)` 里的 `axes` 是 Plotly 配置里的轴名 `{'left': 'yaxis', 'right': 'yaxis2'}`（用 `fig.layout[axes['right']]` 修改右轴）。
-  多页图的回调对整个 Figure 只调一次（各页共用一套轴），线回调拿到这根轴上所有页的线。
-  `add_slider(slider_formatter=fn)` 中 `fn(slider)` 原地修改滑块。同一种回调可用 `combine_formatters(...)` 合成一个（两个后端都可以）。
-- **Plotly 版格式化器的限制**：不支持 `AxisStyle.scaler`；刻度类型只支持 `'linear'` 和 `'log'`；
-  刻度格式只支持 `'{x:.Nf}'`、`'{x:.Ne}'`、`'{x:.Ng}'`、`'{x:.N%}'`；次刻度文字不能单独设字号等；图例拖动在显示时设置。
-  不支持的设置在创建格式化器时直接报错。
-  `AxisStyle.limits` 与 matplotlib 一样写数据值（对数轴也是，库按轴的实际刻度类型换算）；刻度类型和范围分在几个格式化器里设、先后顺序不同，结果都一样。
-- **双 Y 轴的右轴**按自己的数据选刻度（Plotly 对叠加的轴默认让刻度位置对齐左轴，刻度值会不整齐；与 matplotlib 的 twinx 一致）。
-- **HTML 导出** `write_fit_html(fig, path, side_html=None, side_width=300, gap=24, title=..., include_plotlyjs=True)`：
-  - 页面按图的固定尺寸排版（Plotly 后端按 `figsize × dpi` 定尺寸，多线图默认 1000 × 800），打开时按窗口大小整体等比缩放并居中；
-  - `include_plotlyjs=True` 把 Plotly.js 内嵌进文件（约 4.5 MB），离线也能打开；
-  - `side_html` 在图的右侧附加一段 HTML（可包含自己的 `<style>`、`<script>`）。面板脚本可以通过 `.plotly-graph-div` 找到图、
-    监听 `plotly_sliderchange` 事件与滑块联动，示例见 `scripts/assets/piezo_panel.html`（按档位名称是否含 `rev` 切换示意图）。
+### 滑块和分页
 
-## 完整示例
+`add_slider()` 为单页图添加曲线滑块，一个档位对应一条曲线，默认模式为 `'cumulative'`。
+分组独立绘制、`plot_xy()` 和 `plot_dual_y()` 的多页结果可以用 `add_page_slider()` 翻页，默认模式为 `'single'`。多页图共用坐标轴，格式化回调作用于整个 Figure。
 
-### EIS 电化学阻抗谱
+`'single'` 只显示当前曲线或页面，`'cumulative'` 从第一档累加到当前档。滑块方法均返回 `go.Figure`，可用 `slider_formatter` 调整外观。整图回调附加的参考线等保留各自的可见性。
+
+### 后端限制
+
+Plotly 支持 `'linear'` 和 `'log'`，刻度格式支持 `.Nf`、`.Ne`、`.Ng` 和 `.N%`，其中 `N` 为精度。`scaler` 和单独设置次刻度标签样式仅由 Matplotlib 支持。Plotly 图例的拖动设置通过 `fig.show(config=...)` 或导出时的 `config` 传入显示端。
+
+### 离线页面
+
+`write_fit_html()` 默认内嵌 Plotly.js。页面按图的固定像素尺寸排版，并随宿主窗口等比缩放和居中。可通过 `side_html` 附加右侧面板，通过 `side_width` 和 `gap` 设置面板宽度和间距。面板脚本可监听 `plotly_sliderchange` 事件。 [联动面板示例](scripts/assets/piezo_panel.html)
+
+## 实验示例
+
+### 电化学阻抗谱
+
+以下示例假设每个样品占 8 列，通道 5 为阻抗实部，通道 6 为阻抗虚部。`neglog_y=True` 会绘制 Y 数据的绝对值，并为刻度标签添加负号。
 
 ```python
-from plotlib.dataloader import Dataloader
-from plotlib.plotter import DataPlotter
-from plotlib.formatters import make_axes_formatter
-from plotlib.group import Group
-from plotlib.plot_spec import AxisStyle
 import matplotlib.pyplot as plt
 
-# 配置
-COLUMNS_PER_SAMPLE = 8  # 每个样品的列数（含 1 列标识）
+from plotlib import AxisStyle, Dataloader, DataPlotter, Group, make_axes_formatter
 
-# 加载数据
-data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
-
-# Nyquist 图格式化器
-nyquist_fmt = make_axes_formatter(
-    x=AxisStyle(scale='linear', format='{x:.1e}'),
-    y=AxisStyle(scale='linear', format='{y:.1e}'),
+data = Dataloader(columns_per_sample=8).load_data("eis.csv")
+axes_fmt = make_axes_formatter(
+    x=AxisStyle(format="{x:.1e}"),
+    y=AxisStyle(format="{y:.1e}"),
 )
-
-# 绘制 Nyquist 图（Z' vs -Z''）
-DataPlotter(
-    dataset=data,
-    channel_x=5,  # Real Z'
-    channel_y=6   # -Imaginary Z''
-).plot_multiline(
-    axes_formatter=nyquist_fmt,
-    neglog_y=True
-)
-
-# 分组绘制
-data_groups = {
-    'Low freq': {'num': [0, 1], 'linestyle': 'solid'},
-    'High freq': {'num': [2, 3], 'linestyle': 'dash'},
-}
-
-DataPlotter(
-    dataset=data,
-    groups=Group(data, data_groups),
-    channel_x=5,
-    channel_y=6
-).plot_groups(
-    axes_formatter=nyquist_fmt,
-    neglog_y=True,
-    merge_groups=False
-)
-
+groups = Group(data, {
+    "Group A": {"num": [0, 1], "linestyle": "solid"},
+    "Group B": {"num": [2, 3], "linestyle": "dash"},
+})
+plotter = DataPlotter(data, groups=groups, channel_x=5, channel_y=6)
+plotter.plot_multiline(axes_formatter=axes_fmt, neglog_y=True)
+plotter.plot_groups(axes_formatter=axes_fmt, neglog_y=True)
 plt.show()
 ```
 
-### 压电测试数据
+### 压电测试
+
+以下示例先绘制位移与电压的关系，再生成一个双 Y 轴图，对照两者随时间的变化。通道 0 和 3 分别是位移记录与电压记录的时间通道。
 
 ```python
-from plotlib.dataloader import Dataloader
-from plotlib.plotter import DataPlotter
-from plotlib.formatters import make_axes_formatter
-from plotlib.plot_spec import AxisStyle
 import matplotlib.pyplot as plt
 
-# 加载数据
-data = Dataloader(columns_per_sample=6).load_data()
+from plotlib import AxisStyle, Dataloader, DataPlotter, make_axes_formatter
 
-# Displacement-Voltage 格式化器
-dv_fmt = make_axes_formatter(
-    x=AxisStyle(scale='log', limits=(0.001, None), format='{x:.1e}'),
-    y=AxisStyle(format='{y:.1e}', scaler=10),   # 刻度文字显示值 = 刻度值 × 10
+data = Dataloader(columns_per_sample=6).load_data("piezo.csv")
+axes_fmt = make_axes_formatter(
+    x=AxisStyle(scale="log", limits=(0.001, None), format="{x:.1e}"),
+    y=AxisStyle(format="{y:.1e}", scaler=10),
 )
-
-# 绘制 D-V 关系图
-DataPlotter(
-    dataset=data,
-    plotrange=299,       # 只绘制前299个点
-    channel_x=2,  # Displacement
-    channel_y=4   # Voltage
-).plot_multiline(axes_formatter=dv_fmt)
-
-# 双轴图：位移和电压随时间变化
-DataPlotter(
-    dataset=data,
-    plotrange=299
-).plot_dual_y(
-    left=(0, 2),    # (Time, Displacement)
-    right=(3, 4),   # (Time, Voltage)
-)
-
+plotter = DataPlotter(data, channel_x=2, channel_y=4, plotrange=299)
+plotter.plot_multiline(axes_formatter=axes_fmt)
+plotter.plot_dual_y(left=(0, 2), right=(3, 4))
 plt.show()
 ```
+
+更多用法见 [实验脚本](scripts/)。
 
 ## 项目结构
 
-```
-PlotLib/
-├── pyproject.toml              # 项目配置与依赖
-├── README.md
-├── matplotlibrc                # matplotlib 后端设置（只在从项目根目录启动时生效）
-├── src/
-│   └── plotlib/                # 唯一的可安装包：import plotlib
-│       ├── __init__.py         # 包入口
-│       ├── dataset.py          # 数据集容器
-│       ├── dataloader.py       # 数据加载器
-│       ├── processor.py        # 数据选择与变换
-│       ├── group.py            # 分组配置解析与分组计算
-│       ├── plotter.py          # DataPlotter：唯一的绘图入口（计划 → 后端 → 结果）
-│       ├── plan.py             # 绘图规则：生成绘图计划（分组、去重、配色、取数）
-│       ├── plot_spec.py        # 绘图约定：样式对象（LineStyle 等 5 个）、计划、结果、外观、回调的数据类型
-│       ├── layouts.py          # 排版预设：每种版式的默认排版，用样式对象写（两个后端共用）；叠加顺序
-│       ├── style.py            # 翻译层：标准写法 / 样式对象 → 各后端原生值（按 dpi 换算）
-│       ├── backends/           # 绘图后端，只管渲染：matplotlib_backend.py、plotly_backend.py、
-│       │                       #   matplotlib_styles.py / plotly_styles.py（应用样式，后端与格式化器共用）
-│       ├── formatters.py       # 格式化器工厂（matplotlib / Plotly）
-│       ├── html_export.py      # 导出随窗口缩放的 HTML 页面
-│       └── templates/ppt_fit_shell.html   # html_export 的页面外壳
-├── scripts/                    # 按实验的分析脚本
-│   ├── eis_bode.py             # EIS 介电谱 Bode 图、电导率比、损耗峰
-│   ├── eis_nyquist.py          # EIS Nyquist 图
-│   ├── piezo.py                # 压电测试（matplotlib）
-│   ├── piezo_interactive.py    # 压电测试交互图 + HTML 导出
-│   ├── tensile.py              # 拉伸测试
-│   ├── select_demo.py          # select().by() 选列演示
-│   └── assets/piezo_panel.html # 交互图右侧的压缩示意面板
-├── tools/                      # 独立 GUI 预处理工具（Tk 与 Qt 两版）
-│   ├── data_collector.py
-│   ├── data_collector_qt.py
-│   ├── data_reorder_app.py
-│   └── data_reorder_qt.py
-├── learning/                   # 学习材料，不属于产品代码
-│   ├── gui/                    # PySide6 学习步骤与路线图
-│   └── testing/LEARNING_PLAN.md   # pytest 学习路线图
-├── docs/                       # 设计文档（BACKEND_PLAN.md、STRUCTURE_REVIEW.md）；api/ 是 Sphinx API 文档的源文件
-└── tests/                      # pytest 测试，说明见 tests/README.md
-```
-
-## 依赖
-
-- Python >= 3.14
-- matplotlib
-- numpy
-- pandas
-- openpyxl（读取 `.xlsx`）
-- xlrd（读取旧版 Excel `.xls`）
-
-可选依赖见「安装」一节，以 `pyproject.toml` 为准。
+| 路径 | 内容 |
+| --- | --- |
+| `src/plotlib/` | 数据读取、选择与变换、分组、绘图计划及公开接口 |
+| `src/plotlib/backends/` | Matplotlib 和 Plotly 渲染及样式应用 |
+| `scripts/` | 阻抗谱、压电和拉伸实验的示例脚本 |
+| `tools/` | 使用 Tk 或 Qt 的数据预处理工具 |
+| `learning/` | GUI 和测试相关的学习示例 |
+| `docs/api/` | Sphinx API 文档源文件 |
+| `tests/` | 自动化测试。 [测试说明](tests/README.md) |
 
 ## API 文档
 
-在线版：<https://sjrbcxk.github.io/PlotLib/> （push 到 main 后由 `.github/workflows/docs.yml` 自动生成并发布）。
-
-每个公开的类和函数都有 numpydoc 格式的文档字符串（参数、返回值、报错、说明、示例），
-在编辑器里悬停就能看到；也可以在本地生成网页版的 API 参考：
+在线文档从源码中的 NumPy 风格文档字符串生成。在仓库根目录可以构建本地版本。
 
 ```bash
-pip install -e ".[docs,interactive]"
+python -m pip install -e ".[docs,interactive]"
 sphinx-build -b html docs/api docs/api/_build/html
 ```
 
-生成后打开 `docs/api/_build/html/index.html`。「API 参考」是使用者需要的全部对象，
-「内部结构」是各模块的说明，供修改源码时查阅。
+构建后打开 `docs/api/_build/html/index.html`。API 参考列出公开对象，内部结构页按模块介绍实现。构建会读取 `pyproject.toml` 中的版本号，并将 `plotlib.__all__` 中尚未登记的公开对象写入 `docs/api/reference.rst`。删除公开对象时，应同步移除对应条目。
 
-更新时不用手动维护文档：网页内容来自文档字符串，改源码即改文档；每次构建前 `docs/api/sync_api.py` 会
-从 `pyproject.toml` 读版本号，并把 `plotlib.__all__` 里新加的名字自动登记进 `docs/api/reference.rst`
-（放到同一模块所在的分节，没有就放进「其他」节，文件会被改动，提交时一起带上）。删掉的对象要手动从 reference.rst 删去，
-否则构建报导入失败。`tests/test_docs_sync.py` 也会检查 reference.rst 是否登记齐全。
+## 许可证
 
-## License
-
-MIT，见 [LICENSE](LICENSE)。
+[MIT](LICENSE)。

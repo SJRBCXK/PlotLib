@@ -1,16 +1,9 @@
 """
-绘图规则：根据数据集、分组和选定的通道生成绘图计划（`~plotlib.plot_spec.FigureSpec` 列表）。
+根据样品、通道和分组生成绘图计划。
 
-- `plan_multiline_figures`、`plan_xy_figures`、`plan_dual_y_figures`：三种版式的计划；
-- `color_positions`、`resolve_groups`、`get_xy_data` 等：生成计划时用到的公共函数。
-
-计划只做「决定」：画几张图、每张图有哪些线、每条线的数据 / 标签 / 颜色位置 / 样式，以及每张图的轴信息。
-本模块不导入任何绘图库；坐标范围、刻度格式、字体、图例位置属于版式预设和 formatter，不放进计划。
-
-Notes
------
-分组规则（去重、先到先得、组首色、样式归属）只写在本模块，两个后端都只读计划、不读 `Group`，
-所以 matplotlib 和 Plotly 画出的图在线条、顺序、颜色来源上完全一致。
+`plan_multiline_figures`、`plan_xy_figures` 和 `plan_dual_y_figures` 返回
+`~plotlib.plot_spec.FigureSpec` 列表。计划记录每张图的轴信息，以及曲线数据、顺序和样式。
+Matplotlib 和 Plotly 共用取数、去重和配色规则，渲染时再应用版式预设和格式化回调。
 """
 from collections.abc import Callable
 from functools import partial
@@ -73,17 +66,16 @@ def resolve_groups(groups: Group | None, dataset: DataSet) -> Group:
         *groups* 是建在另一个数据集上的（按对象身份 ``is`` 判断，内容相同的两个数据集也不算同一个）。
     """
     if groups is None:
-        # 不分组：用空 Group，后面的代码总是面对一个 Group，不用判断 None
+        # 用空 Group 表示未分组的数据。
         groups = Group(dataset, {})
 
     elif not isinstance(groups, Group):
-        # 类型标注只在编辑器里提醒，运行时要自己检查，才能给出清楚的报错
         raise TypeError(
             f"groups 必须是 Group 对象，实际是 {type(groups).__name__}；"
             "请先用 Group(input_dataset, config) 创建。"
         )
     elif groups.dataset is not dataset:
-        # 用 is 判断「是不是同一个对象」：内容相同的两个数据集也不算
+        # 分组配置必须与绘图引用同一个数据集实例。
         raise ValueError("groups 是基于另一个数据集创建的；请基于绘图用的数据集创建 Group。")
 
     return groups
@@ -175,15 +167,12 @@ def channel_unit(dataset: DataSet, channel_idx: int) -> str:
 
 
 # ============================================================================
-# 绘图计划（STRUCTURE_REVIEW 步骤 6.1；6.4 补全为四种绘图方法共用）
-#   只做「决定」：画几张图、每张图有哪些线、每条线的数据 / 标签 / 颜色 / 样式，每张图的轴信息。
-#   不导入任何绘图库；matplotlib 和 Plotly 照着同一份计划画，规则只写这一次。
-#   计划保持「薄」：坐标范围、刻度格式、字体、图例位置不放进来，那是排版预设（layouts.py）和 formatter 的事。
+# 绘图计划
 # ============================================================================
 
 # make_curve 的类型：给出「样品号、分组名、色带位置、样式」，返回一条线
 type MakeCurve = Callable[[int, str | None, float | None, LineStyle], CurveSpec]
-# make_figure 的类型：给出「key、线、这张图自己的名字」，返回一张图（单位、neglog、版式、图例标题写法已绑定）
+# make_figure 接收图键、曲线和名称。单位、负刻度及版式已绑定。
 type MakeFigure = Callable[[str | int, list[CurveSpec], str | None], FigureSpec]
 
 
@@ -227,18 +216,16 @@ def plan_multiline_figures(dataset: DataSet, groups: Group | None, channel_x: in
     -----
     - **不分组**：全部样品按样品号排序，颜色按样品在整个数据集里的排名取。
     - **分离模式**：同一样品可以出现在多张图里，颜色仍按样品取，所以同一样品在各张图里同色。
-    - **合并模式**：同一样品只画一次，归第一个包含它的分组（先到先得，书写顺序就是优先级）；
+    - **合并模式**：同一样品绘制一次，归入配置中第一个包含它的分组。
       同组的线统一用组首色，即该组写在第一位的样品的颜色，只看本组配置。
     """
     _check_not_empty(dataset)
     groups = resolve_groups(groups, dataset)
     positions = color_positions(dataset.sample_idx)   # 按整个数据集排名一次
 
-    # 偏应用：取数设置在一次计划里不变，先绑定好；下面三个函数只管「哪些线、归谁、什么颜色」，
-    # 调用时只传 (样品号, 分组名, 色带位置, 样式)。带过去哪些变量，就是这一行列出的这些。
+    # 预先绑定同一计划共用的数据选择参数。
     make_curve = partial(_make_curve, dataset=dataset, channel_x=channel_x, channel_y=channel_y,
                          plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=kind)
-    # 同理：一次计划里每张图的单位、neglog、版式、图例标题写法都一样，三个函数只传 (key, 线, 这张图的名字)
     make_figure = partial(_make_figure, legend_title=legend_title,
                           x_unit=channel_unit(dataset, channel_x), y_unit=channel_unit(dataset, channel_y),
                           neglog=_neglog_axes(x=neglog_x, y=neglog_y), layout='multiline')
@@ -338,13 +325,13 @@ def plan_dual_y_figures(dataset: DataSet, left: tuple[int, int], right: tuple[in
 
 
 def _check_not_empty(dataset: DataSet) -> None:
-    """数据集为空时报一个看得懂的错，而不是等到取单位时才报「未找到对应的列数据」。"""
+    """在提取数据前检查数据集是否为空。"""
     if len(dataset.sample_idx) == 0:
         raise RuntimeError("数据集为空，无法绘图")
 
 
 def _neglog_axes(**flags: bool) -> frozenset[str]:
-    """把开关 ``x=True, y=False`` 收成 ``frozenset({'x'})``：哪些轴的刻度要补负号。"""
+    """返回需要在刻度标签前添加负号的轴名集合。"""
     return frozenset(axis for axis, on in flags.items() if on)
 
 
@@ -354,7 +341,7 @@ def _make_curve(sample: int, group_name: str | None, color_position: float | Non
                 kind: CurveKind = 'line', axis: Axis = 'left',
                 label_from: Literal['name', 'unit'] = 'name') -> CurveSpec:
     """
-    生成一条线：取数，再连同分组名、色带位置、样式装进 `CurveSpec`。
+    根据样品数据、分组和外观生成 `CurveSpec`。
 
     ``*`` 之后的参数（取数设置、画法、所在轴、标签取样品名还是 Y 的单位）在一次计划里不变，
     由各 ``plan_*`` 用 `functools.partial` 先绑定好，调用处只传前四个。
@@ -375,10 +362,8 @@ def _make_figure(key: str | int, curves: list[CurveSpec], name: str | None, *,
     """
     生成一张图。
 
-    *name* 是这张图自己的名字（每个样品一张图时是样品名，分离模式是组名，只有一张图时为 None），
-    存进 ``FigureSpec.name``，并替换图例标题里的 ``'{name}'``；没有名字时标题原样使用，不报错。
-    ``*`` 之后的参数（图例标题写法、单位、neglog、版式）由各 ``plan_*`` 用 `functools.partial` 绑定，
-    调用处只传前三个。
+    *name* 为样品名或组名，保存到 ``FigureSpec.name``，并替换图例标题中的 ``'{name}'``。
+    *name* 为 ``None`` 时保留原始标题文本。公共图形参数由计划函数预先绑定。
     """
     if legend_title is not None and name is not None:
         legend_title = legend_title.replace('{name}', name)
@@ -408,14 +393,13 @@ def _plan_separate(groups: Group, positions: dict, make_curve: MakeCurve,
 def _plan_merged(groups: Group, positions: dict, make_curve: MakeCurve,
                  make_figure: MakeFigure) -> FigureSpec:
     """合并模式：一张 'main' 图；先算归属，再按归属生成线。"""
-    # 第一步：归属表 {样品号: 分组名}。setdefault 已有就不改 → 先到先得，书写顺序即优先级；
-    # dict 保持插入顺序 → 这张表的顺序就是画线顺序。
+    # 以首次出现为准确定分组，字典的插入顺序即绘制顺序。
     owner: dict[int, str] = {}
     for name in groups:
         for sample in groups.sample_ids(name):
             owner.setdefault(sample, name)
 
-    # 第二步：每条线的颜色用所属分组的组首位置，样式用所属分组写了的样式
+    # 默认颜色取该组首个样品的色带位置，分组样式可覆盖它。
     curves = []
     for sample, name in owner.items():
         head = groups.sample_ids(name)[0]
@@ -424,5 +408,5 @@ def _plan_merged(groups: Group, positions: dict, make_curve: MakeCurve,
 
 
 def _written_style(groups: Group, name: str) -> LineStyle:
-    """该分组写了的样式（线型、标记、颜色），装进 `LineStyle`；保持标准写法、不翻译，没写的字段为 None。"""
+    """用分组中显式指定的线型、标记和颜色构建 `LineStyle`。"""
     return LineStyle(linestyle=groups.linestyle(name), marker=groups.marker(name), color=groups.color(name))

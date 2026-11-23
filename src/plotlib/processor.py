@@ -32,8 +32,7 @@ class TransformMetadata(TypedDict, total=False):
     units : list of str or None
         结果每列的单位，长度等于结果列数。
     sample_idx : int or None
-        结果的样品号，只收一个整数：一次计算只产出一个样品。
-        要拆成几个样品，就逐样品分开算再拼回（``for sample in dataset``）。
+        结果的样品号。一次计算生成一个样品。
     """
 
     names: list[str] | None
@@ -43,9 +42,9 @@ class TransformMetadata(TypedDict, total=False):
 
 class DataProcessLayer:
     """
-    数据选择层：按条件从数据集中选列，结果放在 `Selected_data`。
+    按样品号、列名、单位或位置筛选数据列。
 
-    计算不在这一层：逐样品计算用 `DataTransformer`，按分组计算用 `~plotlib.group.Group.apply`。
+    最近一次筛选的结果保存在 ``Selected_data``，并可通过 `by` 继续筛选。
 
     Attributes
     ----------
@@ -151,8 +150,7 @@ class DataProcessLayer:
 
             if isinstance(var, str):
                 if var == 'all':
-                    # 与其他条件走同一条路径（getdata），结果才会加入已选数据，
-                    # 且在 by('all') 时 initial_idx 仍能追溯到原始数据
+                    # 复用列选择流程，保留 initial_idx 对原始列的引用。
                     Selected_data = self.getdata(
                         varlist_idx=list(range(len(dataset_for_select.names))),
                         father_dataset=dataset_for_select
@@ -163,7 +161,7 @@ class DataProcessLayer:
                     isinstance(select_rc[i+1], list) and\
                     all(isinstance(x, int) for x in select_rc[i+1]):
                         sample_idx_list = list(select_rc[i+1])
-                        # 写错的样品号要报出来，不能静默只选出存在的（1.0 发布前复审）
+                        # 在筛选前校验所有请求的样品号。
                         missing = set(sample_idx_list).difference(dataset_for_select.sample_idx)
                         if missing:
                             raise ValueError(f"找不到样品号：{sorted(missing)}；已有样品号：{sorted(set(dataset_for_select.sample_idx))}")
@@ -194,7 +192,7 @@ class DataProcessLayer:
                     ) #type: ignore
 
                 else:
-                    # 不能静默跳过：否则 Selected_data 还是上一个条件的结果，会被重复追加
+                    # 无效条件必须中止当前选择，以免重复追加前一条件的结果。
                     raise ValueError(f"找不到名称或单位：'{var}'")
 
             elif isinstance(var, int):
@@ -253,7 +251,7 @@ class DataProcessLayer:
         varname : str, optional
             要找的列名或单位，与 *varset* 一起用。
         varlist_idx : list of int, optional
-            要取的列的位置；给了它就不看 *varname*。
+            要提取的列位置，优先于 *varname*。
         varset : list of str, optional
             在哪个列表里找 *varname*：源数据集的 ``names`` 或 ``units``。
         father_dataset : DataSet
@@ -275,7 +273,6 @@ class DataProcessLayer:
         if varset is not None and varlist_idx is None:
             varlist_idx = [i for i, x in enumerate(varset) if x == varname] # type: ignore
 
-        # 如果 varlist_idx 仍然是 None 或为空，抛出异常
         if varlist_idx is None or len(varlist_idx) == 0:
             raise ValueError("必须提供有效的 varname 或 varlist_idx 参数。")
         
@@ -283,8 +280,7 @@ class DataProcessLayer:
             raise ValueError("必须提供有效的 father_dataset 数据集以供选择。")
 
 
-        # 批量提取数据以提高效率
-        # 逻辑修正：如果 initial_idx 为空（根数据集）或等于 absolute_idx（未经过滤），则直接使用当前索引
+        # 根数据集或未经筛选的数据集可直接使用当前列位置。
         f_initial = father_dataset.initial_idx #type: ignore
         if not f_initial or f_initial == father_dataset.local_idx:
             Selected_data.initial_idx = list(varlist_idx) #type: ignore
@@ -338,10 +334,10 @@ class DataProcessLayer:
 
 class DataTransformer:
     """
-    对一个数据集的列做计算，结果带上名字、单位和样品号，成为新的 `DataSet`。
+    变换所选数据列并为结果生成元数据。
 
-    最常见的用法是逐样品计算：对每个样品各建一个 `DataTransformer`，结果仍按原样品号对应，再拼回一个数据集。
-    一组样品一起算（如两个样品做差）请用 `~plotlib.group.Group.apply`。
+    逐样品计算时，可以对每个子数据集创建一个变换器，再按原样品号合并结果。
+    需要在一次回调中分别访问多个样品时，可使用 `~plotlib.group.Group.apply`。
 
     Attributes
     ----------
@@ -393,8 +389,7 @@ class DataTransformer:
         self.column = dataset.column
         self.status = 'ready'
         self.result_dataset = DataSet()
-        # new_sample 时分配的下一个样品号：从「已有最大样品号 + 1」开始，
-        # 不能用样品数推算——样品号可能不连续（如 [0, 3]），按样品数会撞上已有样品
+        # 样品号可能不连续，因此从最大样品号之后开始分配。
         existing = [g for g in dataset.sample_idx if g is not None]
         self._next_new_sample = max(existing) + 1 if existing else 0
 
@@ -425,7 +420,7 @@ class DataTransformer:
         indicies : int or list of int, optional
             参与计算的列的位置（支持负数）；None 表示全部列。
         column : list of Column, optional
-            直接给出参与计算的列，给了它就不看 *indicies*。
+            参与计算的列，优先于 *indicies*。
         input_unit : str, optional
             结果的单位，每列相同。
         new_sample : bool, default: False
@@ -508,7 +503,7 @@ class DataTransformer:
         indicies : int or list of int, optional
             参与计算的列的位置；None 表示全部列。
         column : list of Column, optional
-            直接给出参与计算的列，给了它就不看 *indicies*。
+            参与计算的列，优先于 *indicies*。
         norm_unit : str, optional
             结果的单位；不给时按自动规则（见类说明）。
         new_sample : bool, default: False
@@ -521,7 +516,7 @@ class DataTransformer:
         Returns
         -------
         DataSet
-            一列范数（累加时含之前的结果）。
+            每行的范数构成一列。启用累加时，结果包含同一变换器的历史计算列。
 
         Examples
         --------
@@ -563,8 +558,9 @@ class DataTransformer:
         new_sample: bool = False
         ):
         """
-        `apply` 和 `Norm` 共用的收尾：按自动规则和用户给的值，为计算结果生成名字、单位、样品号，
-        再用 `DataSet.form_array` 装成数据集。优先级：``naming_func`` > 直接给的参数 > 自动规则。
+        合并计算结果的元数据并构建数据集。
+
+        元数据优先采用 ``naming_func`` 的返回值，其次采用显式参数，最后使用自动生成的值。
         """
         _, names, units, sample_idx = self._resolve_input_data(column, indicies)
 
@@ -597,7 +593,7 @@ class DataTransformer:
             if func_units is not None:
                 data_unit = func_units
             if func_sample_idx is not None:
-                # bool 也是 int 的子类，但 True / False 当样品号多半是写错了
+                # 布尔值是 int 的子类，此处显式排除。
                 if isinstance(func_sample_idx, bool) or not isinstance(func_sample_idx, int):
                     raise TypeError(f"naming_func 返回的 sample_idx 只收一个整数（一次计算只产出一个样品），"
                                     f"实际是 {func_sample_idx!r}")
@@ -634,7 +630,7 @@ class DataTransformer:
             return col_data, names, units, sample_idx
 
         if indicies is None:
-            # 交给 func 的必须是副本：func 原地修改（如 data *= 0）不能改到原始数据集
+            # 向计算回调提供副本，隔离原地修改。
             return self.data.copy(), list(self.names), list(self.units), list(self.sample_idx)
 
         # 允许 int / list[int] / tuple[int] / np.ndarray；int 也按列表处理：
@@ -661,8 +657,7 @@ class DataTransformer:
         """
         
         if isinstance(names_input, str):
-            # 与 _auto_units 对 input_unit 的处理一致：单个字符串按列数重复
-            # （直接当列表用会被拆成单个字符：'sum' → ['s', 'u', 'm']）
+            # 将单个名称应用于全部结果列。
             data_name = [names_input] * col_num
         elif names_input is not None:
             data_name = list(names_input)
@@ -710,8 +705,7 @@ class DataTransformer:
         if sample_idx_input is not None:
             data_sample_idx = sample_idx_input
         elif new_sample:
-            # 新样品号要避开输入数据集和已累计的结果：结果里可能有显式写入的样品号（input_sample_idx / naming_func），
-            # 只看输入数据集会撞号，两次结果被并成同一个样品（1.0 发布前复审）
+            # 同时检查已有结果，避免与先前显式指定的样品号冲突。
             in_results = [idx for idx in self.result_dataset.sample_idx if idx is not None]
             data_sample_idx = max(self._next_new_sample, max(in_results, default=-1) + 1)
             self._next_new_sample = data_sample_idx + 1

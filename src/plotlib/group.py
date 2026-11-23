@@ -1,6 +1,5 @@
 """
-分组：`Group` 是若干样品组成的、有名字的集合，用于分组绘图（``DataPlotter.plot_groups``）
-和逐分组计算（`Group.apply`）。
+管理命名的样品分组，用于分组绘图和计算。
 """
 import copy
 from collections.abc import Callable
@@ -15,19 +14,16 @@ from .processor import DataProcessLayer
 from .style import check_color, check_linestyle, check_marker
 
 
-# num 支持的写法：单个整数，或这几种容器
-# （data_reorder_app 生成的配置中，单元素组为 int，连续多元素组为 range）
+# 除单个整数外，num 支持以下序列类型。
 _NUM_CONTAINERS = (list, tuple, range, np.ndarray)
 
-# 有专门读接口的样式字段 → 校验函数。值只收 style.py 的标准写法，原样保存，翻译在后端渲染时做。
-# 其余字段（如 'label'）不检查，原样保存在 options 里。
+# 校验跨后端通用的样式字段。其他选项作为自定义元数据保留。
 _STYLE_CHECKS = {'linestyle': check_linestyle, 'marker': check_marker, 'color': check_color}
 
 
 def _resolve_num(num) -> list[int]:
     """
-    把已经校验过的 ``num`` 转成 ``list[int]``：单个整数变成 ``[n]``，容器逐个转成 Python 的 int。
-    只做转换，不做检查，调用前必须先经过 `_check_group` 的类型与元素检查。
+    将 `_check_group` 校验后的 ``num`` 统一转换为 ``list[int]``。
     """
     if isinstance(num, Integral):
         return [int(num)]
@@ -38,9 +34,8 @@ def _check_group(group_name, group_config, available: set[int]) -> dict:
     """
     校验一个分组的配置，原地把 ``'num'`` 整理成 ``list[int]``，返回 ``{分组名: 该配置}``。
 
-    检查顺序：是不是字典 → 有没有 ``num`` → ``num`` 的类型 → 元素是不是整数 → 是否为空 → 有无重复 →
-    是否都在数据集里 → 样式字段是不是标准写法。*available* 是数据集里现有的样品号，由调用方传入；
-    本函数不读写任何对象的状态（传入的配置除外，其中的 ``num`` 被原地整理）。
+    校验配置结构、样品号和样式字段。*available* 为数据集中的有效样品号。
+    校验成功后将配置中的 ``num`` 原地转换为 ``list[int]``。
 
     Raises
     ------
@@ -64,7 +59,7 @@ def _check_group(group_name, group_config, available: set[int]) -> dict:
             f"数据分组配置错误：'{group_name}' 的 'num' 类型不支持：{type(raw).__name__}"
         )
     if not isinstance(raw, Integral):
-        # 逐个检查元素：直接 int() 会把 1.9 截成 1、把 '2' 转成 2，样品号写错也不报错
+        # 转换为 int 前校验元素类型，避免截断或隐式转换。
         bad = [i for i in raw if not isinstance(i, Integral)]
         if bad:
             raise TypeError(
@@ -73,7 +68,6 @@ def _check_group(group_name, group_config, available: set[int]) -> dict:
 
     num = _resolve_num(raw)
     if not num:
-        # 空分组会在绘图和计算中被静默忽略，必须报错
         raise ValueError(f"数据分组配置错误：'{group_name}' 的 'num' 为空。")
 
     duplicates = [item for item, count in Counter(num).items() if count > 1]
@@ -88,13 +82,13 @@ def _check_group(group_name, group_config, available: set[int]) -> dict:
             f"数据分组配置错误：'{group_name}' 的 'num' 包含不存在的样品号：{missing}，已有样品号：{sorted(available)}"
         )
 
-    # 样式字段：只校验，不改写（与 num 不同，标准写法本身就是统一格式）
+    # 样式值由绘图后端转换，此处仅校验。
     for field, check in _STYLE_CHECKS.items():
         if field in group_config:
             try:
                 check(group_config[field])
             except (TypeError, ValueError) as error:
-                # 保留原来的异常类型，在前面补上分组名和字段名
+                # 保留异常类型，并补充分组名和字段名。
                 raise type(error)(f"数据分组配置错误：'{group_name}' 的 '{field}'：{error}") from error
 
     group_config['num'] = num
@@ -108,28 +102,24 @@ def _check_group(group_name, group_config, available: set[int]) -> dict:
 
 class Group():
     """
-    分组：若干样品组成的、有名字的集合，是分组配置的唯一主人。
+    管理同一数据集中的命名样品分组。
 
-    创建时解析并校验全部分组，之后其他地方只向它要结果，不再自己解析配置。
-
-    - **读**：`names`、``for name in group``、`sample_ids`、`options`、`linestyle` / `marker` / `color`、
-      `to_config`，返回的都是副本；
-    - **改**：`add` / `set` / `delete`，先校验全部、再修改，任何一个分组不合法就一个都不改；
-    - **算**：`apply`，每个分组得到一个新样品。
+    创建时校验所有分组。可通过 `names`、`sample_ids` 和 `options` 查询配置，
+    通过 `add`、`set` 和 `delete` 更新分组。批量更新先完成校验，再应用变更。
+    `apply` 对每个分组执行一次计算，生成一个结果样品。
 
     Notes
     -----
-    **配置写法。** 只接受完整写法 ``{分组名: {'num': [样品号, ...], 其余字段...}}``：
+    配置采用 ``{分组名: {'num': [样品号, ...], 其他字段...}}`` 的形式。
 
-    - ``num``：样品号，可以写单个整数、列表、元组、``range`` 或 numpy 数组，不能为空、不能重复，
-      必须都在数据集里；书写顺序有意义（`apply` 里是 ``slices`` 的顺序，合并绘图时是优先级）；
-    - ``linestyle`` / ``marker`` / ``color``：分组绘图的样式，只收标准写法（如 ``'dash'``、``'circle'``、
-      ``'red'``，见 `plotlib.style`），创建时校验、原样保存；
-    - 其余字段（如 ``'label'``）不检查，原样保存，用 `options` 读取。
+    - ``num`` 接受单个整数、列表、元组、``range`` 或 NumPy 数组。每组至少包含一个样品，
+      且样品号必须存在于数据集中并且互不重复。样品号顺序决定 `apply` 的参数顺序。
+    - ``linestyle``、``marker`` 和 ``color`` 采用 `plotlib.style` 中定义的通用取值。
+    - 其余字段作为自定义选项保留，可通过 `options` 读取。
 
-    **传入的配置会被原地整理。** 每个分组的 ``num`` 被整理成 ``list[int]``，后续处理不再各自解析；
-    增删分组只改 `Group` 自己的外层字典，不会往原字典里加、删分组。`Group` 与传入的字典共用各分组的配置对象，
-    所以创建之后在脚本里直接改分组配置会绕过校验，请用 `set`。
+    `Group` 持有独立的外层字典，与传入的配置共享各分组的内层字典。
+    创建时会原地将内层字典的 ``num`` 转为 ``list[int]``。
+    后续应通过 `set` 更新已有分组，以便校验配置。
 
     Examples
     --------
@@ -162,7 +152,6 @@ class Group():
         """
         self.dataset = dataset
         # 校验并格式化后的配置：{分组名: {'num': list[int], 其余字段...}}
-        # 外层字典是 Group 自己的；下划线开头表示内部数据，请通过下面的方法读写
         self._config: dict[str, dict] = self._validated(group_config)
 
     # ── 内部工具 ───────────────────────────────────────────────
@@ -177,7 +166,7 @@ class Group():
                 "数据分组配置错误：分组配置必须是字典 {分组名: {'num': [...]}}，"
                 f"实际是 {type(group_config).__name__}"
             )
-        # 每次现查数据集里的样品号，不存快照：创建 Group 后 DataSet 还可能被 expandata 扩充
+        # 使用校验时的样品号，以支持数据集创建分组后继续扩展。
         available = set(self.dataset.sample_idx)
         validated: dict[str, dict] = {}
         for name, config in group_config.items():
@@ -203,13 +192,13 @@ class Group():
         return list(self._config)
 
     def __iter__(self):
-        """``for name in group``：按书写顺序遍历分组名，与遍历字典得到键一样；循环里增删分组也不出错。"""
-        # 遍历名字列表的副本：循环里即使调用 add / delete 也不会出现「字典在遍历时被修改」的错误
+        """按配置顺序遍历分组名的快照。"""
+        # 遍历快照，以支持遍历期间更新分组。
         return iter(self.names)
 
     def sample_ids(self, group_name: str) -> list[int]:
         """
-        该分组的样品号，保持书写顺序（顺序就是角色，如 `apply` 里的 ``slices[1] - slices[0]``）。
+        返回指定分组的样品号列表，顺序与分组配置一致。
 
         Raises
         ------
@@ -226,19 +215,17 @@ class Group():
         config = self._require(group_name)
         return {key: copy.deepcopy(value) for key, value in config.items() if key != 'num'}
 
-    # 三个常用样式字段的专门读接口：返回用户写的标准写法（style.py），没写时返回 None。
-    # 翻译成 matplotlib / Plotly 原生值是后端的事，Group 不关心。
 
     def linestyle(self, group_name: str):
-        """该分组写的线型（标准写法，如 ``'dash'`` 或 ``(3, 5)``）；没写时为 None。"""
+        """返回分组线型，如 ``'dash'`` 或 ``(3, 5)``。未设置时返回 ``None``。"""
         return copy.deepcopy(self._require(group_name).get('linestyle'))
 
     def marker(self, group_name: str):
-        """该分组写的标记（标准写法，如 ``'circle'``）；没写时为 None。"""
+        """返回分组标记，如 ``'circle'``。未设置时返回 ``None``。"""
         return copy.deepcopy(self._require(group_name).get('marker'))
 
     def color(self, group_name: str):
-        """该分组写的颜色（CSS 颜色名、``'#rrggbb'`` 或 RGB 元组）；没写时为 None。写了就覆盖这组所有样品的按样品配色。"""
+        """返回应用于组内所有样品的颜色。未设置时返回 ``None``。"""
         return copy.deepcopy(self._require(group_name).get('color'))
 
     def to_config(self) -> dict[str, dict]:
@@ -277,7 +264,7 @@ class Group():
 
     def set(self, group_config: dict) -> Group:
         """
-        整体替换已有分组：旧字段不保留，分组的位置不变。
+        替换已有分组的配置并保留其顺序。
 
         Parameters
         ----------
@@ -300,7 +287,6 @@ class Group():
             raise ValueError(
                 f"数据分组配置错误：分组 {self._quoted(missing)} 不存在；新增分组请用 add。"
             )
-        # 给已有的键重新赋值，字典会保留它原来的位置
         self._config.update(validated)
         return self
 
@@ -327,16 +313,16 @@ class Group():
         naming: Callable | None = None,
     ) -> DataSet:
         """
-        逐分组计算：每个分组里的几个样品一起交给 *callback*，每组得到一个新样品。
+        对每个分组执行计算，并将各组的结果合并为一个数据集。
 
-        对每个分组依次做：选出这组样品的列 →（按 *select* 再筛选）→ 按样品切开、对齐 →
-        调用 *callback* → 生成名字和单位 → 装成一个新样品。用户只需提供计算逻辑和可选的命名逻辑。
+        筛选并对齐输入列后，将每个样品的子数据集传给 *callback*。
+        每个分组的计算结果构成一个新样品。
 
         Parameters
         ----------
         callback : callable
             ``callback(*slices) -> ndarray``。``slices[i]`` 是这组第 i 个样品的子数据集，
-            顺序就是配置里 ``num`` 的书写顺序（顺序即角色，如 ``slices[1] - slices[0]``）；
+            样品顺序与配置中的 ``num`` 一致，例如 ``slices[1] - slices[0]`` 表示第二个样品减第一个样品。
             每个子数据集的列顺序与 *select* 的条件顺序一致。返回形状 ``(行数, 结果列数)`` 的数组
             （标量、一维数组也可以，会整理成二维）。
         select : tuple, optional
@@ -432,8 +418,7 @@ class Group():
                 result_data = result_data.reshape(-1, 1)
             n_cols = result_data.shape[1]
 
-            # 生成命名：提供了 naming 就只用它。
-            # 不能先跑 _auto_naming——它按列号取 slice 的单位，结果列多于输入列时会越界
+            # 命名回调可为新增列提供单位。默认规则依赖输入列的位置。
             if naming is not None:
                 result_names, result_units = naming(slices, result_data)
             else:

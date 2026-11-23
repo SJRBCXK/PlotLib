@@ -395,12 +395,17 @@ def test_bar_colors_follow_plan(sparse_dataset):
 # 负对数刻度（取绝对值在计划里；刻度文字补负号是 matplotlib 的事）
 # ══════════════════════════════════════════════
 def test_neglog_x(eis_dataset):
-    """X 轴负对数：用 Zs''（全负）当 X。"""
+    """
+    X 轴负对数：用 Zs''（全负）当 X。多线图横轴没有预设格式，用的是 matplotlib 默认格式器：
+    它要渲染时收到刻度位置才写得出数字，所以先渲染再看刻度文字。
+    """
     plotter = DataPlotter(eis_dataset, channel_x=ZS_IM, channel_y=ZS_RE)
     m = plotter.plot_multiline(neglog_x=True).figures['main']
 
     np.testing.assert_array_equal(m.artists[0].get_xdata(), [1, 2, 3])
-    assert m.axes['left'].xaxis.get_major_formatter()(2.0, 0) == '-2.00'
+    m.fig.canvas.draw()
+    labels = [label.get_text() for label in m.axes['left'].get_xticklabels() if label.get_text()]
+    assert labels and all(re.fullmatch(r'-\d+(\.\d+)?', text) for text in labels)
 
 
 def test_neglog_both_axes_keep_their_own_format(eis_dataset):
@@ -520,13 +525,12 @@ def test_layout_legend(eis_dataset, layout, legend_loc, draggable):
 
 
 @pytest.mark.parametrize("layout, axis, value, text", [
-    ('multiline', 'x',  1.234,  '1.23'),
     ('multiline', 'y',  1.234,  '1.23'),
     ('xy',        'y',  1.234,  '1.2340'),
     ('dual_y',    'y2', 1.234,  '1.2340'),
 ])
 def test_layout_tick_format(eis_dataset, layout, axis, value, text):
-    """刻度格式：多线图 x、y 两位小数；xy 的 y、双 Y 轴的右轴四位小数。"""
+    """刻度格式：多线图 y 两位小数；xy 的 y、双 Y 轴的右轴四位小数。"""
     _, left, right = draw_layout(eis_dataset, layout)
     target = {'x': left.xaxis, 'y': left.yaxis, 'y2': right.yaxis if right else None}[axis]
     assert target.get_major_formatter()(value, 0) == text
@@ -593,12 +597,16 @@ def test_axes_formatter_keeps_preset_tick_format(eis_dataset):
     """
     轴工厂只改写了的：只把 X 轴改成对数，Y 轴仍是多线图预设的两位小数。
     回归（样式对象化时修）：工厂曾总是调用 set_yscale('linear')，把预设的刻度格式重置成自动格式。
+    多线图预设不给 X 轴写格式（X 轴常改成对数轴，两位小数会把 1e-3 写成 0.00），对数轴用 matplotlib 默认的 10 的幂。
     """
+    from matplotlib.ticker import LogFormatterSciNotation
+
     from plotlib.formatters import make_axes_formatter
 
     ax = DataPlotter(eis_dataset).plot_multiline(
         axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'))).figures['main'].axes['left']
     assert ax.get_xscale() == 'log'
+    assert isinstance(ax.xaxis.get_major_formatter(), LogFormatterSciNotation)
     assert ax.yaxis.get_major_formatter()(1.234, 0) == '1.23'
 
 

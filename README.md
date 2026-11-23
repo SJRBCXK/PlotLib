@@ -496,7 +496,7 @@ PlotLib/
 ├── learning/                   # 学习材料，不属于产品代码
 │   ├── gui/                    # PySide6 学习步骤与路线图
 │   └── testing/LEARNING_PLAN.md   # pytest 学习路线图
-├── docs/                       # 设计文档（BACKEND_PLAN.md、STRUCTURE_REVIEW.md）
+├── docs/                       # 设计文档（BACKEND_PLAN.md、STRUCTURE_REVIEW.md）；api/ 是 Sphinx API 文档的源文件
 └── tests/                      # pytest 测试，说明见 tests/README.md
 ```
 
@@ -510,6 +510,19 @@ PlotLib/
 - xlrd（读取旧版 Excel `.xls`）
 
 可选依赖见「安装」一节，以 `pyproject.toml` 为准。
+
+## API 文档
+
+每个公开的类和函数都有 numpydoc 格式的文档字符串（参数、返回值、报错、说明、示例），
+在编辑器里悬停就能看到；也可以生成网页版的 API 参考：
+
+```bash
+pip install -e ".[docs,interactive]"
+sphinx-build -b html docs/api docs/api/_build/html
+```
+
+生成后打开 `docs/api/_build/html/index.html`。「API 参考」是使用者需要的全部对象，
+「内部结构」是各模块的说明，供修改源码时查阅。
 
 ## License
 

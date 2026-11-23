@@ -1,13 +1,10 @@
 """
-数据文件加载（步骤 7.1 定下的接口）：
+读取按样品排列的数据文件（.csv、.xlsx、.xls、.txt、.dat），得到 `~plotlib.dataset.DataSet`。
 
-    data = Dataloader(columns_per_sample=6).load_data(path)     # 直接读这个文件
-    data = Dataloader(columns_per_sample=6).load_data()         # 不传路径：弹出选择文件对话框
-
-- columns_per_sample：每个样品在文件里占几列（含 1 列标识），必填，不同实验的文件不一样；
-- 取消选择 → NoFileSelected（不再 exit() 退出整个程序）；文件读不了照常是 FileNotFoundError / ValueError；
-- tkinter 只在弹窗时才导入：没有图形界面的环境（服务器、CI）也能直接按路径读；
-- 加载器只记每个样品的列数，读取的中间结果都是局部变量：同一个加载器读多少次都互不影响。
+Examples
+--------
+>>> data = Dataloader(columns_per_sample=6).load_data('piezo.csv')    # 直接读这个文件
+>>> data = Dataloader(columns_per_sample=6).load_data()               # 不传路径：弹出选择文件对话框
 """
 import os
 from pathlib import Path
@@ -24,52 +21,61 @@ SUPPORTED_SUFFIXES = ('.csv', '.xlsx', '.xls', '.txt', '.dat')
 class NoFileSelected(Exception):
     """
     选择文件对话框被取消，没有选文件。
-    不继承 OSError：调用方可以单独捕获「用户不想选了」，和「文件读不了」（FileNotFoundError 等）区分开。
+
+    不继承 `OSError`，调用方可以把「用户不想选了」和「文件读不了」（`FileNotFoundError` 等）分开处理。
+
+    Examples
+    --------
+    >>> try:
+    ...     data = Dataloader(columns_per_sample=6).load_data()
+    ... except NoFileSelected:
+    ...     print('已取消')
     """
 
 
 class Dataloader:
     """
-    结构化数据文件加载器。
+    数据文件加载器：读取按样品排列的表格，得到 `~plotlib.dataset.DataSet`。
 
-    从 Excel/CSV/文本文件中读取按样品排列的数据，解析为统一的 DataSet 对象。
+    加载器只记住每个样品占几列，读取过程的中间结果都是局部变量，所以同一个加载器读多少次都互不影响。
 
-    输入文件格式
-    ------------
-    文件按固定列宽排列，每个样品占 columns_per_sample 列（下例为 6 列：1 列标识 + 5 列数据）：
+    Notes
+    -----
+    **文件格式。** 每个样品占固定的 *columns_per_sample* 列：第一列是标识列，其余是数据列。
+    第 0 行在标识列写样品名、在数据列写单位；第 1 行起是数据，标识列留空（txt 里用 ``-`` 占位）。
+    下例每个样品 6 列（1 列标识 + 5 列数据）::
 
         | 标识列 | 数据列1 | 数据列2 | 数据列3 | 数据列4 | 数据列5 | 标识列 | ... |
         |--------|---------|---------|---------|---------|---------|--------|-----|
-        | File1  | m/s     | Pa      | K       | J       | W       | File2  | ... |  <- 第0行：样品名、单位
-        | -      | 1.2     | 101     | 300     | 50      | 100     | -      | ... |  <- 第1行起：数据
+        | File1  | m/s     | Pa      | K       | J       | W       | File2  | ... |   ← 第 0 行：样品名、单位
+        | -      | 1.2     | 101     | 300     | 50      | 100     | -      | ... |   ← 第 1 行起：数据
 
-    输出结构
+    **读取规则。**
+
+    - 扩展名不区分大小写：.csv、.xlsx、.xls、.txt、.dat（txt / dat 以任意连续空白分隔）；
+    - 表头（样品名、单位）原样作为文本读入：``'101'`` 不会变成 ``101.0``，``'NA'``、``'N/A'`` 不会变成缺失值；
+    - 数据区读不成数字的格子（空格、``'nan'``、文字）变成 NaN。
+
+    Examples
     --------
-    返回 DataSet 对象，包含以下属性：
-
-        属性              类型              说明
-        ─────────────────────────────────────────────────────────────────
-        names             list[str]         各列对应的样品名（重复展开，原样是文本）
-        units             list[str]         各列的单位
-        data              np.ndarray        数值矩阵 (n_rows, n_cols)
-        num_samples       int               样品数
-        sample_idx        list[int]         各列所属的样品号
-        channel_idx       list[int]         各列在样品内的通道号
-
-    使用示例
-    --------
-    >>> dataset = Dataloader(columns_per_sample=6).load_data('piezo.csv')
-    >>> dataset.data[:, 0:5]      # 第一个样品的数据
-    >>> dataset.names[0:5]        # 第一个样品的列名
+    >>> data = Dataloader(columns_per_sample=6).load_data('piezo.csv')
+    >>> data.names[0:5]          # 第一个样品各列的名字
+    >>> data.data[:, 0:5]        # 第一个样品的数据
     """
 
     def __init__(self, columns_per_sample: int):
         """
+        创建加载器。
+
         Parameters
         ----------
         columns_per_sample : int
-            每个样品在文件里占的列数（含 1 列标识），至少 2。
-            （步骤 7.1：原 COLUMNS_PER_DATASET，默认 6 只适合 piezo，改为必填；DATASET_FRACTION 与它重复，已删除）
+            每个样品在文件里占的列数（含 1 列标识），至少 2。不同实验的文件不一样，所以没有默认值。
+
+        Raises
+        ------
+        ValueError
+            *columns_per_sample* 不是不小于 2 的整数。
         """
         if isinstance(columns_per_sample, bool) or not isinstance(columns_per_sample, int) or columns_per_sample < 2:
             raise ValueError(f"columns_per_sample 要写不小于 2 的整数（1 列标识 + 至少 1 列数据），实际是 {columns_per_sample!r}")
@@ -80,14 +86,19 @@ class Dataloader:
         """
         弹出选择文件对话框，返回选中文件的路径。
 
+        Returns
+        -------
+        str
+            选中文件的绝对路径。
+
         Raises
         ------
         NoFileSelected
-            用户取消了选择（以前调用 exit()，会把调用它的程序一起退出）。
+            用户取消了选择。只抛异常，不会退出调用它的程序。
 
         Notes
         -----
-        tkinter 在这里才导入：只按路径读文件时用不到它，没有图形界面的环境也能导入本模块。
+        tkinter 在这里才导入：只按路径读文件时用不到它，没有图形界面的环境（服务器、CI）也能导入本模块。
         """
         import tkinter as tk
         from tkinter import filedialog
@@ -119,17 +130,25 @@ class Dataloader:
         Returns
         -------
         DataSet
-            data（数值矩阵）、names（各列的样品名）、units、num_samples、sample_idx、channel_idx，
-            以及 local_idx / father_idx / initial_idx（初始都是 0, 1, 2, ...），status 为 'loaded'。
+            每个样品的数据列（标识列不进数据）。``names`` 是各列的样品名，``units`` 是各列的单位，
+            ``local_idx`` / ``father_idx`` / ``initial_idx`` 都是 0, 1, 2, ...，``status`` 为 ``'loaded'``。
 
         Raises
         ------
         NoFileSelected
-            没传路径、对话框里又取消了选择。
+            没传路径，在对话框里又取消了选择。
         FileNotFoundError
             文件不存在。
         ValueError
-            扩展名不支持，或总列数不是每个样品列数的整数倍。
+            扩展名不支持；总列数不是 *columns_per_sample* 的整数倍；有样品名为空（信息里指出是第几列）。
+        RuntimeError
+            同一通道在不同样品里单位不同。
+
+        Examples
+        --------
+        >>> loader = Dataloader(columns_per_sample=4)
+        >>> eis = loader.load_data('eis.CSV')
+        >>> eis.num_samples
         """
         if path is None:
             path = self.select_data_file()
@@ -138,11 +157,17 @@ class Dataloader:
 
 def _read_table(path: Path) -> pd.DataFrame:
     """
-    按扩展名（不区分大小写）把整张表读进来，不解析。
-    dtype=str：整张表按文本读，样品名、单位保持原样（'101' 不会变成 101.0，'1.50' 不会变成 1.5）；
-    数据列在 _to_dataset 里统一用 pd.to_numeric 转成数字（55576fb 复审 1：标识列除了第 0 行全空，pandas 曾把整列推断成浮点数）。
-    keep_default_na=False：不按 pandas 的默认规则把 'NA'、'N/A'、空格子当缺失值，表头原样是文本（样品名 'NA'、单位 'N/A'
-    曾被读成 nan，1.0 发布前复审）；数值区的空格子、'nan' 仍由 pd.to_numeric(errors='coerce') 转成 NaN。
+    按扩展名（不区分大小写）把整张表读成文本表格，不解析。
+
+    - ``dtype=str``：整张表按文本读，样品名、单位保持原样（``'101'`` 不会变成 ``101.0``，``'1.50'`` 不会变成 ``1.5``）；
+      标识列除了第 0 行都是空的，若让 pandas 推断类型，整列会被当成浮点数；
+    - ``keep_default_na=False``：不按 pandas 的默认规则把 ``'NA'``、``'N/A'``、空格子当缺失值，表头原样保留。
+      数据区的空格子、``'nan'`` 仍在 ``_to_dataset`` 里由 ``pd.to_numeric(errors='coerce')`` 转成 NaN。
+
+    Raises
+    ------
+    ValueError
+        扩展名不支持，信息里有文件名和支持的格式。
     """
     suffix = path.suffix.lower()
     if suffix == '.csv':
@@ -157,7 +182,18 @@ def _read_table(path: Path) -> pd.DataFrame:
 
 
 def _to_dataset(table: pd.DataFrame, columns_per_sample: int) -> DataSet:
-    """把读进来的表按「每个样品 columns_per_sample 列」拆开，装进 DataSet。每个样品的第 0 列是标识列，不进数据。"""
+    """
+    把读进来的表按「每个样品 *columns_per_sample* 列」拆开，装进 `DataSet`。
+
+    每个样品的第一列是标识列，只取第 0 行的样品名，不进数据；数据列的第 0 行是单位，第 1 行起转成数字。
+
+    Raises
+    ------
+    ValueError
+        总列数不是 *columns_per_sample* 的整数倍；或有样品名为空。
+    RuntimeError
+        同一通道在不同样品里单位不同。
+    """
     total_cols = table.shape[1]
     if total_cols % columns_per_sample != 0:
         raise ValueError(f"文件共 {total_cols} 列，不是每个样品列数（columns_per_sample={columns_per_sample}）的整数倍")

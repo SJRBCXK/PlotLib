@@ -20,3 +20,7 @@ htmlcov/
 
 # 脚本导出的图表页面（scripts/piezo_interactive.py 等）
 output/
+
+# Sphinx 生成的 API 文档（网页和每个对象的页面都由源码文档字符串生成，不提交）
+docs/api/_build/
+docs/api/generated/

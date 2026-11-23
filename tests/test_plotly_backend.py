@@ -94,10 +94,10 @@ def test_dual_y(eis_dataset):
 # 排版预设与外观：翻译后应用到 layout / 模板
 # ══════════════════════════════════════════════
 def test_layout_preset_applied(eis_dataset):
-    """多线图：图例在图外右侧、坐标两位小数；xy：纵轴四位小数、图例在右下角。"""
+    """多线图：图例在图外右侧、纵轴两位小数（横轴不写格式）；xy：纵轴四位小数、图例在右下角。"""
     multi = layout(DataPlotter(eis_dataset, backend='plotly').plot_multiline().figures['main'].fig)
     assert multi['legend']['x'] == 1.02 and multi['legend']['xanchor'] == 'left'
-    assert multi['xaxis']['tickformat'] == '.2f' and multi['yaxis']['tickformat'] == '.2f'
+    assert 'tickformat' not in multi['xaxis'] and multi['yaxis']['tickformat'] == '.2f'
 
     xy = layout(DataPlotter(eis_dataset, backend='plotly').plot_xy(
         channel_x=ZS_RE, channel_y=ZS_IM).figures[0].fig)
@@ -323,6 +323,55 @@ def test_template_hides_minor_log_labels(eis_dataset):
     template_layout = layout(fig)['template']['layout']
     assert template_layout['xaxis']['minorloglabels'] == 'none'
     assert template_layout['yaxis']['minorloglabels'] == 'none'
+
+
+def log_format_axis(eis_dataset, ticks=None, custom=None) -> dict[str, Any]:
+    """X 轴设成对数轴并写刻度格式 '{x:.0e}'，返回画好后 layout 里的 xaxis。"""
+    from plotlib.formatters import make_axes_formatter
+    from plotlib.plot_spec import AxisStyle
+
+    fmt = make_axes_formatter(x=AxisStyle(scale='log', format='{x:.0e}'), ticks=ticks, custom=custom, backend='plotly')
+    fig = plotly_plotter(eis_dataset).plot_multiline(axes_formatter=fmt).figures['main'].fig
+    return layout(fig)['xaxis']
+
+
+def test_log_format_keeps_minor_labels_hidden(eis_dataset):
+    """
+    Plotly 对数轴写了 tickformat 后，所有刻度（含 2、5 这些位置）都按格式写文字，minorloglabels 不起作用。
+    次刻度不写文字（默认 'none'）时，主刻度只放在整数量级（dtick=1），2 ~ 9 交给不写文字的次刻度，与 matplotlib 一致。
+    """
+    from plotlib.plot_spec import TickStyle
+
+    assert (axis := log_format_axis(eis_dataset))['tickformat'] == '.0e' and axis['dtick'] == 1
+    assert log_format_axis(eis_dataset, ticks=TickStyle(minor_labels='none'))['dtick'] == 1
+
+
+def test_log_format_respects_manual_ticks(eis_dataset):
+    """跨很多数量级时可以自己设刻度间距（如每两个量级一个），库不覆盖；次刻度写完整文字（'full'）时不用改。"""
+    from plotlib.plot_spec import TickStyle
+
+    every_two = log_format_axis(eis_dataset, custom=[lambda _axis, fig: fig.update_xaxes(dtick=2)])
+    assert every_two['dtick'] == 2
+    assert 'dtick' not in log_format_axis(eis_dataset, ticks=TickStyle(minor_labels='full'))
+
+
+def test_log_format_only_on_log_axis_with_format(eis_dataset):
+    """线性轴写格式、对数轴不写格式（多线图预设不给 X 轴写格式），都保持 Plotly 自动刻度。"""
+    from plotlib.formatters import make_axes_formatter
+    from plotlib.plot_spec import AxisStyle
+
+    for style in (AxisStyle(scale='linear', format='{x:.1f}'), AxisStyle(scale='log')):
+        fmt = make_axes_formatter(x=style, backend='plotly')
+        fig = plotly_plotter(eis_dataset).plot_multiline(axes_formatter=fmt).figures['main'].fig
+        assert 'dtick' not in layout(fig)['xaxis']
+
+
+def test_log_format_with_short_minor_labels_raises(eis_dataset):
+    """对数轴写了格式又要次刻度写小号数字（'short'）：Plotly 做不到，报错，不悄悄画成全是完整文字。"""
+    from plotlib.plot_spec import TickStyle
+
+    with pytest.raises(ValueError, match="minor_labels='short'"):
+        log_format_axis(eis_dataset, ticks=TickStyle(minor_labels='short'))
 
 
 def test_empty_dataset_has_clear_error():

@@ -1,15 +1,16 @@
 """
-Plotly 后端（STRUCTURE_REVIEW 6.7）：只读绘图计划，负责全部 Plotly 的事。与 matplotlib 后端逐段对应：
+Plotly 后端：只读绘图计划，负责全部与 Plotly 有关的事。代码与 matplotlib 后端逐段对应：
 
-  - 翻译：外观 → 模板（__init__）、颜色（_curve_color）、线型 / 标记（_native_style）；
-          通用的换算（磅 → 像素、英寸 → 像素、图例位置、刻度格式）在翻译层 style.translate_*；
-  - 渲染：建图、画线、按排版预设排版、用户回调、负对数刻度；
-  - 多页（6.8）：draw_pages 把一次计划的多张 FigureSpec 画进同一个 Figure，每张一页；
-  - 交互：滑块（画完之后可选，只有 Plotly 有）：add_slider 一条线一档，add_page_slider 一页一档。
-不认识 DataSet、Group、DataPlotter；输入是 FigureSpec，输出是 DrawnFigure。
+- **翻译**：外观 → 模板（``__init__``）、颜色（``_curve_color``）、线型和标记（``_native_style``）；
+  磅 → 像素、英寸 → 像素、图例位置、刻度格式这些通用换算在翻译层 `plotlib.style`；
+- **渲染**：建图、画线、按版式预设排版、调用用户回调、负对数刻度；
+- **多页**：`PlotlyBackend.draw_pages` 把一次计划的多张图画进同一个 Figure，每张一页；
+- **交互**：画完之后可选的滑块，`PlotlyBackend.add_slider` 一条线一档，`PlotlyBackend.add_page_slider` 一页一档。
 
-Plotly 没有轴对象，坐标轴是 layout 里的一段配置：DrawnFigure.axes 放配置里的轴名
-{'left': 'yaxis', 'right': 'yaxis2'}（两根轴共用 'xaxis'），用 fig.layout[轴名] 读写。
+Notes
+-----
+Plotly 没有轴对象，坐标轴是 layout 里的一段配置。所以 ``DrawnFigure.axes`` 存的是配置里的轴名
+``{'left': 'yaxis', 'right': 'yaxis2'}`` （两根 Y 轴共用 ``'xaxis'``），用 ``fig.layout[轴名]`` 读写。
 """
 from collections.abc import Callable
 from dataclasses import replace
@@ -23,7 +24,7 @@ from ..plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_T
                          CurveSpec, DrawnFigure, FigureSpec, LineStyle)
 from ..style import (STYLE_FIELDS_BY_KIND, only_fields, translate_color, translate_figsize, translate_frame,
                      translate_legend_style, translate_line_style, translate_points, translate_ticks)
-from .plotly_styles import apply_axis, apply_frame
+from .plotly_styles import apply_axis, apply_frame, apply_log_format
 
 # 滑块模式：single 每档只显示一条曲线；cumulative 每档累加显示到当前曲线
 type SliderMode = Literal['single', 'cumulative']
@@ -36,14 +37,38 @@ _LAYOUT_AXIS = {'x': 'xaxis', 'y': 'yaxis', 'y2': 'yaxis2'}
 
 
 class PlotlyBackend:
+    """
+    Plotly 后端：画交互图，多张计划画成一个 Figure 的多页，并提供滑块。
+
+    一般不直接使用，由 ``DataPlotter(backend='plotly')`` 通过 `plotlib.backends.get_backend` 创建。
+
+    Parameters
+    ----------
+    appearance : Appearance
+        全局外观，翻译成 Plotly 模板。
+    cmap : str, optional
+        Plotly 色带名；None 用 ``'Plasma'``。
+
+    Attributes
+    ----------
+    name : str
+        ``'plotly'``。
+    dpi : float
+        把磅、英寸换成像素用的分辨率，也记在每张图的 ``fig.layout.meta['dpi']`` 里。
+    template : `plotly.graph_objects.layout.Template`
+        所有图共用的外观模板（字体、轴线、刻度、图例、默认线宽）。
+    line_width : float
+        全局线宽（像素），换算自定义虚线的段长用。
+    """
 
     name = 'plotly'
 
     def __init__(self, appearance: Appearance, cmap: str | None = None):
         """
-        翻译外观：Appearance（后端无关，磅）→ Plotly 模板（像素，按 appearance.dpi 换算）；解析色带名。
-        样式对象按「库默认 < 用户在 DataPlotter 写的那一层」叠加；跟版式有关的（边框的上 / 右边、图例位置）
-        还要叠上版式预设，在画每张图时处理（对照 matplotlib 后端）。
+        把外观翻译成 Plotly 模板（磅按 ``appearance.dpi`` 换成像素），并解析色带名。
+
+        样式对象按「库默认 < 用户在 DataPlotter 写的那一层」叠加；与版式有关的设置（上 / 右边框、
+        图例位置）还要叠上版式预设，在画每张图时处理。
         """
         self.appearance = appearance
         self.dpi = appearance.dpi
@@ -61,10 +86,24 @@ class PlotlyBackend:
              formatters: dict[str, AxesFormatter] | None = None,
              figure_formatter: Callable[[Any, dict[str, Any]], Any] | None = None) -> DrawnFigure:
         """
-        按一张 FigureSpec 画一个 go.Figure，返回 DrawnFigure（就是只有一页的 draw_pages）。
-        formatters：按轴分组的用户回调 {'left': AxesFormatter(...), 'right': ...}，形状与 matplotlib 对应：
-            axes (轴名, fig)、lines (这根轴的 trace 列表)、legend ([fig.layout.legend]，只有左轴有)。
-        figure_formatter(fig, axes)：整图回调，axes 是全部轴名 {'left': 'yaxis', 'right': 'yaxis2'}。
+        按一张计划画一个 Figure，即只有一页的 `draw_pages`。
+
+        Parameters
+        ----------
+        spec : FigureSpec
+            这张图的计划。
+        figsize : tuple of (float, float)
+            图尺寸（英寸），按 dpi 换成像素。
+        formatters : dict, optional
+            按轴分组的用户回调，调用形状与 matplotlib 对应：坐标轴 ``(轴名, fig)``、
+            线条（这根轴的 trace 列表）、图例 ``[fig.layout.legend]`` （只有左轴有）。
+        figure_formatter : callable, optional
+            ``figure_formatter(fig, axes)``，``axes`` 是全部轴名 ``{'left': 'yaxis', 'right': 'yaxis2'}``。
+
+        Returns
+        -------
+        DrawnFigure
+            这张图的结果。
         """
         return self.draw_pages([spec], figsize, formatters, figure_formatter)[0]
 
@@ -72,11 +111,32 @@ class PlotlyBackend:
                    formatters: dict[str, AxesFormatter] | None = None,
                    figure_formatter: Callable[[Any, dict[str, Any]], Any] | None = None) -> list[DrawnFigure]:
         """
-        把一次计划的多张 FigureSpec 画进同一个 go.Figure，每张是一页（6.8；matplotlib 没有这个方法，仍一张计划一张图）。
-        刚画完只显示第一页，用 add_page_slider 翻页。返回每页一个 DrawnFigure：fig、axes 共用，artists 只有这一页的 trace。
+        把一次计划的多张图画进同一个 Figure，每张是一页。刚画完只显示第一页，用 `add_page_slider` 翻页。
 
-        各页来自同一次计划，单位、版式、neglog 相同，所以一个 Figure 只有一套轴：
-        排版按第一页（图例标题也是第一页的，翻页时换），回调对整个 Figure 只调一次，线回调拿到这根轴上所有页的 trace。
+        matplotlib 后端没有这个方法，仍是一张计划一张图；``DataPlotter`` 按「后端有没有这个方法」选择。
+
+        Parameters
+        ----------
+        specs : list of FigureSpec
+            同一次计划生成的多张图。
+        figsize, formatters, figure_formatter
+            同 `draw`。
+
+        Returns
+        -------
+        list of DrawnFigure
+            每页一个，``fig`` 和 ``axes`` 各页共用，``artists`` 只有这一页的 trace。
+
+        Raises
+        ------
+        ValueError
+            计划里的版式或画法不认识；或给右轴配了图例回调。
+
+        Notes
+        -----
+        各页来自同一次计划，单位、版式、负对数设置都相同，所以一个 Figure 只有一套轴：
+        排版按第一页（图例标题也是第一页的，翻页时再换）；回调对整个 Figure 只调用一次，
+        线条回调拿到这根轴上所有页的 trace。
         """
         formatters = formatters or {}
         for spec in specs:
@@ -105,12 +165,17 @@ class PlotlyBackend:
         self._apply_optional_formatters(fig, axes, curves, artists, formatters)
         self._apply_figure_formatter(fig, axes, figure_formatter)
         self._apply_neglog_formatter(fig, axes, first)
+        # 最后看各轴的最终设置：对数轴写了刻度格式时，让「次刻度不写文字」仍然生效（用户自己设了刻度间距就不动）
+        for axis_name in ('xaxis', *axes.values()):
+            apply_log_format(fig, axis_name)
 
         return [DrawnFigure(spec=spec, fig=fig, axes=axes, artists=page_artists)
                 for spec, page_artists in zip(specs, pages)]
 
     def _draw_curve(self, fig: go.Figure, curve: CurveSpec, preset: LayoutPreset):
-        """画一条线，返回 Figure 里实际保存的 trace（对照 MatplotlibBackend._draw 里画线的那一段）。"""
+        """
+        画一条线，返回 Figure 里实际保存的 trace。颜色、分组样式、所在的轴在画的时候一次给出。
+        """
         color = self._curve_color(curve, preset)
         # 线和点都写上颜色，否则点会用 Plotly 默认配色；柱状图（go.Bar）没有 line 属性，只写 marker
         colors = {'marker': dict(color=color)} if curve.kind == 'bar' else \
@@ -127,8 +192,10 @@ class PlotlyBackend:
 
     def _curve_color(self, curve: CurveSpec, preset: LayoutPreset) -> str | None:
         """
-        一条线的最终颜色（颜色一次赋值；对照 MatplotlibBackend._curve_color）。优先级：
-        分组写的颜色 > 色带位置 > 排版预设里这根轴的颜色 > Plotly 默认配色（返回 None）。
+        算出一条线的最终颜色。
+
+        优先级：分组写的颜色 > 色带位置 > 版式预设里这根轴的颜色 > Plotly 默认配色（返回 None）。
+        与 matplotlib 后端的同名方法一致。
         """
         # translate_color / sample_colorscale 的返回类型标注较宽（含 matplotlib 用的元组），到 Plotly 实际总是字符串
         if curve.style.color is not None:
@@ -142,9 +209,11 @@ class PlotlyBackend:
 
     def _native_style(self, curve: CurveSpec) -> dict:
         """
-        分组写了的样式（LineStyle 标准写法）→ trace 属性，画线时一次给出（对照 MatplotlibBackend._native_style）。颜色另给。
-        只取这种画法看得见的字段（style.STYLE_FIELDS_BY_KIND）：折线全取，散点只取标记，柱状图都不取。
-        折线写了 marker 时要改成 'lines+markers' 才显示点（matplotlib 不需要这一步）；散点本来就是 'markers'。
+        把分组样式翻译成 trace 属性，画线时一次给出；颜色另由 ``_curve_color`` 给出。
+
+        只取这种画法看得见的字段（``style.STYLE_FIELDS_BY_KIND``）：折线全取，散点只取标记，柱状图都不取。
+        折线的标记按「DataPlotter 全局 < 分组」叠加；有标记时绘制模式改成 ``'lines+markers'``，
+        标记才显示（matplotlib 不需要这一步）。散点本来就是 ``'markers'``。
         """
         fields = STYLE_FIELDS_BY_KIND.get(curve.kind, ())     # 画法写错时由 _plot_data 报错
         style = curve.style
@@ -163,7 +232,15 @@ class PlotlyBackend:
 
     @staticmethod
     def _plot_data(fig: go.Figure, x, y, plot_kind: str = 'line', **kwargs):
-        """按 plot_kind 添加一条图形，返回 Figure 中实际保存的 trace。kwargs 里给了 mode 时以它为准。"""
+        """
+        按画法往 Figure 里加一条 trace（折线、散点是 ``go.Scatter``，柱状图是 ``go.Bar``），
+        返回 Figure 里实际保存的那一个（``fig.data[-1]``，不是传入前的对象）。*kwargs* 里给了 ``mode`` 时以它为准。
+
+        Raises
+        ------
+        ValueError
+            不认识的画法。
+        """
         match plot_kind:
             case 'line':
                 trace = go.Scatter(x=x, y=y, **({'mode': 'lines'} | kwargs))
@@ -182,9 +259,10 @@ class PlotlyBackend:
 
     def _apply_layout(self, fig: go.Figure, axes: dict, spec: FigureSpec, preset: LayoutPreset):
         """
-        按排版预设设置图例、轴标题、各轴（刻度格式、着色）、边框（值的翻译在翻译层 style.translate_*）。
-        图例、边框按「库默认 < 预设 < DataPlotter 全局」叠加（layouts.resolve_*，对照 matplotlib 后端）。
-        预设里的 margins 不用：Plotly 会自动给图外的图例留边；图例的 draggable 不用：Plotly 的拖动是显示时的设置。
+        按版式预设排版：图例、轴标题、右轴、各轴的刻度格式和着色、边框。
+
+        图例和边框按「库默认 < 预设 < DataPlotter 全局」叠加。预设里的 ``margins`` 不用，
+        Plotly 会自动给图外的图例留边；图例的 ``draggable`` 也不用，Plotly 的拖动是显示时的设置。
         """
         legend = translate_legend_style(resolve_legend(preset, self.appearance), 'plotly', self.dpi)
         fig.update_layout(legend=legend, xaxis_title_text=spec.x_unit, yaxis_title_text=spec.y_unit)
@@ -214,9 +292,16 @@ class PlotlyBackend:
     def _apply_optional_formatters(fig: go.Figure, axes: dict, curves: list[CurveSpec], artists: list,
                                    formatters: dict[str, AxesFormatter]):
         """
-        应用各轴的用户回调，形状与 matplotlib 对应：axes (轴名, fig)、lines (这根轴的 trace)、legend (图例列表)。
-        与 matplotlib 同样分两遍：先各轴的轴、线回调，最后图例回调（一张图一个图例，归左轴；其他轴配了 → 报错）。
-        Plotly 的图例跟着 trace 的样式自动更新，线改了样式不用像 matplotlib 那样重建图例。
+        按轴调用用户回调，调用形状与 matplotlib 对应：坐标轴 ``(轴名, fig)``、线条（这根轴的 trace）、
+        图例 ``[fig.layout.legend]``。
+
+        先调用各轴的坐标轴、线条回调，最后调用图例回调。一张图一个图例，归左轴；给其他轴配了图例回调就报错。
+        Plotly 的图例跟着 trace 的样式自动更新，不用像 matplotlib 那样重建。
+
+        Raises
+        ------
+        ValueError
+            给左轴以外的轴配了图例回调。
         """
         fms = {axis: formatters.get(axis, AxesFormatter()) for axis in axes}
         for axis, axis_name in axes.items():
@@ -235,13 +320,16 @@ class PlotlyBackend:
 
     @staticmethod
     def _apply_figure_formatter(fig: go.Figure, axes: dict, figure_formatter):
-        """整图回调：各轴回调之后调用一次，拿到图和全部轴名（三种版式都支持）。"""
+        """调用整图回调：在各轴回调之后调用一次，传入图和全部轴名。"""
         if figure_formatter is not None:
             figure_formatter(fig, axes)
 
     @staticmethod
     def _apply_neglog_formatter(fig: go.Figure, axes: dict, spec: FigureSpec):
-        """负对数刻度：数据在计划里已取绝对值，这里给对应的轴加负号前缀。'x2'（上轴）Plotly 这里还没有，跳过。"""
+        """
+        负对数：给对应的轴加负号前缀 ``tickprefix='-'`` （数据在计划里已取绝对值）。
+        上轴 ``'x2'`` 目前还没有，跳过。
+        """
         existing = {'x', 'y'} | ({'y2'} if 'right' in axes else set())
         for axis_name in spec.neglog & existing:
             fig.update_layout({_LAYOUT_AXIS[axis_name]: dict(tickprefix='-')})
@@ -253,9 +341,10 @@ class PlotlyBackend:
     @staticmethod
     def _create_template(appearance: Appearance, px) -> go.layout.Template:
         """
-        通用外观模板：layout 管字体、坐标轴和图例；data 管各类 trace 的默认外观。
-        字号、线宽、刻度（TickStyle）来自 Appearance（磅 → 像素，翻译在 style.translate_ticks）；颜色、网格等是 Plotly 一侧的固定风格。
-        模板里的 xaxis / yaxis 设置对所有 X / Y 轴生效（含右轴 yaxis2）。
+        生成所有图共用的外观模板：``layout`` 管字体、坐标轴和图例，``data`` 管各类 trace 的默认外观。
+
+        字号、线宽、刻度来自 *appearance* （磅按 *px* 换成像素）；白底、黑色轴线、不画网格是固定风格。
+        模板里的 ``xaxis`` / ``yaxis`` 对所有 X / Y 轴生效，包括右轴 ``yaxis2``。
         """
         font_size = px(appearance.font_size)
         # 样式对象：库默认 < 用户在 DataPlotter 写的那一层（版式预设在画每张图时再叠）
@@ -314,11 +403,31 @@ class PlotlyBackend:
                    slider_formatter: Callable[[go.layout.Slider], object] | None = None,
                    curves: list | None = None) -> go.Figure:
         """
-        曲线滑块：一条线一档，原地修改并返回这张图。拖动时标题换成当前曲线名。
-        mode：'single' 每档只显示当前曲线；'cumulative' 每档显示第一条到当前曲线。
-        slider_formatter：接收安装后的 Slider 并原地修改，在默认外观之后执行。
-        curves：参与滑动的 trace（DataPlotter 传计划画出的曲线 DrawnFigure.artists）；其余 trace（如整图回调加的参考线）
-            不分档、每档保持原来的显隐（55576fb 复审 4）。不传时图里每条 trace 一档。
+        给一页图加曲线滑块：一条线一档，拖动时标题换成当前曲线名。原地修改并返回这张图。
+
+        Parameters
+        ----------
+        fig : `plotly.graph_objects.Figure`
+            要加滑块的图。
+        mode : {'cumulative', 'single'}, default: 'cumulative'
+            ``'cumulative'``：每档显示第一条到当前这条线；``'single'``：每档只显示当前这条线。
+        slider_formatter : callable, optional
+            接收安装好的滑块并原地修改，在默认外观之后执行。
+        curves : list of trace, optional
+            参与滑动的 trace（``DataPlotter`` 传入计划画出的 ``DrawnFigure.artists``）。其余 trace
+            （如整图回调加的参考线）不分档，每档保持原来的显隐。不传时图里每条 trace 一档。
+
+        Returns
+        -------
+        `plotly.graph_objects.Figure`
+            传入的 *fig*。重复调用只保留一个滑块。
+
+        Raises
+        ------
+        RuntimeError
+            图里没有可以滑动的曲线。
+        ValueError
+            *mode* 写错（检查在改图之前，图保持原样）。
         """
         # Plotly 的 data 类型标注较宽，在此明确它是 trace 元组；cast 不复制对象
         traces = cast(tuple[go.Scatter | go.Bar, ...], fig.data)
@@ -332,10 +441,26 @@ class PlotlyBackend:
     def add_page_slider(self, pages: list[DrawnFigure], mode: SliderMode = 'single',
                         slider_formatter: Callable[[go.layout.Slider], object] | None = None) -> go.Figure:
         """
-        翻页滑块（6.8）：draw_pages 画出的多页图，一页一档，原地修改并返回这个 Figure。
-        档位标签是每页的名字（FigureSpec.name：组名 / 样品名）；翻页时标题、图例标题换成这一页的。
-        mode 与曲线滑块相同（用户要求）：'single' 每档只显示当前页；'cumulative' 每档显示第一页到当前页。
-        当前值默认不加前缀（组名、样品名都可能出现）；要加用 slider_formatter。
+        给 `draw_pages` 画出的多页图加翻页滑块：一页一档。原地修改并返回各页共用的 Figure。
+
+        Parameters
+        ----------
+        pages : list of DrawnFigure
+            `draw_pages` 的结果。
+        mode : {'single', 'cumulative'}, default: 'single'
+            ``'single'``：每档只显示当前页；``'cumulative'``：每档显示第一页到当前页。
+        slider_formatter : callable, optional
+            接收安装好的滑块并原地修改，在默认外观之后执行。
+
+        Returns
+        -------
+        `plotly.graph_objects.Figure`
+            各页共用的 Figure。
+
+        Notes
+        -----
+        档位标签是每页的名字（``FigureSpec.name``，组名或样品名），没有名字时用 key。
+        翻页时标题和图例标题换成这一页的。组名、样品名都可能出现，所以当前值默认不加前缀。
         """
         fig = cast(go.Figure, pages[0].fig)
         steps = []
@@ -347,17 +472,33 @@ class PlotlyBackend:
 
     @staticmethod
     def _positions(fig: go.Figure, artists: list) -> list[int]:
-        """这些 trace 在 fig.data 里的位置（滑块的 visible 列表按位置对应每条 trace）。"""
+        """这些 trace 在 ``fig.data`` 里的位置；滑块的 ``visible`` 列表按位置对应每条 trace。"""
         position = {id(trace): i for i, trace in enumerate(cast(tuple, fig.data))}
         return [position[id(artist)] for artist in artists]
 
     def _install_slider(self, fig: go.Figure, steps: list[tuple[str, list[int], dict]], mode: SliderMode,
                         prefix: str, slider_formatter) -> go.Figure:
         """
-        两种滑块共用：steps 是每一档的 (标签, 这一档的 trace 在 fig.data 里的位置, 翻到这一档时改的 layout)。
-        曲线滑块一档一条 trace，翻页滑块一档一页的 trace——其余（显隐、默认外观、formatter）完全一样。
-        不在任何一档里的 trace（整图回调加的参考线等）每档都保持原来的显隐（55576fb 复审 4）。
-        layout 的改动用带点的路径（如 'legend.title.text'）：只改这一项，不会把图例位置等其他设置冲掉。
+        两种滑块共用的安装过程。
+
+        Parameters
+        ----------
+        fig : `plotly.graph_objects.Figure`
+            要加滑块的图。
+        steps : list of (str, list of int, dict)
+            每一档的 ``(标签, 这一档的 trace 在 fig.data 里的位置, 翻到这一档时改的 layout)``。
+            曲线滑块一档一条 trace，翻页滑块一档一页的 trace；其余过程完全一样。
+        mode : {'single', 'cumulative'}
+            每档只显示这一档的 trace，还是显示第 0 档到这一档的。
+        prefix : str
+            当前值前面的文字。
+        slider_formatter : callable or None
+            用户对滑块的最后修改。
+
+        Notes
+        -----
+        不在任何一档里的 trace（整图回调加的参考线等）每档都保持原来的显隐，包括 ``'legendonly'``。
+        layout 的改动用带点的路径（如 ``'legend.title.text'``），只改这一项，不会冲掉图例位置等其他设置。
         """
         if mode not in ('single', 'cumulative'):
             raise ValueError(f"不支持的 mode: '{mode}'")       # 先校验再改图：写错时图保持原样
@@ -390,8 +531,10 @@ class PlotlyBackend:
 
     def _slider_labels_fit(self, fig: go.Figure, labels: list[str]) -> bool:
         """
-        粗略估计档位标签能否并排放下（不重叠）。Plotly 自带的标签抽稀对长标签不可靠，会互相压住，所以由这里预判。
-        宽度按「字号 × 0.65 × 字符数」估算（粗体 Arial），只用于决定显示或隐藏。
+        粗略估计档位标签能否并排放下而不重叠。
+
+        Plotly 自带的标签抽稀对长标签不可靠，标签会互相压住，所以由这里预判。宽度按
+        「字号 × 0.65 × 字符数」估算（粗体 Arial），只用于决定显示还是隐藏。
         """
         if len(labels) <= 1:
             return True
@@ -401,8 +544,10 @@ class PlotlyBackend:
 
     def _apply_slider_format(self, slider: go.layout.Slider, prefix: str, show_labels: bool = True):
         """
-        原地设置整个滑块的默认外观。prefix 是当前值前的文字（曲线滑块 'Trace: '，翻页滑块不加）。
-        show_labels 为 False 时档位标签透明（仍占位），名称由当前值和标题显示。
+        原地设置滑块的默认外观。
+
+        *prefix* 是当前值前的文字（曲线滑块为 ``'Trace: '``，翻页滑块不加）。*show_labels* 为 False 时
+        档位标签透明（仍占位置），名字由当前值和标题显示。
         """
         slider.update(
             # 当前值：轨道左上方显示当前曲线名 / 页名

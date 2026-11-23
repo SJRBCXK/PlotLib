@@ -23,6 +23,8 @@ dependencies = [
 interactive = ["plotly>=6.3"]
 # Qt 界面：tools/ 下的 *_qt.py 工具和 PySide6 学习示例。
 gui = ["PySide6"]
+# API 文档：sphinx-build -b html docs/api docs/api/_build/html（从源码的 numpydoc 文档字符串生成）
+docs = ["sphinx", "pydata-sphinx-theme"]
 # 分析脚本用到的科学计算（scripts/eis_bode.py 的寻峰）。
 analysis = ["scipy"]
 # 运行测试；kaleido 让渲染测试（pytest -m render）调用真实的 Plotly.js，还需要本机装有 Chrome。

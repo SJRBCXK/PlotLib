@@ -3,7 +3,7 @@ from pathlib import Path
 from plotlib.dataloader import Dataloader
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
-from plotlib.plot_spec import AxisStyle
+from plotlib.plot_spec import AxisStyle, TickStyle
 from plotlib.html_export import write_fit_html
 
 # 右侧压缩示意图面板（含 rev 翻转规则），导出时拼进页面
@@ -24,11 +24,14 @@ dataRowNum_unit5 = 4  # Voltage
 
 backend = "plotly"
 
-# 多线图的默认刻度是两位小数（排版预设），对数轴上的 0.001 会显示成 0.00，所以 X 轴写明科学计数法
+# X 轴（频率）用对数轴、刻度文字写成科学计数法；次刻度不写文字（Plotly 下主刻度只放在整数量级，
+# 跨很多数量级嫌挤时可在 custom 里设 fig.update_xaxes(dtick=2)，见 AxisStyle.format 的说明）
 axes_fmt = make_axes_formatter(
     x=AxisStyle(scale='log', limits=(0.001, None), format='{x:.0e}'),
     y=AxisStyle(limits=(None, 0.002)),
+    ticks=TickStyle(minor_labels='none'),
     backend=backend,
+
 )
 
 

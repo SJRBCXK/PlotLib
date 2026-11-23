@@ -1,4 +1,12 @@
-"""数据处理模块。"""
+"""
+数据选择与逐样品计算。
+
+- `DataProcessLayer`：按样品号、列名、单位、位置从数据集中选列，可链式二次筛选；
+- `DataTransformer`：对选出的列做计算（自定义函数 `DataTransformer.apply`、范数 `DataTransformer.Norm`），
+  结果带上自动生成的名字、单位和样品号，成为新的 `~plotlib.dataset.DataSet`。
+
+按分组计算（一组样品得到一个新样品）见 `plotlib.group.Group.apply`。
+"""
 import copy
 from collections.abc import Callable
 from typing import TypedDict
@@ -13,9 +21,19 @@ from .dataset import DataSet, Column
 
 class TransformMetadata(TypedDict, total=False):
     """
-    命名回调可覆盖的结果元数据；省略或设为 None 时保留自动值。
-    sample_idx 只收一个整数：一次计算只产出一个样品（逐样品沿用原号、跨样品合成一个新样品、Group.apply 每组一个），
-    要拆成几个样品就逐样品 for 分开算再拼回（2026-11-20 全面评审：曾标注 int | list[int]，列表从来不能用）。
+    `DataTransformer` 的命名回调 ``naming_func()`` 的返回值：要覆盖的结果元数据。
+
+    每个键都可以省略或写 None，表示保留自动生成的值。
+
+    Attributes
+    ----------
+    names : list of str or None
+        结果每列的名字，长度等于结果列数。
+    units : list of str or None
+        结果每列的单位，长度等于结果列数。
+    sample_idx : int or None
+        结果的样品号，只收一个整数：一次计算只产出一个样品。
+        要拆成几个样品，就逐样品分开算再拼回（``for sample in dataset``）。
     """
 
     names: list[str] | None
@@ -25,51 +43,46 @@ class TransformMetadata(TypedDict, total=False):
 
 class DataProcessLayer:
     """
-    数据选择层（计算在 DataTransformer、Group.apply）。
+    数据选择层：按条件从数据集中选列，结果放在 `Selected_data`。
 
-    从 DataSet 中按条件筛选数据列，支持链式调用。
+    计算不在这一层：逐样品计算用 `DataTransformer`，按分组计算用 `~plotlib.group.Group.apply`。
 
-    选择方法
-    --------
-    select(*args)
-        按名称、单位、索引或样品号筛选数据列。
-    by(*args)
-        在已选数据上进行二次筛选。
-    getdata(...)
-        底层数据提取方法。
+    Attributes
+    ----------
+    dataset : DataSet
+        从中选列的数据集。
+    Selected_data : DataSet
+        最近一次选择的结果（列是副本，修改不影响原数据集）。
 
-    选择语法
-    --------
-    支持以下参数形式：
+    Notes
+    -----
+    选择条件的写法（`select` 和 `by` 相同）：
 
-    - 'all'              : 选择全部列
-    - 'samples', [0, 1]  : 按样品号选择
-    - 'column_name'      : 按列名选择
-    - 'unit_name'        : 按单位选择
-    - 0, 1, 2            : 按列索引选择
-    - [0, 1, 2]          : 按索引列表选择
+    ======================  ==============================================
+    ``'all'``               全部列
+    ``'samples', [0, 1]``   这些样品的全部列，按列表顺序
+    ``'Zs(ohm)'``           列名等于它的列；没有这样的列名时按单位匹配
+    ``0, 1, 2``             这些位置的列
+    ``[0, 1, 2]``           同上，写成一个列表
+    ``('Freq', 'Zs')``      嵌套的一组条件，整体选出
+    ======================  ==============================================
 
-    使用示例
+    Examples
     --------
     >>> layer = DataProcessLayer(dataset)
-    >>> layer.select('all').Selected_data              # 选择全部
-    >>> layer.select('samples', [0, 1]).Selected_data  # 选择样品 0、1
-    >>> layer.select(0, 1, 2).Selected_data            # 选择第 0、1、2 列
-    >>> layer.select('Pa').Selected_data               # 按单位选择
-    >>> layer.select('all').by(0, 1).Selected_data     # 链式筛选
+    >>> layer.select('samples', [0, 1]).Selected_data       # 样品 0、1
+    >>> layer.select("Zs'(ohm)", "Zs''(ohm)").Selected_data  # 两个单位的列，按条件顺序
+    >>> layer.select('samples', [0, 1]).by(1, 2).Selected_data   # 先选样品，再在结果里选第 1、2 列
     """
 
     def __init__(self, dataset: DataSet):
         """
-        初始化选择层。
+        创建选择层。
 
         Parameters
         ----------
         dataset : DataSet
-            从中选列的数据集。
-
-        （2026-11-20 全面评审：删掉无人使用的 input_data / input_dataname / input_dataunits / data_Process_Index 参数
-        和 Processed_data / called_process 属性——计算已由 DataTransformer（逐样品）和 Group.apply（逐分组）承担，这一层只管选列。）
+            从中选列的数据集，不会被修改。
         """
         self.dataset = dataset
         self.Selected_data = DataSet()
@@ -85,39 +98,36 @@ class DataProcessLayer:
         inherit: bool = False
     ) -> DataProcessLayer:
         """
-        按条件选择数据列。
+        按条件选列，结果放进 ``Selected_data``。
 
         Parameters
         ----------
-        *args : str | int | list[int] | tuple
-            选择条件，支持多种形式：
-
-            - 'all': 选择全部列
-            - 'samples', [idx_list]: 按样品号选择（关键字须完全一致）
-            - str: 按列名或单位名匹配
-            - int: 按单个列索引选择
-            - list[int] | tuple[int]: 按索引列表选择
-            - tuple: 嵌套选择条件
-
+        *args : str, int, list or tuple
+            选择条件，写法见类说明。多个条件按顺序依次选出，结果也按这个顺序排列。
         dataset_for_select : DataSet, optional
-            指定选择的源数据集，默认使用 self.dataset。
-        extended : bool
-            True: 累加到已选数据；False: 替换已选数据。
-        inherit: bool
-            True: 继承已选数据；False: 不继承。
+            从哪个数据集里选；默认 ``self.dataset``。`by` 用它在上一次的结果里选。
+        extended : bool, default: True
+            True：每个条件的结果依次累加；False：每个条件的结果替换前一个，最后只留下最后一个条件的。
+        inherit : bool, default: False
+            True：在上一次的 ``Selected_data`` 后面继续累加；False：先清空。
 
         Returns
         -------
         DataProcessLayer
-            返回 self 以支持链式调用。
+            ``self``，可以接着调用 `by` 或读 ``Selected_data``。
 
         Raises
         ------
         ValueError
-            使用 'samples' 关键字但未提供整数列表。
+            ``'samples'`` 后面不是整数列表，或其中有数据集里没有的样品号；找不到名字或单位。
+        TypeError
+            不支持的条件类型。
         RuntimeError
-            选择操作未正确执行。
+            没有给任何条件，什么都没选出来；或选出的列违反数据集约定（如同一通道单位不同）。
 
+        Examples
+        --------
+        >>> DataProcessLayer(data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data
         """
 
         if not inherit:
@@ -236,34 +246,29 @@ class DataProcessLayer:
         father_dataset: DataSet | None = None,
     ) -> DataSet:
         """
-        从数据集中提取指定列。
+        从源数据集中取出指定的列，组成新数据集。`select` 的每个条件最终都走这里。
 
         Parameters
         ----------
         varname : str, optional
-            变量名（列名或单位名），与 varset 配合使用。
-        varlist_idx : list[int], optional
-            要提取的列索引列表。
-        varset : object, optional
-            变量集合（names 或 units 列表），用于名称匹配。
+            要找的列名或单位，与 *varset* 一起用。
+        varlist_idx : list of int, optional
+            要取的列的位置；给了它就不看 *varname*。
+        varset : list of str, optional
+            在哪个列表里找 *varname*：源数据集的 ``names`` 或 ``units``。
         father_dataset : DataSet
-            源数据集。
+            源数据集（必填）。
 
         Returns
         -------
         DataSet
-            包含提取列的新数据集。
+            新数据集，数据是副本。``father_idx`` 是各列在源数据集里的位置，
+            ``initial_idx`` 沿用源数据集的，仍能追溯到最初的列。
 
         Raises
         ------
         ValueError
-            未提供有效的 varname 或 varlist_idx，或未提供 father_dataset。
-
-        Notes
-        -----
-        必须提供以下参数组合之一：
-        - varname + varset: 按名称查找
-        - varlist_idx: 按索引列表提取
+            按名字没找到任何列，或两种写法都没给；或没给 *father_dataset*。
         """
         Selected_data = DataSet()
 
@@ -300,29 +305,30 @@ class DataProcessLayer:
     
     def by(self, *args, **kwargs) -> DataProcessLayer:
         """
-        在已选数据上进行二次筛选。
+        在上一次选择的结果里再筛选一次，结果替换 ``Selected_data``。
+
+        条件里的列位置、列名、单位都相对于上一次的结果，而不是原数据集。
 
         Parameters
         ----------
-        *args : str | int | list[int] | tuple
-            选择条件，语法同 select()。
+        *args
+            选择条件，写法同 `select`。
         **kwargs
-            传递给 select() 的额外参数。
+            转交给 `select` 的其他参数（如 *extended*）。
 
         Returns
         -------
         DataProcessLayer
-            返回 self 以支持链式调用。
+            ``self``，可以接着再调用 `by`。
 
         Raises
         ------
         RuntimeError
-            未先调用 select()，或连续调用 by()。
+            前面没有调用过 `select`。
 
-        Notes
-        -----
-        必须在 select() 之后立即调用，用于链式筛选：
-        ``layer.select('all').by(0, 1).Selected_data``
+        Examples
+        --------
+        >>> layer.select('samples', [0, 1]).by("Zs'(ohm)", "Zs''(ohm)").Selected_data
         """
         if self.called_select:
             self.called_select = False
@@ -332,28 +338,44 @@ class DataProcessLayer:
 
 class DataTransformer:
     """
-    数据变换类。
+    对一个数据集的列做计算，结果带上名字、单位和样品号，成为新的 `DataSet`。
 
-    对 DataSet 进行数学变换操作（范数、FFT 等）。
+    最常见的用法是逐样品计算：对每个样品各建一个 `DataTransformer`，结果仍按原样品号对应，再拼回一个数据集。
+    一组样品一起算（如两个样品做差）请用 `~plotlib.group.Group.apply`。
 
     Attributes
     ----------
     dataset : DataSet
-        源数据集。
-    data : np.ndarray
-        数据矩阵。
-    status : str
-        状态标识，'ready' 或 'transformed'。
+        参与计算的数据集，不会被修改。
+    result_dataset : DataSet
+        计算结果。``extended=True`` 时，同一个变换器上多次计算的结果在这里依次累加。
+
+    Notes
+    -----
+    结果的元数据按以下规则自动生成，可用参数或 ``naming_func`` 覆盖：
+
+    - **名字**：只有一列输入时沿用它的名字；输入的列同名（同一样品）时为 ``Results_0_of_样品名``、
+      ``Results_1_of_样品名`` ……；否则为 ``Results_0_of_名字1_名字2`` ……（各列名字用 ``_`` 连起来）。
+    - **单位**：输入的列单位相同时沿用；否则为 ``unitless_0``、``unitless_1`` ……
+    - **样品号**：输入的列来自同一样品时沿用它的样品号；来自多个样品时分配一个新样品号。
+
+    Examples
+    --------
+    逐样品求阻抗的模：
+
+    >>> impedance = DataSet()
+    >>> for sample in selected:
+    ...     impedance.expandata(DataTransformer(sample).Norm(norm_unit='|Z|(ohm)'))
     """
 
     def __init__(self, dataset: DataSet | None = None):
         """
-        初始化变换器。
+        创建变换器。
 
         Parameters
         ----------
-        dataset : DataSet
-            输入数据集。
+        dataset : DataSet, optional
+            参与计算的数据集；不给时是空数据集。
         """
         if dataset is None:
             dataset = DataSet()
@@ -388,7 +410,51 @@ class DataTransformer:
         input_sample_idx: int | None = None,
         extended: bool = True
     ) -> DataSet:
-        
+        """
+        用自定义函数计算，返回结果数据集。
+
+        Parameters
+        ----------
+        func : callable, default: 原样返回
+            ``func(data) -> ndarray``。*data* 是选中各列组成的二维数组（行 × 列，副本，原地修改不影响数据集）；
+            返回标量、一维或二维数组，标量当作 1 × 1，一维当作一列。
+        naming_func : callable, optional
+            ``naming_func() -> TransformMetadata``，返回要覆盖的名字、单位、样品号；写 None 的项保留自动值。
+        input_name : str or list of str, optional
+            结果的名字：字符串表示每列同名，列表逐列指定。
+        indicies : int or list of int, optional
+            参与计算的列的位置（支持负数）；None 表示全部列。
+        column : list of Column, optional
+            直接给出参与计算的列，给了它就不看 *indicies*。
+        input_unit : str, optional
+            结果的单位，每列相同。
+        new_sample : bool, default: False
+            True：结果作为一个新样品，样品号避开数据集和已累计结果里的所有样品号。
+        input_sample_idx : int, optional
+            直接指定结果的样品号，优先于 *new_sample*。
+        extended : bool, default: True
+            True：结果累加到 ``result_dataset`` 并返回它；False：返回只含这次结果的新数据集。
+
+        Returns
+        -------
+        DataSet
+            计算结果（元数据的自动规则见类说明）。
+
+        Raises
+        ------
+        TypeError
+            *naming_func* 返回的 ``sample_idx`` 不是一个整数。
+        RuntimeError
+            结果的名字、单位个数与列数不一致；或累加后违反数据集约定（如同一通道单位不同）。
+
+        Examples
+        --------
+        求每个样品的断裂伸长率（取应变列的最大值）：
+
+        >>> def elongation(data):
+        ...     return np.nanmax(data[:, 0])
+        >>> DataTransformer(sample).apply(elongation, input_name='EB', input_unit='%')
+        """
         col_data, _, _, _ = self._resolve_input_data(column, indicies)
 
         transformed_data = self._get_datadim(func(col_data))
@@ -431,19 +497,37 @@ class DataTransformer:
         extended: bool = True
         ):
         """
-        计算数据列的范数。
+        逐行计算选中各列的范数，结果是一列。
+
+        第 i 行的结果为 ``(Σ|x_ij|^order)^(1/order)``，如阻抗的模 ``|Z| = sqrt(Zs'^2 + Zs''^2)``。
 
         Parameters
         ----------
-        order : int
-            范数阶数，默认 2（欧几里得范数）。
-        indicies : list[int] | int, optional
-            参与计算的列索引，None 表示全部列。
+        order : int, default: 2
+            范数的阶数；2 是欧几里得范数。
+        indicies : int or list of int, optional
+            参与计算的列的位置；None 表示全部列。
+        column : list of Column, optional
+            直接给出参与计算的列，给了它就不看 *indicies*。
         norm_unit : str, optional
-            结果单位，None 则自动推断。
+            结果的单位；不给时按自动规则（见类说明）。
+        new_sample : bool, default: False
+            True：结果作为一个新样品。
+        norm_sample_idx : int, optional
+            直接指定结果的样品号，优先于 *new_sample*。
+        extended : bool, default: True
+            True：结果累加到 ``result_dataset`` 并返回它；False：返回只含这次结果的新数据集。
 
         Returns
-        Dataset.column
+        -------
+        DataSet
+            一列范数（累加时含之前的结果）。
+
+        Examples
+        --------
+        >>> zs = DataProcessLayer(data).select("Zs'(ohm)", "Zs''(ohm)").Selected_data
+        >>> for sample in zs:
+        ...     print(DataTransformer(sample).Norm(norm_unit='|Z|(ohm)').data[:3])
         """
         col_data, _, _, _ = self._resolve_input_data(column, indicies)
     
@@ -478,7 +562,10 @@ class DataTransformer:
         input_sample_idx: int | None = None, 
         new_sample: bool = False
         ):
-
+        """
+        `apply` 和 `Norm` 共用的收尾：按自动规则和用户给的值，为计算结果生成名字、单位、样品号，
+        再用 `DataSet.form_array` 装成数据集。优先级：``naming_func`` > 直接给的参数 > 自动规则。
+        """
         _, names, units, sample_idx = self._resolve_input_data(column, indicies)
 
         data_name = self._auto_naming(
@@ -533,6 +620,12 @@ class DataTransformer:
 
 
     def _resolve_input_data(self, column, indicies):
+        """
+        取出参与计算的列：返回 ``(数据, 名字列表, 单位列表, 样品号列表)``。
+
+        给了 *column* 用它；否则按 *indicies* 取（整数、列表、元组、数组都行，支持负数）；都没给取全部列。
+        数据总是副本，交给用户函数时原地修改也不会改到数据集。
+        """
         if column is not None:
             col_data = np.array([col.data for col in column]).T
             names = [col.name for col in column]
@@ -562,6 +655,10 @@ class DataTransformer:
         names_input = None,
         col_num: int = 1
           ):
+        """
+        结果的名字：给了 *names_input* 用它（字符串按列数重复）；否则按类说明里的自动规则，
+        由输入各列的名字 *names_extracted* 推出。
+        """
         
         if isinstance(names_input, str):
             # 与 _auto_units 对 input_unit 的处理一致：单个字符串按列数重复
@@ -584,6 +681,9 @@ class DataTransformer:
         units_input = None,
         col_num: int = 1
           ):
+        """
+        结果的单位：给了 *units_input* 每列都用它；输入各列单位相同时沿用；否则为 ``unitless_0``、``unitless_1`` ……
+        """
         
         if units_input is not None:
             data_unit = [units_input]*col_num
@@ -600,6 +700,12 @@ class DataTransformer:
         sample_idx_input:int| None = None,
         new_sample: bool = False,
             ):
+        """
+        结果的样品号，优先级：直接指定的 *sample_idx_input* > *new_sample* 分配的新样品号
+        > 输入来自同一样品时沿用 > None（由 `DataSet.update_attributes` 分配新样品号）。
+
+        新样品号同时避开数据集里和已累计结果里的样品号，同一个变换器多次分配也不会撞号。
+        """
         
         if sample_idx_input is not None:
             data_sample_idx = sample_idx_input
@@ -621,6 +727,7 @@ class DataTransformer:
     
     @staticmethod
     def _get_datadim(data):
+        """把计算结果整理成二维：标量变成 1 × 1，一维数组变成一列，二维原样返回。"""
         if data.ndim == 0:
             data = data.reshape(1, 1)
         elif data.ndim == 1:

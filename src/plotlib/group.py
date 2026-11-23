@@ -1,3 +1,7 @@
+"""
+分组：`Group` 是若干样品组成的、有名字的集合，用于分组绘图（``DataPlotter.plot_groups``）
+和逐分组计算（`Group.apply`）。
+"""
 import copy
 from collections.abc import Callable
 from numbers import Integral
@@ -22,8 +26,8 @@ _STYLE_CHECKS = {'linestyle': check_linestyle, 'marker': check_marker, 'color': 
 
 def _resolve_num(num) -> list[int]:
     """
-    把已经校验过的 num 转成 list[int]：单个整数 → [n]；容器 → 逐个转成 Python int。
-    只做转换，不做检查；调用前必须先经过 _check_group 的类型与元素检查。
+    把已经校验过的 ``num`` 转成 ``list[int]``：单个整数变成 ``[n]``，容器逐个转成 Python 的 int。
+    只做转换，不做检查，调用前必须先经过 `_check_group` 的类型与元素检查。
     """
     if isinstance(num, Integral):
         return [int(num)]
@@ -32,11 +36,19 @@ def _resolve_num(num) -> list[int]:
 
 def _check_group(group_name, group_config, available: set[int]) -> dict:
     """
-    校验一个分组的配置，原地把 'num' 格式化为 list[int]，返回 {分组名: 该配置}。
+    校验一个分组的配置，原地把 ``'num'`` 整理成 ``list[int]``，返回 ``{分组名: 该配置}``。
 
-    检查顺序：是否为字典 → 有无 num → num 的类型 → 元素是否为整数 → 是否为空 → 重复 → 是否在数据集中。
-    模块级函数：只依赖传入的参数，不读写任何对象的状态（传入的分组配置除外：num 被原地格式化）。
-    available 是数据集里现有的样品号集合，由调用方传入。
+    检查顺序：是不是字典 → 有没有 ``num`` → ``num`` 的类型 → 元素是不是整数 → 是否为空 → 有无重复 →
+    是否都在数据集里 → 样式字段是不是标准写法。*available* 是数据集里现有的样品号，由调用方传入；
+    本函数不读写任何对象的状态（传入的配置除外，其中的 ``num`` 被原地整理）。
+
+    Raises
+    ------
+    TypeError
+        配置不是字典；``num`` 的类型不对或含非整数；样式字段的类型不对。
+    ValueError
+        缺少 ``num``；``num`` 为空、有重复或有数据集里没有的样品号；样式字段的取值不对。
+        信息里都带分组名。
     """
     if not isinstance(group_config, dict):
         raise TypeError(
@@ -98,21 +110,56 @@ class Group():
     """
     分组：若干样品组成的、有名字的集合，是分组配置的唯一主人。
 
-    配置只接受完整写法：{分组名: {'num': [样品号, ...], 其余字段...}}。
-    样式字段 linestyle / marker / color 只收 style.py 的标准写法（如 'dash'、'circle'、'red'），
-    创建时校验，原样保存；其余字段不检查。
-    创建时解析并校验全部分组；之后其他地方只向它要结果，不再自己解析配置。
-    - 读：names、for name in group、sample_ids(name)、options(name)、
-          linestyle(name) / marker(name) / color(name)、to_config()，都返回副本；
-    - 改：add / set / delete，先校验全部、再修改，任何一个分组不合法就一个都不改。
+    创建时解析并校验全部分组，之后其他地方只向它要结果，不再自己解析配置。
 
-    传入的配置：每个分组的 'num' 会被原地格式化为 list[int]（用户的设计决定：
-    输入先统一格式，后续处理不再各自解析）；分组的增删改只改 Group 自己的外层字典，
-    不会往原字典里加、删分组。
-    已知取舍：Group 与传入字典共用各分组的配置对象，创建后在脚本里直接改分组配置会绕过校验。
+    - **读**：`names`、``for name in group``、`sample_ids`、`options`、`linestyle` / `marker` / `color`、
+      `to_config`，返回的都是副本；
+    - **改**：`add` / `set` / `delete`，先校验全部、再修改，任何一个分组不合法就一个都不改；
+    - **算**：`apply`，每个分组得到一个新样品。
+
+    Notes
+    -----
+    **配置写法。** 只接受完整写法 ``{分组名: {'num': [样品号, ...], 其余字段...}}``：
+
+    - ``num``：样品号，可以写单个整数、列表、元组、``range`` 或 numpy 数组，不能为空、不能重复，
+      必须都在数据集里；书写顺序有意义（`apply` 里是 ``slices`` 的顺序，合并绘图时是优先级）；
+    - ``linestyle`` / ``marker`` / ``color``：分组绘图的样式，只收标准写法（如 ``'dash'``、``'circle'``、
+      ``'red'``，见 `plotlib.style`），创建时校验、原样保存；
+    - 其余字段（如 ``'label'``）不检查，原样保存，用 `options` 读取。
+
+    **传入的配置会被原地整理。** 每个分组的 ``num`` 被整理成 ``list[int]``，后续处理不再各自解析；
+    增删分组只改 `Group` 自己的外层字典，不会往原字典里加、删分组。`Group` 与传入的字典共用各分组的配置对象，
+    所以创建之后在脚本里直接改分组配置会绕过校验，请用 `set`。
+
+    Examples
+    --------
+    >>> groups = Group(data, {
+    ...     'Ref': {'num': [0, 1]},
+    ...     'Doped': {'num': range(2, 5), 'linestyle': 'dash', 'color': 'red'},
+    ... })
+    >>> groups.names
+    ['Ref', 'Doped']
+    >>> groups.sample_ids('Doped')
+    [2, 3, 4]
+    >>> DataPlotter(data, groups=groups).plot_groups(merge_groups=True)
     """
 
     def __init__(self, dataset: DataSet, group_config: dict):
+        """
+        创建分组，并校验全部分组的配置。
+
+        Parameters
+        ----------
+        dataset : DataSet
+            分组所属的数据集。样品号按它校验；绘图时必须用同一个数据集。
+        group_config : dict
+            ``{分组名: {'num': [...], ...}}``，写法见类说明。其中的 ``num`` 会被原地整理成 ``list[int]``。
+
+        Raises
+        ------
+        TypeError, ValueError
+            配置写法不对，信息里带分组名（详见 `_check_group`）。
+        """
         self.dataset = dataset
         # 校验并格式化后的配置：{分组名: {'num': list[int], 其余字段...}}
         # 外层字典是 Group 自己的；下划线开头表示内部数据，请通过下面的方法读写
@@ -122,8 +169,8 @@ class Group():
 
     def _validated(self, group_config: dict) -> dict[str, dict]:
         """
-        逐个校验 group_config 中的分组，全部通过才返回 {分组名: 格式化后的配置}。
-        __init__、add、set 共用，保证三处规则完全一致。
+        逐个校验 *group_config* 中的分组，全部通过才返回 ``{分组名: 整理后的配置}``。
+        ``__init__``、`add`、`set` 共用，保证三处规则完全一致。样品号每次现查数据集，不存快照。
         """
         if not isinstance(group_config, dict):
             raise TypeError(
@@ -138,34 +185,44 @@ class Group():
         return validated
 
     def _require(self, group_name: str) -> dict:
-        """取出已有分组的内部配置；分组不存在 → ValueError。供读接口和 delete 共用。"""
+        """取出已有分组的内部配置（不是副本），供读接口和 `delete` 共用；分组不存在时报 `ValueError`。"""
         if group_name not in self._config:
             raise ValueError(f"数据分组配置错误：缺少 '{group_name}' 组。")
         return self._config[group_name]
 
     @staticmethod
     def _quoted(names) -> str:
-        """报错信息里的分组名列表：'A', 'B'。"""
+        """报错信息里的分组名列表：``'A', 'B'``。"""
         return ', '.join(f"'{name}'" for name in names)
 
     # ── 读：都返回副本，改返回值不影响 Group ─────────────────────
 
     @property
     def names(self) -> list[str]:
-        """全部分组名，保持书写顺序。"""
+        """全部分组名，保持书写顺序（返回新列表）。"""
         return list(self._config)
 
     def __iter__(self):
-        """for name in group：按书写顺序遍历分组名，与遍历字典得到键一样。"""
+        """``for name in group``：按书写顺序遍历分组名，与遍历字典得到键一样；循环里增删分组也不出错。"""
         # 遍历名字列表的副本：循环里即使调用 add / delete 也不会出现「字典在遍历时被修改」的错误
         return iter(self.names)
 
     def sample_ids(self, group_name: str) -> list[int]:
-        """该分组的样品号列表，保持书写顺序（顺序就是角色，如 slices[1] / slices[0]）。"""
+        """
+        该分组的样品号，保持书写顺序（顺序就是角色，如 `apply` 里的 ``slices[1] - slices[0]``）。
+
+        Raises
+        ------
+        ValueError
+            没有这个分组。
+        """
         return list(self._require(group_name)['num'])
 
     def options(self, group_name: str) -> dict:
-        """该分组 'num' 以外的全部字段（包括下面三个样式字段），如 {'linestyle': 'dash'}；没有则为 {}。"""
+        """
+        该分组 ``num`` 以外的全部字段（包括三个样式字段和自定义字段），如 ``{'linestyle': 'dash'}``；
+        没有时为 ``{}``。返回的是深拷贝。
+        """
         config = self._require(group_name)
         return {key: copy.deepcopy(value) for key, value in config.items() if key != 'num'}
 
@@ -173,25 +230,42 @@ class Group():
     # 翻译成 matplotlib / Plotly 原生值是后端的事，Group 不关心。
 
     def linestyle(self, group_name: str):
-        """线型：'solid' / 'dash' / 'dot' / 'dashdot'，或自定义虚线 (实线长, 空白长, ...)。"""
+        """该分组写的线型（标准写法，如 ``'dash'`` 或 ``(3, 5)``）；没写时为 None。"""
         return copy.deepcopy(self._require(group_name).get('linestyle'))
 
     def marker(self, group_name: str):
-        """标记：'circle'、'square' 等。"""
+        """该分组写的标记（标准写法，如 ``'circle'``）；没写时为 None。"""
         return copy.deepcopy(self._require(group_name).get('marker'))
 
     def color(self, group_name: str):
-        """颜色：CSS 颜色名、'#rrggbb' 或 RGB 元组；写了就覆盖这组所有样品的按样品配色。"""
+        """该分组写的颜色（CSS 颜色名、``'#rrggbb'`` 或 RGB 元组）；没写时为 None。写了就覆盖这组所有样品的按样品配色。"""
         return copy.deepcopy(self._require(group_name).get('color'))
 
     def to_config(self) -> dict[str, dict]:
-        """当前配置的新字典（num 为规范化后的列表），可以保存、打印或交给别处使用。"""
+        """当前配置的深拷贝（``num`` 已整理成列表），可以保存、打印或用来创建新的 `Group`。"""
         return copy.deepcopy(self._config)
 
     # ── 改：先校验全部、再修改；都返回 self，可链式调用 ────────────
 
     def add(self, group_config: dict) -> Group:
-        """新增分组；分组名已存在 → ValueError（替换请用 set）。"""
+        """
+        新增分组，加在最后。
+
+        Parameters
+        ----------
+        group_config : dict
+            ``{分组名: 配置}``，可以一次加多个。
+
+        Returns
+        -------
+        Group
+            ``self``，可以链式调用。
+
+        Raises
+        ------
+        ValueError
+            有分组名已存在（替换请用 `set`）；或配置写法不对。此时一个分组都不加。
+        """
         validated = self._validated(group_config)
         existing = [name for name in validated if name in self._config]
         if existing:
@@ -202,7 +276,24 @@ class Group():
         return self
 
     def set(self, group_config: dict) -> Group:
-        """整体替换已有分组，旧字段不保留，位置不变；分组名不存在 → ValueError（新增请用 add）。"""
+        """
+        整体替换已有分组：旧字段不保留，分组的位置不变。
+
+        Parameters
+        ----------
+        group_config : dict
+            ``{分组名: 新配置}``，可以一次替换多个。
+
+        Returns
+        -------
+        Group
+            ``self``，可以链式调用。
+
+        Raises
+        ------
+        ValueError
+            有分组名不存在（新增请用 `add`）；或配置写法不对。此时一个分组都不改。
+        """
         validated = self._validated(group_config)
         missing = [name for name in validated if name not in self._config]
         if missing:
@@ -214,7 +305,14 @@ class Group():
         return self
 
     def delete(self, group_name: str) -> Group:
-        """删除分组；分组名不存在 → ValueError。"""
+        """
+        删除分组，返回 ``self``。
+
+        Raises
+        ------
+        ValueError
+            没有这个分组。
+        """
         self._require(group_name)
         del self._config[group_name]
         return self
@@ -229,80 +327,65 @@ class Group():
         naming: Callable | None = None,
     ) -> DataSet:
         """
-        对每组 config 条目执行回调计算。
+        逐分组计算：每个分组里的几个样品一起交给 *callback*，每组得到一个新样品。
 
-        固定流程：遍历 config → 选择列 → 按样品拆分对齐 → 调用 callback → 拼装结果。
-        用户只需提供 callback（计算逻辑）和可选的 naming（命名逻辑）。
+        对每个分组依次做：选出这组样品的列 →（按 *select* 再筛选）→ 按样品切开、对齐 →
+        调用 *callback* → 生成名字和单位 → 装成一个新样品。用户只需提供计算逻辑和可选的命名逻辑。
 
         Parameters
         ----------
-        callback : Callable[*DataSet] -> np.ndarray
-            签名：callback(*slices) -> np.ndarray
-
-            - slices[i] 是该分组中第 i 个样品的 DataSet 切片，顺序对应 config['num'][i]
-            - 每个 slice 的列顺序与 select 参数中词条的顺序一致
-            - 返回值为 ndarray，shape (n_rows, n_result_cols)
-            - 若返回列顺序与 slice 列顺序不同（如透传、reorder），
-              必须同时提供 naming，否则 name/unit 会错位
-
-            标准示例（两个样品做差，无透传）::
-
-                def subtract(*slices):
-                    return slices[1].data - slices[0].data
-
-            含透传列示例（按列名精确取列，结果列顺序自定义）::
-
-                def subtract_with_freq(*slices):
-                    s0, s1 = slices[0], slices[1]
-                    zs_idx = [i for i, n in enumerate(s0.names)
-                               if n in ("Zs'(ohm)", "Zs''(ohm)")]
-                    freq_idx = s0.names.index("Frequency(Hz)")
-                    camp = s1.data[:, zs_idx] - s0.data[:, zs_idx]
-                    freq = s0.data[:, freq_idx].reshape(-1, 1)
-                    return np.hstack((freq, camp))   # 透传列在前
-
+        callback : callable
+            ``callback(*slices) -> ndarray``。``slices[i]`` 是这组第 i 个样品的子数据集，
+            顺序就是配置里 ``num`` 的书写顺序（顺序即角色，如 ``slices[1] - slices[0]``）；
+            每个子数据集的列顺序与 *select* 的条件顺序一致。返回形状 ``(行数, 结果列数)`` 的数组
+            （标量、一维数组也可以，会整理成二维）。
         select : tuple, optional
-            列过滤词条，按顺序传给 DataProcessLayer.by()。
-            slice 内的列顺序与此一致。
-            如 ("Zs'(ohm)", "Zs''(ohm)", "Frequency(Hz)")。
-            None 则不过滤，传入全部列。
-
-        naming : Callable, optional
-            签名：naming(slices, result_data) -> (names: list[str], units: list[str])
-
-            - slices：与传入 callback 相同的切片列表
-            - result_data：callback 返回的 ndarray
-            - 返回的 names/units 长度必须等于 result_data.shape[1]
-            - 凡是 callback 改变了列顺序（透传、reorder、hstack），
-              必须提供 naming，不能依赖 _auto_naming
-
-            标准示例（两个样品做差，结果列顺序与 slice 一致）::
-
-                def my_naming(slices, result_data):
-                    s0 = slices[0]
-                    names = [f"Delta_{n}" for n in s0.names]
-                    units = list(s0.units)
-                    return names, units
-
-            含透传列示例（结果列顺序：freq 在前，camp 在后）::
-
-                def my_naming(slices, result_data):
-                    s0 = slices[0]
-                    freq_idx = s0.names.index("Frequency(Hz)")
-                    zs_idx = [i for i, n in enumerate(s0.names)
-                               if n in ("Zs'(ohm)", "Zs''(ohm)")]
-                    names = [s0.names[freq_idx]] + [f"Delta_{s0.names[i]}" for i in zs_idx]
-                    units = [s0.units[freq_idx]] + [s0.units[i] for i in zs_idx]
-                    return names, units
-
-            None 则由 _auto_naming 自动生成（仅适用于列顺序未改变的情况）：
-            每一列都叫「组名_函数名」，如分组 'diff' 用 subtract 计算 → 'diff_subtract'；
-            单位取第一个 slice 同位置的单位。
+            每组再筛选列的条件，按顺序交给 `~plotlib.processor.DataProcessLayer.by`，
+            如 ``("Frequency(Hz)", "Zs'(ohm)", "Zs''(ohm)")``；None 表示用全部列。
+        naming : callable, optional
+            ``naming(slices, result_data) -> (names, units)``，两个列表的长度都必须等于结果列数。
+            *callback* 改变了列的顺序或个数（如把频率列放在最前面）时必须提供，否则名字、单位会错位。
+            不给时每列都叫 ``组名_函数名`` （如分组 ``'diff'`` 用 ``subtract`` 计算得到 ``'diff_subtract'``），
+            单位取第一个样品同位置列的单位。
 
         Returns
         -------
         DataSet
-            每个分组的计算结果作为一个新样品（样品号从 0 起依次编号），依次拼接而成的数据集。
+            每个分组一个新样品（样品号从 0 起依次编号），按分组的书写顺序拼接。
+
+        Raises
+        ------
+        ValueError
+            某个样品在 *select* 筛选后没有列；同一组的几个样品列数不同。
+        RuntimeError
+            命名的个数与结果列数不一致；或结果违反数据集约定（如同一通道单位不同）。
+
+        See Also
+        --------
+        plotlib.processor.DataTransformer : 逐样品计算，结果仍按原样品号对应。
+
+        Examples
+        --------
+        两个样品做差（结果列顺序与输入一致，可以不写 *naming*）：
+
+        >>> groups = Group(data, {'diff': {'num': [0, 1]}})
+        >>> def subtract(*slices):
+        ...     return slices[1].data - slices[0].data
+        >>> groups.apply(subtract, select=("Zs'(ohm)", "Zs''(ohm)"))
+
+        保留频率列在最前面，必须同时写 *naming* （按单位取列）：
+
+        >>> def subtract_with_freq(s0, s1):
+        ...     freq = s0.units.index("Frequency(Hz)")
+        ...     zs = [i for i, u in enumerate(s0.units) if u in ("Zs'(ohm)", "Zs''(ohm)")]
+        ...     return np.hstack((s0.data[:, [freq]], s1.data[:, zs] - s0.data[:, zs]))
+        >>> def naming(slices, result):
+        ...     s0 = slices[0]
+        ...     freq = s0.units.index("Frequency(Hz)")
+        ...     zs = [i for i, u in enumerate(s0.units) if u in ("Zs'(ohm)", "Zs''(ohm)")]
+        ...     return ([s0.names[freq]] + [f"Delta_{s0.names[i]}" for i in zs],
+        ...             [s0.units[freq]] + [s0.units[i] for i in zs])
+        >>> groups.apply(subtract_with_freq, naming=naming)
         """
         accumulated = DataSet()
         result_sample_idx = 0
@@ -374,7 +457,10 @@ class Group():
 
 
     def _auto_naming(self, slices, n_cols, group_name, callback):
-        """自动生成结果列的 names 和 units。"""
+        """
+        没给 ``naming`` 时生成结果的名字和单位：每列都叫 ``组名_函数名``，单位取第一个样品同位置列的单位
+        （数据集的约定保证同一位置的通道在各样品里单位相同）。
+        """
         cb_name = getattr(callback, '__name__', 'calc')
 
         names = [f"{group_name}_{cb_name}"] * n_cols

@@ -1228,6 +1228,39 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
    （只「保留默认定位器」仍算默认值，被后端补全局时关掉）→ 显式装对数次刻度定位器。
 - 未处理（等发布时再说）：PyPI 上 `plotlib` 已被占用（发行名需另起，导入名可不变）；源码包缺 `tests/conftest.py`、`tools/`，包内测试跑不起来。
 
+#### 1.0 之后：文档字符串与 API 文档（2026-11-23，564 passed）
+
+用户：「把 src 中所有函数的注释按 matplotlib 这种开源库的标准更新，解释性强一点、具体一点」。用户定：
+1. **numpydoc 格式**：英文节标题（Parameters / Returns / Raises / See Also / Notes / Examples）+ 中文正文；
+2. **开发历史移出文档字符串**：日期、审查编号、步骤号、「以前 / 曾经」不再写进文档字符串，设计理由写进 Notes；
+   函数体里 `#` 开头的实现注释不动（历史线索仍在那里，完整记录在本文件）；
+3. **按标准详略**：公开接口写完整并配 Examples，下划线开头的内部函数写简要说明；顺便建立 API 文档。
+
+- 实施：17 个文件逐个用 Edit 改；开始前给 src 拍快照，每改完一个文件就用 ast 比对「去掉文档字符串后的代码」，
+  全程确认一行代码没动。补上了原来缺的文档：两个后端类、`DataTransformer.apply`、`Column` 的各个属性、`group.py` 的模块说明。
+  文档里写了输出的示例（`LineStyle.updated`、`color_positions`、`translate_points`、`Group`）都实际运行核对过。
+- 顺带改正两处原文档的错误：`Group.apply` 的示例按 `names` 找 `"Frequency(Hz)"` 列（应按 `units`，`names` 是样品名）；
+  `DataProcessLayer.by` 说「不能连续调用」（实际可以，每次在上一次结果里再筛）。
+- API 文档：`docs/api/`（Sphinx + `pydata-sphinx-theme`，与 numpy、pandas 同一主题；napoleon 解析 numpydoc），
+  「API 参考」每个公开对象一页，「内部结构」展示各模块说明（不建索引，避免与 API 参考重复）。`pyproject.toml` 加可选依赖 `docs`，
+  生成的 `_build/`、`generated/` 加进 `.gitignore`。构建零警告。
+- 中文与 reStructuredText 行内标记：标准规则要求标记前后是空格或标点，且结束标记后不能紧跟开括号「（」、开始标记前不能紧挨闭括号「）」。
+  试过 docutils 的 `character_level_inline_markup`（不必改注释），但它会吞掉参数名里的下划线（`font_family` 显示成 `fontfamily`）且不报警告，
+  所以改用标准规则：32 行在「``代码``」与「（」之间补一个空格；类型 `dict of {键: 值}` 改写成 `dict`（花括号会被当成取值集合）。
+  以后写文档字符串：代码标记后面要接中文括号时先空一格。
+
+#### Plotly 对数轴：刻度格式盖掉次刻度文字设置；多线图横轴不写预设格式（2026-11-23，567 passed）
+
+- 现象：`piezo_interactive.py` 的 X 轴 `AxisStyle(scale='log', format='{x:.0e}')` 加 `TickStyle(minor_labels='none')`，
+  Plotly 仍在 2e-3、5e-3 等位置写满文字。原因在 plotly.js 本身（7.1.0 的 formatLog）：写了 `tickformat` 就把每个刻度按格式写完整数值，
+  跳过 `minorloglabels`；而跨的数量级不多时 Plotly 把 2、5 也当主刻度（matplotlib 里是次刻度）。
+- 用户定（方案 1）：`plotly_styles.apply_log_format` 在所有回调之后由后端对每根轴调用一次：对数轴写了格式且次刻度不写文字（`'none'`，库默认）时
+  设 `dtick=1`（主刻度只在整数量级，2 ~ 9 交给不写文字的次刻度，与 matplotlib 一致）；轴上已有 `dtick` / `tickmode` 时不动，
+  所以跨很多数量级嫌挤可以用 `custom` 回调自己设 `dtick=2`；`'full'` 不用改；`'short'` 加格式 Plotly 做不到，报错。
+- 代价：放大到一个数量级以内时轴上没有主刻度文字（用户：同一数量级大概率要看次刻度，不会设 `'none'`）。
+- 随后（用户定）：多线图预设不再给 X 轴写 `'{x:.2f}'`（X 轴常改成对数轴，两位小数会把 1e-3 写成 0.00），交给后端自动；
+  Y 轴仍是两位小数。`test_neglog_x` 原来靠预设格式直接调用格式器，改成渲染后看刻度文字（默认格式器要收到刻度位置才写得出数字），567 passed。
+
 ---
 
 ### 步骤 8：让脚本可复现

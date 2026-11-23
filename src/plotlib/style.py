@@ -1,21 +1,29 @@
 """
-公共样式词汇与后端翻译（STRUCTURE_REVIEW 步骤 4.3）。
+翻译层：一套与后端无关的标准写法，以及把它换成 matplotlib / Plotly 原生值的函数。
 
-约定：程序入口（分组配置、formatter 工厂、DataPlotter(lines=LineStyle(...))）只接受一套标准写法，
-不认识就报错，也不替用户改写；翻译只在后端发生：translate_* 把标准写法换成各后端的原生值。
+所有入口（分组配置、formatter 工厂、``DataPlotter(lines=...)``）只接受标准写法，不认识就报错，
+也不替用户改写；翻译只在后端发生。
 
-标准写法：
-    线型  'solid'、'dash'、'dot'、'dashdot'；
-          或自定义虚线 (实线长, 空白长, ...)：正数、偶数个，单位是线宽的倍数
-    标记  'circle'、'square'、'triangle-up'、'triangle-down'、'diamond'、'cross'、'x'
-    颜色  CSS 颜色名（W3C 标准 148 个，不区分大小写）；六位色号 '#rrggbb'；RGB 三个 0~255 的整数
+标准写法
+--------
+线型
+    ``'solid'``、``'dash'``、``'dot'``、``'dashdot'``；或自定义虚线 ``(实线长, 空白长, ...)``：
+    正数、偶数个，单位是线宽的倍数。
+标记
+    ``'circle'``、``'square'``、``'triangle-up'``、``'triangle-down'``、``'diamond'``、``'cross'``、``'x'``。
+颜色
+    CSS 颜色名（W3C 标准的 148 个，不区分大小写）；六位色号 ``'#rrggbb'``；三个 0~255 的整数 ``(r, g, b)``。
 
-check_*      只校验：合法时返回 None；类型错报 TypeError，值错报 ValueError，信息里带写错的值。
-translate_*  先校验，再翻译成指定后端的原生值。
+函数分两类
+----------
+``check_*``
+    只校验：合法时返回 None；类型错报 `TypeError`，取值错报 `ValueError`，报错信息里带写错的值。
+``translate_*``
+    先校验，再翻译成指定后端的原生值。长度、字号等以磅为单位的量，matplotlib 原样使用，
+    Plotly 按 dpi 换成像素（``像素 = 磅 × dpi / 72``）。
 
-这一层就是「翻译层」（6.7 起）：除了线型 / 标记 / 颜色，排版预设的图例位置、刻度格式，
-以及按显式 dpi 的单位换算（磅 → 像素、英寸 → 像素）也在这里；两个后端只调用 translate_* 再应用结果。
-刻度（TickStyle，2026-11-20）也在这里：check_ticks / translate_ticks。
+除线型、标记、颜色外，样式对象（`~plotlib.plot_spec.LineStyle` 等）、图例位置、刻度格式和
+单位换算也在这里翻译；两个后端只调用 ``translate_*`` 再应用结果。
 """
 import math
 import re
@@ -58,16 +66,27 @@ PLOTLY_DEFAULT_LINEWIDTH = 2
 
 
 def check_backend(backend) -> None:
+    """
+    校验后端名。
+
+    Raises
+    ------
+    ValueError
+        *backend* 不是 ``'matplotlib'`` 或 ``'plotly'``。
+    """
     if backend not in ("matplotlib", "plotly"):
         raise ValueError(f"不支持的 backend: {backend!r}，可用 'matplotlib'、'plotly'")
 
 
 def _words(table) -> str:
+    """把可用的词列成报错信息里的一串：``'solid'、'dash'``。"""
     return '、'.join(f"'{word}'" for word in table)
 
 
 def _is_number(x) -> bool:
-    """bool 也是 int 的子类，但 True / False 当段长或颜色分量多半是写错了，不接受。"""
+    """
+    是否为实数。bool 是 int 的子类，但把 True / False 当段长或颜色分量多半是写错了，所以不接受。
+    """
     return isinstance(x, Real) and not isinstance(x, bool)
 
 
@@ -75,7 +94,16 @@ def _is_number(x) -> bool:
 # 校验
 # ══════════════════════════════════════════════
 def check_linestyle(value) -> None:
-    """标准词之一，或自定义虚线 (实线长, 空白长, ...)。"""
+    """
+    校验线型：标准词之一，或自定义虚线 ``(实线长, 空白长, ...)``。
+
+    Raises
+    ------
+    TypeError
+        类型不对，或自定义虚线里有非数字。
+    ValueError
+        不认识的线型词；自定义虚线不是正偶数个，或有段长不大于 0。
+    """
     if isinstance(value, str):
         if value not in LINESTYLES:
             raise ValueError(f"不支持的线型 {value!r}，可用 {_words(LINESTYLES)}，"
@@ -94,6 +122,16 @@ def check_linestyle(value) -> None:
 
 
 def check_marker(value) -> None:
+    """
+    校验标记：必须是标准词之一（见模块说明）。
+
+    Raises
+    ------
+    TypeError
+        不是字符串。
+    ValueError
+        不认识的标记词。
+    """
     if not isinstance(value, str):
         raise TypeError(f"标记 {value!r} 的类型不支持：应为 {_words(MARKERS)} 之一")
     if value not in MARKERS:
@@ -101,7 +139,16 @@ def check_marker(value) -> None:
 
 
 def check_color(value) -> None:
-    """CSS 颜色名（不区分大小写）、'#rrggbb'，或 RGB 三个 0~255 的整数。"""
+    """
+    校验颜色：CSS 颜色名（不区分大小写）、``'#rrggbb'``，或三个 0~255 的整数。
+
+    Raises
+    ------
+    TypeError
+        类型不对，或 RGB 里有非整数。
+    ValueError
+        不认识的颜色名或色号；RGB 不是正好三个数，或超出 0~255。
+    """
     if isinstance(value, str):
         if _HEX_COLOR.fullmatch(value) or value.lower() in CSS4_COLORS:
             return
@@ -123,9 +170,23 @@ def check_color(value) -> None:
 # ══════════════════════════════════════════════
 def translate_linestyle(value, backend: Backend, linewidth=None):
     """
-    自定义虚线的段长是线宽的倍数：
-    matplotlib 补偏移量 0，返回 (0, (段长, ...))，它自己按线宽缩放；
-    Plotly 要像素：段长 × linewidth（未给时用 Plotly 默认线宽 2），返回 '9px,15px' 这样的字符串。
+    把标准线型翻译成后端的原生写法。
+
+    Parameters
+    ----------
+    value : str or tuple of float
+        标准线型词，或自定义虚线 ``(实线长, 空白长, ...)`` （单位是线宽的倍数）。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+    linewidth : float, optional
+        Plotly 换算自定义虚线时用的线宽（像素）；不给时用 Plotly 的默认线宽 2。
+
+    Returns
+    -------
+    str or tuple
+        标准词：matplotlib 为 ``'-'``、``'--'`` 等，Plotly 为 ``'solid'``、``'dash'`` 等。
+        自定义虚线：matplotlib 为 ``(0, (段长, ...))``，由 matplotlib 自己按线宽缩放；
+        Plotly 为 ``'9px,15px'`` 这样的像素字符串（段长 × *linewidth*）。
     """
     check_backend(backend)
     check_linestyle(value)
@@ -138,13 +199,19 @@ def translate_linestyle(value, backend: Backend, linewidth=None):
 
 
 def translate_marker(value, backend: Backend) -> str:
+    """把标准标记词翻译成后端的原生写法（如 ``'circle'`` → matplotlib 的 ``'o'``）。"""
     check_backend(backend)
     check_marker(value)
     return MARKERS[value][backend]
 
 
 def translate_color(value, backend: Backend):
-    """颜色名和色号两个后端都认，原样返回；RGB 到 matplotlib 换成 0~1，到 Plotly 写成 'rgb(r,g,b)'。"""
+    """
+    把标准颜色翻译成后端的原生写法。
+
+    颜色名和色号两个后端都认，原样返回；RGB 整数在 matplotlib 换成 0~1 的浮点元组，
+    在 Plotly 写成 ``'rgb(r,g,b)'``。
+    """
     check_backend(backend)
     check_color(value)
     if isinstance(value, str):
@@ -164,7 +231,10 @@ STYLE_FIELDS_BY_KIND: dict[str, tuple[str, ...]] = {
 
 
 def _check_positive(name: str, value, allow_zero: bool = False) -> None:
-    """长度、宽度、字号：要写数字（磅），且大于 0（间距类可以为 0）。None 表示不改，不检查。"""
+    """
+    校验长度、宽度、字号这类量：要写数字（磅）且大于 0；*allow_zero* 为 True 时可以为 0（间距类）。
+    None 表示「不改」，不检查。
+    """
     if value is None:
         return
     if not _is_number(value):
@@ -174,6 +244,7 @@ def _check_positive(name: str, value, allow_zero: bool = False) -> None:
 
 
 def _check_switch(name: str, value) -> None:
+    """校验开关：只收 True / False；None 表示「不改」。"""
     if value is not None and not isinstance(value, bool):
         raise TypeError(f"{name} 是开关，要写 True / False，实际是 {value!r}")
 
@@ -182,7 +253,14 @@ def _check_switch(name: str, value) -> None:
 # 线（LineStyle，2026-11-20 样式对象化）
 # ══════════════════════════════════════════════
 def check_line_style(style: LineStyle) -> None:
-    """校验 LineStyle 写了的字段（颜色、线型、标记用上面的标准写法）。"""
+    """
+    校验 `LineStyle` 写了的字段：宽度和标记大小为正数，颜色、线型、标记为标准写法。
+
+    Raises
+    ------
+    TypeError, ValueError
+        某个字段写错，信息里带字段名和写错的值。
+    """
     _check_positive('width', style.width)
     _check_positive('marker_size', style.marker_size)
     if style.color is not None:
@@ -196,11 +274,31 @@ def check_line_style(style: LineStyle) -> None:
 def translate_line_style(style: LineStyle, backend: Backend, dpi: float | None = None,
                          dash_width: float | None = None) -> dict:
     """
-    LineStyle → 各后端原生值，只含写了的字段：
-      matplotlib：Line2D 的属性 {'linewidth', 'color', 'linestyle', 'marker', 'markersize'}（磅，dpi 不用）；
-      Plotly：    trace 的扁平写法 {'line_width', 'line_color', 'line_dash', 'marker_symbol', 'marker_size', 'marker_color'}，
-                  可直接交给 go.Scatter(...) / trace.update(...)；磅按 dpi 换成像素；点跟着线色。
-    自定义虚线的段长是线宽的倍数：Plotly 要像素，按这里写的线宽换算，没写时用 dash_width（已是像素，一般是全局线宽）。
+    把 `LineStyle` 翻译成后端的画线参数，只含写了的字段。
+
+    Parameters
+    ----------
+    style : LineStyle
+        要翻译的线样式。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+    dpi : float, optional
+        Plotly 把磅换成像素用的分辨率；Plotly 必填，matplotlib 不用。
+    dash_width : float, optional
+        Plotly 换算自定义虚线段长用的线宽（像素）。*style* 自己写了 ``width`` 时用它，
+        没写时用 *dash_width* （一般是全局线宽）。
+
+    Returns
+    -------
+    dict
+        matplotlib：``Line2D`` 的属性 ``linewidth``、``color``、``linestyle``、``marker``、``markersize``。
+        Plotly：trace 的扁平写法 ``line_width``、``line_color``、``line_dash``、``marker_symbol``、
+        ``marker_size``、``marker_color`` （点与线同色），可直接交给 ``go.Scatter(...)`` 或 ``trace.update(...)``。
+
+    Raises
+    ------
+    ValueError
+        后端是 Plotly 却没给 *dpi*；或某个字段写错。
     """
     check_backend(backend)
     check_line_style(style)
@@ -231,7 +329,11 @@ def translate_line_style(style: LineStyle, backend: Backend, dpi: float | None =
 
 
 def only_fields(style: LineStyle, names: tuple[str, ...]) -> LineStyle:
-    """只留 names 里的字段，其余置 None（按画法取看得见的字段，见 STYLE_FIELDS_BY_KIND）。"""
+    """
+    只保留 *names* 里的字段，其余置 None。
+
+    后端用它按画法取出看得见的字段（见 ``STYLE_FIELDS_BY_KIND``），例如散点只要标记和标记大小。
+    """
     return type(style)(**{name: getattr(style, name) for name in names})
 
 
@@ -240,7 +342,10 @@ def only_fields(style: LineStyle, names: tuple[str, ...]) -> LineStyle:
 # ══════════════════════════════════════════════
 
 def _inside(loc: str, x: float, y: float, xanchor: str, yanchor: str) -> dict[str, dict]:
-    """图内的位置：matplotlib 直接用 loc 词；Plotly 用相对绘图区的坐标，离边 0.02。"""
+    """
+    生成一个图内图例位置在两个后端的写法：matplotlib 直接用 *loc* 词；
+    Plotly 用相对绘图区的坐标（离边 0.02）和锚点。
+    """
     return {'matplotlib': {'loc': loc}, 'plotly': {'x': x, 'y': y, 'xanchor': xanchor, 'yanchor': yanchor}}
 
 
@@ -271,7 +376,27 @@ _PLOTLY_TICK_FORMAT = re.compile(r"\{[xy]:(\.\d+[feg%])\}")    # Plotly（d3）�
 
 
 def translate_legend(position: str, backend: Backend) -> dict:
-    """图例位置 → matplotlib 的 ax.legend(**参数) / Plotly 的 layout.legend。"""
+    """
+    把图例位置翻译成后端参数。
+
+    Parameters
+    ----------
+    position : str
+        ``LEGEND_POSITIONS`` 里的位置词，如 ``'upper right'``、``'outside right'``。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+
+    Returns
+    -------
+    dict
+        matplotlib：交给 ``ax.legend(**参数)`` 的 ``loc`` （图外位置还有 ``bbox_to_anchor`` 等）；
+        Plotly：``layout.legend`` 的 ``x``、``y``、``xanchor``、``yanchor``。返回的是副本，可以放心修改。
+
+    Raises
+    ------
+    ValueError
+        不认识的位置词。
+    """
     check_backend(backend)
     if position not in LEGEND_POSITIONS:
         raise ValueError(f"不支持的图例位置 {position!r}，可用 {_words(LEGEND_POSITIONS)}")
@@ -284,8 +409,26 @@ def translate_tick_format(fmt: str, backend: Literal['matplotlib']) -> Callable[
 def translate_tick_format(fmt: str, backend: Literal['plotly']) -> str: ...
 def translate_tick_format(fmt: str, backend: Backend) -> Callable[[Any, Any], str] | str:
     """
-    刻度格式 '{x:.2f}' → matplotlib：格式函数 f(值, 位置) -> 文字（交给 set_major_formatter）；
-                      → Plotly：d3 格式 '.2f'（交给 tickformat）。Plotly 对应不了的格式报错，不悄悄忽略。
+    把刻度格式（如 ``'{x:.2f}'``）翻译成后端的格式器。
+
+    Parameters
+    ----------
+    fmt : str
+        Python 格式字符串，用 ``x`` 或 ``y`` 作变量名，如 ``'{x:.2f}'``、``'{y:.1e}'``。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+
+    Returns
+    -------
+    callable or str
+        matplotlib：格式函数 ``f(值, 位置) -> 文字``，交给 ``set_major_formatter``；
+        Plotly：d3 格式字符串，如 ``'.2f'``，交给 ``tickformat``。
+
+    Raises
+    ------
+    ValueError
+        *fmt* 里没有 ``{x:...}`` 或 ``{y:...}``；或 Plotly 对应不了这种格式
+        （Plotly 只支持 ``.Nf``、``.Ne``、``.Ng``、``.N%``）。不悄悄忽略。
     """
     check_backend(backend)
     if (match := _TICK_FORMAT.search(fmt)) is None:
@@ -306,7 +449,17 @@ _PLOTLY_SCALES = ('linear', 'log')
 
 
 def check_axis_style(style: AxisStyle, backend: Backend) -> None:
-    """校验 AxisStyle；Plotly 做不到的（symlog / logit、显示值缩放）报错，不悄悄忽略。"""
+    """
+    校验 `AxisStyle` 写了的字段，以及这个后端做不做得到。
+
+    Raises
+    ------
+    TypeError
+        ``limits`` 不是两个数字（或 None），``scaler`` 不是数字，颜色类型不对。
+    ValueError
+        不认识的刻度类型或格式；对数轴边界不大于 0；Plotly 做不到的设置
+        （``'symlog'`` / ``'logit'``、``scaler``、d3 对应不了的刻度格式）——报错而不是悄悄忽略。
+    """
     check_backend(backend)
     if style.scale is not None and style.scale not in _SCALES:
         raise ValueError(f"不支持的刻度类型 {style.scale!r}，可用 {_words(_SCALES)}")
@@ -336,12 +489,32 @@ def check_axis_style(style: AxisStyle, backend: Backend) -> None:
 def translate_axis_style(style: AxisStyle, backend: Backend, letter: Literal['x', 'y'],
                          log: bool | None = None) -> dict:
     """
-    AxisStyle → 各后端原生值，只含写了的字段。letter 是这根轴的方向（只给了 scaler、没给 format 时按 '{x:g}' 显示）。
-      matplotlib：{'scale', 'limits', 'formatter'（格式函数，或 None 不改）, 'color'}，由 backends/matplotlib_styles.py 应用；
-      Plotly：    轴配置 {'type', 'range' / 'autorange' / 'autorangeoptions', 'tickformat', 轴着色}，可直接 update_layout。
-    log（只有 Plotly 用）：这根轴应用后是不是对数轴。Plotly 对数轴的边界要写 log10，而 limits 永远写数据值；
-      刻度类型可能在别的回调里设过，所以由应用的一方（backends/plotly_styles.apply_axis）按轴的实际类型给出。
-      不传时只看这个样式自己写的 scale（55576fb 复审 3）。
+    把 `AxisStyle` 翻译成后端的轴设置，只含写了的字段。
+
+    Parameters
+    ----------
+    style : AxisStyle
+        要翻译的轴样式。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+    letter : {'x', 'y'}
+        这根轴的方向。只写了 ``scaler``、没写 ``format`` 时，按 ``'{x:g}'`` 或 ``'{y:g}'`` 显示。
+    log : bool, optional
+        只有 Plotly 使用：这根轴应用后是不是对数轴。不传时只看 *style* 自己写的 ``scale``。
+
+    Returns
+    -------
+    dict
+        matplotlib：``scale``、``limits``、``formatter`` （格式函数）、``color``，
+        由 `plotlib.backends.matplotlib_styles.apply_axis` 应用；
+        Plotly：轴配置 ``type``、``range`` / ``autorange`` / ``autorangeoptions``、``tickformat`` 和着色属性，
+        可直接交给 ``fig.update_layout``。
+
+    Notes
+    -----
+    ``limits`` 永远写数据值，而 Plotly 对数轴的边界要写 log10。刻度类型可能在别的回调里设过，
+    这个样式自己不一定写了 ``scale``，所以由应用的一方
+    （`plotlib.backends.plotly_styles.apply_axis`）按轴的实际类型传入 *log*。
     """
     check_axis_style(style, backend)
     color = None if style.color is None else translate_color(style.color, backend)
@@ -377,6 +550,7 @@ def translate_axis_style(style: AxisStyle, backend: Backend, letter: Literal['x'
 
 
 def check_frame(frame: FrameStyle) -> None:
+    """校验 `FrameStyle`：线宽为正数，``top`` / ``right`` 为开关。"""
     _check_positive('width', frame.width)
     _check_switch('top', frame.top)
     _check_switch('right', frame.right)
@@ -384,8 +558,15 @@ def check_frame(frame: FrameStyle) -> None:
 
 def translate_frame(frame: FrameStyle, backend: Backend, dpi: float | None = None) -> dict:
     """
-    FrameStyle → {'linewidth': 轴线宽, 'top': 画不画上边框, 'right': 画不画右边框}，只含写了的字段；
-    线宽 matplotlib 用磅，Plotly 按 dpi 换成像素。上 / 右边框怎么画由后端决定（matplotlib 的 spines，Plotly 的 mirror）。
+    把 `FrameStyle` 翻译成 ``{'linewidth', 'top', 'right'}``，只含写了的字段。
+
+    线宽在 matplotlib 用磅，在 Plotly 按 *dpi* 换成像素。上、右边框具体怎么画由后端决定
+    （matplotlib 用 spines，Plotly 用轴的 mirror）。
+
+    Raises
+    ------
+    ValueError
+        后端是 Plotly、写了线宽却没给 *dpi*。
     """
     check_backend(backend)
     check_frame(frame)
@@ -400,7 +581,12 @@ def translate_frame(frame: FrameStyle, backend: Backend, dpi: float | None = Non
 
 
 def check_legend_style(legend: LegendStyle, backend: Backend) -> None:
-    """校验 LegendStyle。draggable 只在单独检查用户写的图例回调时才拦（见 formatters），预设里写了 Plotly 直接不用。"""
+    """
+    校验 `LegendStyle`：位置是 ``LEGEND_POSITIONS`` 里的词，字号为正数，``frame`` / ``draggable`` 为开关。
+
+    这里不拦 Plotly 的 ``draggable``：版式预设里写了，Plotly 直接不用；
+    只有用户在图例回调里写了才报错（见 `~plotlib.formatters.make_legend_formatter`）。
+    """
     check_backend(backend)
     if legend.position is not None and legend.position not in LEGEND_POSITIONS:
         raise ValueError(f"不支持的图例位置 {legend.position!r}，可用 {_words(LEGEND_POSITIONS)}")
@@ -411,10 +597,24 @@ def check_legend_style(legend: LegendStyle, backend: Backend) -> None:
 
 def translate_legend_style(legend: LegendStyle, backend: Backend, dpi: float | None = None) -> dict:
     """
-    LegendStyle → 各后端原生值，只含写了的字段：
-      matplotlib：{'loc', 'bbox_to_anchor', 'borderaxespad', 'fontsize', 'frameon', 'draggable'}（建图例时传前几项，拖动另设）；
-      Plotly：    layout.legend {'x', 'y', 'xanchor', 'yanchor', 'font': {'size'}, 'borderwidth', 'bordercolor', 'bgcolor'}；
-                  字号按 dpi 换成像素；draggable 不翻译（Plotly 的拖动是显示时的设置）。
+    把 `LegendStyle` 翻译成后端的图例参数，只含写了的字段。
+
+    Parameters
+    ----------
+    legend : LegendStyle
+        要翻译的图例样式。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+    dpi : float, optional
+        Plotly 把字号从磅换成像素用的分辨率；写了字号时 Plotly 必填。
+
+    Returns
+    -------
+    dict
+        matplotlib：``loc``、``bbox_to_anchor``、``borderaxespad``、``fontsize``、``frameon``、``draggable``
+        （建图例时传前几项，拖动在建好后另设）；
+        Plotly：``layout.legend`` 的 ``x``、``y``、``xanchor``、``yanchor``、``font.size``、
+        ``borderwidth``、``bordercolor``、``bgcolor``。``draggable`` 不翻译，Plotly 的拖动是显示时的设置。
     """
     check_legend_style(legend, backend)
     native = {} if legend.position is None else translate_legend(legend.position, backend)
@@ -434,13 +634,31 @@ def translate_legend_style(legend: LegendStyle, backend: Backend, dpi: float | N
 
 
 def translate_points(value: float, dpi: float, backend: Backend) -> float:
-    """以磅（1/72 英寸）为单位的量（字号、线宽）→ 后端单位：matplotlib 本来就用磅；Plotly 用像素 = 磅 × dpi / 72。"""
+    """
+    把以磅（1/72 英寸）为单位的量（字号、线宽、刻度长短）换成后端单位。
+
+    matplotlib 本来就用磅，原样返回；Plotly 用像素：``磅 × dpi / 72``。
+
+    Examples
+    --------
+    >>> translate_points(22, dpi=100, backend='plotly')
+    30.555555555555557
+    """
     check_backend(backend)
     return value if backend == 'matplotlib' else value * dpi / 72
 
 
 def translate_figsize(size: tuple[float, float], dpi: float, backend: Backend) -> tuple:
-    """以英寸为单位的图尺寸 → 后端单位：matplotlib 本来就用英寸；Plotly 用像素 = 英寸 × dpi。"""
+    """
+    把以英寸为单位的图尺寸 ``(宽, 高)`` 换成后端单位。
+
+    matplotlib 本来就用英寸，原样返回；Plotly 用像素：``英寸 × dpi``，取整。
+
+    Examples
+    --------
+    >>> translate_figsize((10, 8), dpi=100, backend='plotly')
+    (1000, 800)
+    """
     check_backend(backend)
     width, height = size
     return (width, height) if backend == 'matplotlib' else (round(width * dpi), round(height * dpi))
@@ -464,7 +682,17 @@ _MATPLOTLIB_ONLY_TICKS = ('minor_label_font', 'minor_label_size', 'minor_label_p
 
 
 def check_ticks(ticks: TickStyle, backend: Backend) -> None:
-    """校验 TickStyle：写法、类型、取值，以及这个后端做不做得到。合法时返回 None。"""
+    """
+    校验 `TickStyle`：写法、类型、取值，以及这个后端做不做得到。
+
+    Raises
+    ------
+    TypeError
+        长度、字号不是数字，字体不是字符串，开关不是 True / False。
+    ValueError
+        不认识的朝向或次刻度文字写法；长度、字号不大于 0（间距可以为 0）；
+        在 Plotly 后端设置了次刻度文字的字体、字号或间距（Plotly 的次刻度没有这些属性）。
+    """
     check_backend(backend)
     if ticks.direction is not None and ticks.direction not in TICK_DIRECTIONS:
         raise ValueError(f"不支持的刻度朝向 {ticks.direction!r}，可用 {_words(TICK_DIRECTIONS)}")
@@ -487,11 +715,31 @@ def check_ticks(ticks: TickStyle, backend: Backend) -> None:
 
 def translate_ticks(ticks: TickStyle, backend: Backend, dpi: float | None = None) -> dict:
     """
-    TickStyle → 各后端原生值，只含写了的字段：
-      matplotlib：{'major': tick_params 参数, 'minor': tick_params 参数, 'minor_visible': 开关, 'minor_labels': 写法}；
-                  次刻度文字没单独写字体 / 字号 / 间距时与主刻度相同。matplotlib 本来就用磅，dpi 不用。
-      Plotly：    轴配置 {'ticks', 'ticklen', 'tickwidth', 'minor': {...}, 'tickfont': {...}, 'ticklabelstandoff', 'minorloglabels'}，
-                  磅按 dpi 换成像素。Plotly 的 minor.ticks 同时管次刻度的显示和朝向：关掉时为 ''。
+    把 `TickStyle` 翻译成后端的刻度设置，只含写了的字段。
+
+    Parameters
+    ----------
+    ticks : TickStyle
+        要翻译的刻度样式。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+    dpi : float, optional
+        Plotly 把磅换成像素用的分辨率；Plotly 必填，matplotlib 不用。
+
+    Returns
+    -------
+    dict
+        matplotlib：``{'major': tick_params 参数, 'minor': tick_params 参数, 'minor_visible': 开关,
+        'minor_labels': 写法}``，由 `plotlib.backends.matplotlib_styles` 应用；
+        次刻度文字没单独写字体、字号、间距时与主刻度相同。
+
+        Plotly：轴配置 ``ticks``、``ticklen``、``tickwidth``、``minor``、``tickfont``、
+        ``ticklabelstandoff`` （整数像素）、``minorloglabels``。
+
+    Notes
+    -----
+    Plotly 的 ``minor.ticks`` 同时决定次刻度显不显示和朝向：关掉次刻度时为 ``''``，
+    只写了 ``minor=True`` 时按朝外。
     """
     check_ticks(ticks, backend)
     direction = None if ticks.direction is None else TICK_DIRECTIONS[ticks.direction][backend]

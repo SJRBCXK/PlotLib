@@ -1,5 +1,5 @@
-PlotLib 1.0
-===========
+PlotLib |version|
+=================
 
 PlotLib 是多样品实验数据的读取、计算和批量绘图库。同一份数据、同一套代码，
 换一个参数就能输出 matplotlib 静态图或 Plotly 交互图。

@@ -7,17 +7,27 @@ Sphinx 配置：从 src/plotlib 的文档字符串（numpydoc 格式）生成 AP
     sphinx-build -b html docs/api docs/api/_build/html
 
 生成的网页在 docs/api/_build/html/index.html。
+
+构建前先运行同一目录的 sync_api.py：版本号从 pyproject.toml 读；
+``plotlib.__all__`` 里新加的名字自动登记进 reference.rst（会改动这个文件，提交时一起带上）。
 """
 import sys
 from pathlib import Path
 
-# 直接从源码导入，不要求先安装
+# 直接从源码导入，不要求先安装；sync_api.py 与本文件同目录
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'src'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from sync_api import read_version, sync_reference_file  # noqa: E402  要先设好 sys.path
 
 project = 'PlotLib'
 author = 'PlotLib'
-release = '1.0.0'
+release = read_version()                            # 完整版本号，如 1.0.0（来自 pyproject.toml）
+version = '.'.join(release.split('.')[:2])          # 短版本号，如 1.0（index.rst 标题里的 |version|）
 language = 'zh_CN'
+
+for _name in sync_reference_file():
+    print(f"sync_api：已把 {_name} 登记到 reference.rst")
 
 extensions = [
     'sphinx.ext.autodoc',        # 从文档字符串生成说明
@@ -48,10 +58,11 @@ default_role = 'py:obj'
 
 # ── HTML ──────────────────────────────────────────────────────
 html_theme = 'pydata_sphinx_theme'          # numpy、pandas 使用的主题
-html_title = 'PlotLib 1.0 文档'
+html_title = f'PlotLib {version} 文档'
 html_theme_options = {
     'navigation_with_keys': False,
     'show_toc_level': 2,
+    'github_url': 'https://github.com/SJRBCXK/PlotLib',     # 页面右上角的 GitHub 图标
 }
 templates_path = ['_templates']
 exclude_patterns = ['_build']

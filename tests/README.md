@@ -50,6 +50,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `test_plotter.py` | `src/plotlib/plotter.py` | matplotlib 把计划画对（每张计划一张图、位置 → 颜色、样式翻译）；formatter、图例、`linestyle`、`figsize`、负对数刻度、x-y 单线图 / 双 Y 轴 |
 | `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
 | `test_plotly_backend.py` | `src/plotlib/backends/plotly_backend.py` | Plotly 后端把计划画对；排版预设、外观（按 dpi 换算）、双 Y 轴、回调、滑块 |
+| `test_docs_sync.py` | `docs/api/sync_api.py` | API 文档同步：reference.rst 登记齐全；新名字放进同模块分节（导出的优先）或「其他」节；版本号来自 pyproject.toml |
 | `test_backend_parity.py` | `DataPlotter` 换 `backend` 对照 | 两个后端的分组参数约定相同；同一个 `Group` 画出的图和曲线一致（五种画法） |
 | `test_html_export.py` | `src/plotlib/html_export.py` | 导出页面的画框尺寸、侧边面板位置、占位符全部填写、不修改 Figure |
 | `test_data_reorder_app.py` | `tools/data_reorder_app.py`（Tk 版） | 直接改序号插入并保留勾选、非法输入不移动、取消与失焦；没有显示环境时跳过 |

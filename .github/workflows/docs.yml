@@ -1,0 +1,53 @@
+# API 文档：push 到 main 后用 Sphinx 从文档字符串生成网页，发布到 GitHub Pages
+# （https://sjrbcxk.github.io/PlotLib/）。
+# 第一次使用前，在仓库 Settings → Pages → Build and deployment → Source 选「GitHub Actions」。
+# 也可以在 Actions 页面手动运行（workflow_dispatch）。
+name: API 文档
+
+on:
+  push:
+    branches: [main]
+    paths:                         # 只有源码、文档源文件或依赖变了才重新生成
+      - 'src/**'
+      - 'docs/api/**'
+      - 'pyproject.toml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write                     # 发布到 Pages
+  id-token: write                  # Pages 部署要用的身份令牌
+
+concurrency:                       # 连续 push 时只发布最新的一次
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # interactive：API 参考里有 Plotly 后端和 html_export，autodoc 要能导入它们
+      - run: pip install -e ".[docs,interactive]"
+      # -W：有警告就失败，保持零警告；--keep-going：一次列出全部警告
+      - run: sphinx-build -W --keep-going -b html docs/api docs/api/_build/html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/api/_build/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

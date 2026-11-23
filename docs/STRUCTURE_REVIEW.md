@@ -1261,6 +1261,14 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
 - 随后（用户定）：多线图预设不再给 X 轴写 `'{x:.2f}'`（X 轴常改成对数轴，两位小数会把 1e-3 写成 0.00），交给后端自动；
   Y 轴仍是两位小数。`test_neglog_x` 原来靠预设格式直接调用格式器，改成渲染后看刻度文字（默认格式器要收到刻度位置才写得出数字），567 passed。
 
+#### API 文档发布与自动同步（2026-11-23，571 passed）
+
+- 发布：GitHub Pages（仓库公开），`.github/workflows/docs.yml` 在 push 到 main 且源码 / 文档 / 依赖有改动时构建（`-W`，有警告即失败）并发布到
+  <https://sjrbcxk.github.io/PlotLib/>；仓库 Settings → Pages 的 Source 需选「GitHub Actions」。
+- 同步（用户要求不靠记忆）：`docs/api/sync_api.py` 由 conf.py 在每次构建前调用——版本号从 pyproject.toml 读（`release`、`version`、标题、
+  index.rst 的 `|version|`）；`plotlib.__all__` 里没登记的名字自动加进 reference.rst 同模块对象所在的分节（导出的优先），没有就放进「其他」节。
+  只增不删：删掉的对象构建时报导入失败。`tests/test_docs_sync.py` 同时检查 reference.rst 登记齐全。
+
 ---
 
 ### 步骤 8：让脚本可复现

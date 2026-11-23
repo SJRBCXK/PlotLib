@@ -513,8 +513,10 @@ PlotLib/
 
 ## API 文档
 
+在线版：<https://sjrbcxk.github.io/PlotLib/> （push 到 main 后由 `.github/workflows/docs.yml` 自动生成并发布）。
+
 每个公开的类和函数都有 numpydoc 格式的文档字符串（参数、返回值、报错、说明、示例），
-在编辑器里悬停就能看到；也可以生成网页版的 API 参考：
+在编辑器里悬停就能看到；也可以在本地生成网页版的 API 参考：
 
 ```bash
 pip install -e ".[docs,interactive]"
@@ -523,6 +525,11 @@ sphinx-build -b html docs/api docs/api/_build/html
 
 生成后打开 `docs/api/_build/html/index.html`。「API 参考」是使用者需要的全部对象，
 「内部结构」是各模块的说明，供修改源码时查阅。
+
+更新时不用手动维护文档：网页内容来自文档字符串，改源码即改文档；每次构建前 `docs/api/sync_api.py` 会
+从 `pyproject.toml` 读版本号，并把 `plotlib.__all__` 里新加的名字自动登记进 `docs/api/reference.rst`
+（放到同一模块所在的分节，没有就放进「其他」节，文件会被改动，提交时一起带上）。删掉的对象要手动从 reference.rst 删去，
+否则构建报导入失败。`tests/test_docs_sync.py` 也会检查 reference.rst 是否登记齐全。
 
 ## License
 

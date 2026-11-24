@@ -3,17 +3,19 @@
 
 多线图、X-Y 图和双 Y 轴图共用渲染流程。绘图计划确定数据及轴归属，版式预设提供轴和图例的默认样式。
 """
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import Any
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import Formatter, NullFormatter
 
 from ..layouts import LAYOUTS, NO_LEGEND_MESSAGE, LayoutPreset, resolve_frame, resolve_legend
-from ..plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_TICKS, Appearance, AxesFormatter,
-                         CurveSpec, DrawnFigure, FigureSpec)
-from ..style import (STYLE_FIELDS_BY_KIND, only_fields, translate_axis_style, translate_color, translate_frame,
-                     translate_legend_style, translate_line_style, translate_ticks)
+from ..plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_SCATTER, DEFAULT_TICKS, Appearance,
+                         AxesFormatter,
+                         CurveBase, DrawnFigure, FigureSpec, LineSpec, ScatterSpec)
+from ..style import (is_line_marker, remember_fill, translate_axis_style, translate_color, translate_frame,
+                     translate_legend_style, translate_line_style, translate_scatter_style, translate_ticks)
 from .matplotlib_styles import apply_axis, apply_frame, apply_minor, apply_tick_params, legend_kwargs
 
 
@@ -114,6 +116,13 @@ class MatplotlibBackend:
         with plt.rc_context(self.rc_params):
             return self._draw(spec, figsize, formatters, figure_formatter)
 
+    @staticmethod
+    def close(drawn: DrawnFigure) -> None:
+        """
+        关闭已渲染的图，并将其从 pyplot 的图窗列表移除。
+        """
+        plt.close(drawn.fig)
+
     def _draw(self, spec: FigureSpec, figsize: tuple,
               formatters: dict[str, AxesFormatter], figure_formatter) -> DrawnFigure:
         """
@@ -127,6 +136,15 @@ class MatplotlibBackend:
         frame = translate_frame(resolve_frame(preset, self.appearance), 'matplotlib')
 
         fig, ax = plt.subplots(figsize=figsize)
+        try:
+            return self._draw_on(fig, ax, spec, preset, legend, frame, formatters, figure_formatter)
+        except BaseException:
+            plt.close(fig)      # 释放本次渲染失败的图窗。
+            raise
+
+    def _draw_on(self, fig, ax, spec: FigureSpec, preset: LayoutPreset, legend: dict, frame: dict,
+                 formatters: dict[str, AxesFormatter], figure_formatter) -> DrawnFigure:
+        """在已有 Figure 上绘制曲线，应用版式和格式化回调。"""
         axes = {'left': ax}
         if any(curve.axis == 'right' for curve in spec.curves):
             axes['right'] = ax.twinx()          # 右轴：与左轴共用 X 轴
@@ -136,9 +154,7 @@ class MatplotlibBackend:
 
         artists = []    # 与 spec.curves 一一对应
         for curve in spec.curves:
-            artist = self._plot_data(axes[curve.axis], curve.x, curve.y, curve.kind, label=curve.label,
-                                     **self._curve_color(curve, preset), **self._native_style(curve))
-            artists.append(artist)
+            artists.append(self._draw_curve(axes[curve.axis], curve, preset))
 
         self._apply_layout(fig, axes, spec, preset, legend)
         self._apply_optional_formatters(fig, axes, spec, spec.curves, artists, formatters, legend)
@@ -158,12 +174,12 @@ class MatplotlibBackend:
     # 曲线颜色和样式
     # ========================================================================
 
-    def _curve_color(self, curve: CurveSpec, preset: LayoutPreset) -> dict:
+    def _curve_color(self, curve: LineSpec | ScatterSpec, preset: LayoutPreset) -> dict:
         """
         算出一条线的最终颜色，写成画线参数 ``{'color': ...}``。
 
         优先级：分组写的颜色 > 色带位置 > 版式预设里这根轴的颜色（双 Y 轴左红右蓝）> matplotlib 默认色
-        （返回空字典）。颜色在画线时一次给出，所以对折线、散点、柱状图都生效，画完不再覆盖。
+        （返回空字典）。颜色在画的时候一次给出，所以对折线、散点都生效，画完不再覆盖。
         """
         if curve.style.color is not None:
             return {'color': translate_color(curve.style.color, 'matplotlib')}
@@ -174,49 +190,47 @@ class MatplotlibBackend:
             return {'color': translate_color(axis_style.color, 'matplotlib')}
         return {}
 
-    @staticmethod
-    def _native_style(curve: CurveSpec) -> dict:
-        """
-        把计划里的分组样式翻译成 matplotlib 的画线参数，如 ``LineStyle(linestyle='dash')`` → ``{'linestyle': '--'}``。
-
-        只取这种画法看得见的字段（``style.STYLE_FIELDS_BY_KIND``）：折线全取，散点只取标记，柱状图都不取。
-        散点的标记大小参数叫 ``s`` （磅的平方），这里一并换算。颜色不在这里，由 ``_curve_color`` 给出。
-        """
-        fields = STYLE_FIELDS_BY_KIND.get(curve.kind, ())     # 画法写错时由 _plot_data 报错
-        native = translate_line_style(only_fields(curve.style, fields), 'matplotlib')
-        if curve.kind == 'scatter':     # 散点的标记大小参数叫 s（磅的平方）
-            if 'markersize' in native:
-                native['s'] = native.pop('markersize') ** 2
-        return native
-
     # ========================================================================
     # 渲染：画线
     # ========================================================================
 
-    def _plot_data(self, ax, x, y, plot_kind='line', **kwargs):
+    def _draw_curve(self, ax, curve: CurveBase, preset: LayoutPreset):
         """
-        按画法画一组数据，返回画出的对象：折线 ``Line2D``、散点 ``PathCollection``、柱状图 ``BarContainer``。
+        按曲线的类型画出来，返回画出的对象：`LineSpec` → ``Line2D``，`ScatterSpec` → ``PathCollection``。
+
+        颜色由 ``_curve_color`` 一次给出（样式里写的颜色已算在里面），其余样式按画法翻译
+        （如 ``LineStyle(linestyle='dash')`` → ``{'linestyle': '--'}``，散点大小换成面积 ``s``）。
 
         Raises
         ------
         ValueError
-            不认识的画法。
+            不认识的曲线类型。
         """
-        match plot_kind:
-            case 'line':
-                return ax.plot(x, y, **kwargs)[0]
-            case 'scatter':
-                return ax.scatter(x, y, **kwargs)
-            case 'bar':
-                return ax.bar(x, y, **kwargs)
+        match curve:
+            case LineSpec():
+                native = translate_line_style(replace(curve.style, color=None), 'matplotlib')
+                return ax.plot(curve.x, curve.y, label=curve.label, **self._curve_color(curve, preset), **native)[0]
+            case ScatterSpec():
+                # 先套库默认（大小、描边都写明），全局折线样式（rc 的 lines.*）就漏不到散点上
+                style = DEFAULT_SCATTER.updated(replace(curve.style, color=None))
+                color = self._curve_color(curve, preset).get('color')
+                native = translate_scatter_style(style, 'matplotlib', fallback_color=color)
+                # 线形标记（x、cross）传 edgecolors 会警告：先不传，画完再用 setter 补上，
+                # 对象的状态（填充、描边分开）就和其他标记一样，之后的散点回调不用区分
+                edge = native.pop('edgecolors', None) if is_line_marker(style.marker) else None
+                points = ax.scatter(curve.x, curve.y, label=curve.label, **native)
+                if edge is not None:
+                    points.set_edgecolor(edge)
+                remember_fill(points, color)
+                return points
             case _:
-                raise ValueError(f"不支持的 plot_kind: '{plot_kind}'")
+                raise ValueError(f"不支持的画法：{type(curve).__name__}（可用 LineSpec、ScatterSpec）")
 
     # ========================================================================
     # 版式应用
     # ========================================================================
 
-    _Y_AXIS_NAME = {'left': 'y', 'right': 'y2'}     # 线挂的轴（CurveSpec.axis）→ 预设里的纵轴名
+    _Y_AXIS_NAME = {'left': 'y', 'right': 'y2'}     # 线挂的轴（CurveBase.axis）→ 预设里的纵轴名
 
     def _apply_layout(self, fig, axes: dict, spec: FigureSpec, preset: LayoutPreset, legend: dict):
         """
@@ -277,11 +291,12 @@ class MatplotlibBackend:
     # 渲染：用户 formatter & 负对数刻度
     # ========================================================================
 
-    def _apply_optional_formatters(self, fig, axes: dict, spec: FigureSpec, curves: list[CurveSpec],
+    def _apply_optional_formatters(self, fig, axes: dict, spec: FigureSpec, curves: Sequence[CurveBase],
                                    artists: list, formatters: dict[str, AxesFormatter], legend: dict):
         """
-        执行坐标轴、曲线和图例回调。
+        执行坐标轴、线条、散点和图例回调。
 
+        线条回调只收这根轴上的折线，散点回调只收这根轴上的散点，两者互不干扰。
         图例句柄保存的是创建时的曲线样式。应用曲线回调后重建图例，再执行整图图例回调。
 
         Raises
@@ -295,10 +310,13 @@ class MatplotlibBackend:
             if fm.axes is not None:
                 fm.axes(ax, fig)
             if fm.lines is not None:
-                fm.lines([artist for curve, artist in zip(curves, artists) if curve.axis == axis])
+                fm.lines(_artists_of(LineSpec, axis, curves, artists))
+            if fm.scatter is not None:
+                fm.scatter(_artists_of(ScatterSpec, axis, curves, artists))
 
         # 使用原始图例参数重建，避免重复转换锚点，或从曲线复制坐标变换。
-        if any(fm.lines is not None for fm in fms.values()) and axes['left'].get_legend() is not None:
+        restyled = any(fm.lines is not None or fm.scatter is not None for fm in fms.values())
+        if restyled and axes['left'].get_legend() is not None:
             self._make_legend(axes, legend, spec.legend_title)
 
         for axis, fm in fms.items():
@@ -330,9 +348,14 @@ class MatplotlibBackend:
         return ax
 
 
+def _artists_of(spec_type: type, axis: str, curves: Sequence[CurveBase], artists: list) -> list:
+    """这根轴上某种画法（*spec_type*，如 `LineSpec`）的曲线对象，按绘制顺序。"""
+    return [artist for curve, artist in zip(curves, artists) if curve.axis == axis and isinstance(curve, spec_type)]
+
+
 class _NegativeFormatter(Formatter):
     """
-    负对数刻度的格式器：在原格式器的文字前加负号。
+    为取绝对值后绘制的数据生成带负号的主刻度标签。
 
     Parameters
     ----------
@@ -341,21 +364,27 @@ class _NegativeFormatter(Formatter):
 
     Notes
     -----
-    不能只包装调用本身（``FuncFormatter(lambda x, pos: '-' + inner(x, pos))``）：matplotlib 画刻度前
-    先把这一轮的刻度位置交给格式器（``set_locs``），默认的 ``ScalarFormatter`` 靠它决定小数位，
-    收不到就输出空字符串，渲染出来只剩一个负号。所以刻度位置、所属的轴、偏移文字都转交给原格式器。
+    对数轴使用原格式器处理正值，再为标签添加负号。其他轴将取负后的刻度值传给原格式器。
+    包装器向原格式器传递所属轴和刻度位置，使其可以计算标签精度和偏移文字。
     """
 
     def __init__(self, inner: Formatter):
         self.inner = inner
 
+    def _negate_values(self) -> bool:
+        """判断是否直接对传给原格式器的刻度值取负。"""
+        get_scale = getattr(self.axis, 'get_scale', None)
+        return get_scale is not None and get_scale() != 'log'
+
     def __call__(self, x, pos=None):
-        """原格式器的文字前加负号。"""
+        """刻度值取负后的标签。"""
+        if self._negate_values():
+            return self.inner(-x, pos)
         return f"-{self.inner(x, pos)}"
 
     def set_locs(self, locs):
-        """将当前的刻度位置传给被包装的格式器。"""
-        self.inner.set_locs(locs)
+        """按当前轴类型转换刻度位置，并传给原格式器。"""
+        self.inner.set_locs([-loc for loc in locs] if self._negate_values() else locs)
 
     def set_axis(self, axis):
         """为当前格式器和被包装的格式器设置所属轴。"""

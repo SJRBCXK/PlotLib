@@ -6,6 +6,7 @@ lines_formatter / legend_formatter 参数使用。测试直接在一张空图上
 2026-11-20 样式对象化：参数是样式对象（AxisStyle、FrameStyle、LineStyle、LegendStyle、TickStyle），没写的字段不改。
 """
 import math
+from typing import Any
 
 import matplotlib.pyplot as plt
 import pytest
@@ -460,3 +461,67 @@ def test_legend_formatter_works_with_plotter(eis_dataset):
             LegendStyle(font_size=7),
         )).figures['main'].axes['left']
     assert all(t.get_fontsize() == 7 for t in ax.get_legend().get_texts())
+
+
+# ══════════════════════════════════════════════
+# 自动范围与刻度渲染
+# ══════════════════════════════════════════════
+def test_one_side_limit_autoscales_other_side():
+    """matplotlib：先 limits=(2, 4) 再 (None, 15)，下界按数据重新算（与 Plotly 一致），不留旧的 2；两端都 None 时保持自动。"""
+    fig, ax = plt.subplots()
+    ax.plot([0.1, 20], [0, 1])
+    combine_formatters(make_axes_formatter(x=AxisStyle(limits=(2, 4))),
+                       make_axes_formatter(x=AxisStyle(limits=(None, 15))))(ax, fig)
+    low, high = ax.get_xlim()
+    assert low <= 0.1 and high == 15
+
+    # 两端都写 None：交回自动范围，之后新加的曲线也能撑开范围
+    fig, ax = plt.subplots()
+    ax.plot([1.9, 4.1], [0, 1])
+    make_axes_formatter(x=AxisStyle(limits=(None, None)))(ax, fig)
+    ax.plot([20, 40], [0, 1])
+    assert ax.get_xlim()[1] >= 40
+
+
+def test_minor_ticks_keep_scale_locator():
+    """matplotlib：开次刻度时 logit、symlog 轴用各自的次刻度定位器，不换成线性细分。"""
+    from matplotlib.ticker import LogitLocator, SymmetricalLogLocator
+
+    from plotlib.backends.matplotlib_styles import apply_minor
+
+    for scale, locator in (('logit', LogitLocator), ('symlog', SymmetricalLogLocator)):
+        fig, ax = plt.subplots()
+        ax.plot([0.001, 0.5], [0.001, 0.5])
+        ax.set_xscale(scale)
+        apply_minor(ax, {'minor_visible': True}, only_defaults=False)
+        assert isinstance(ax.xaxis.get_minor_locator(), locator), scale
+
+
+def test_negative_labels_on_linear_axis():
+    """
+    负对数轴的标签包装在线性轴上：标签 + 偏移 = 刻度值取负，不出现双负号、偏移的符号也一起翻转。
+    数据在 1e6 附近、范围很窄，ScalarFormatter 会用偏移文字。
+    """
+    from plotlib.backends.matplotlib_backend import _NegativeFormatter
+
+    fig, ax = plt.subplots()
+    ax.plot([1e6 - 3, 1e6 + 3], [0, 1])
+    ax.xaxis.set_major_formatter(_NegativeFormatter(ax.xaxis.get_major_formatter()))
+    fig.canvas.draw()
+    number = lambda text: float(text.replace('−', '-') or 0)         # noqa: E731
+    offset = number(ax.xaxis.get_offset_text().get_text())
+    for tick, label in zip(ax.get_xticks(), ax.get_xticklabels()):
+        if label.get_text():
+            assert number(label.get_text()) + offset == pytest.approx(-tick), label.get_text()
+
+
+def test_plotly_cleared_tickformat_is_not_explicit():
+    """Plotly：tickformat 设成 '' 等于没写格式，minor_labels='short' 不算冲突。"""
+    import plotly.graph_objects as go
+
+    from plotlib.backends.plotly_styles import apply_log_format
+
+    fig = go.Figure(layout=dict(xaxis=dict(type='log', tickformat='', minorloglabels='small digits')))
+    apply_log_format(fig, 'xaxis')                          # 不报格式冲突
+    layout: Any = fig.layout
+    assert layout.xaxis.dtick is None

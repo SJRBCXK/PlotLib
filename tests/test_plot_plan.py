@@ -1,5 +1,5 @@
 """
-测试对象：src/plotlib/plan.py 的 plan_multiline_figures / plan_xy_figures / plan_dual_y_figures —— 绘图计划（STRUCTURE_REVIEW 6.1、6.4）
+测试对象：src/plotlib/plan.py 的 plan_multiline_figures / plan_xy_figures / plan_dual_y_figures —— 绘图计划（docs/WORK_PLAN.md 步骤 6.1、6.4）
 
 plan_multiline_figures 只做「决定」，不碰任何绘图库：画几张图、每张图有哪些曲线、每条曲线的数据 / 标签 / 颜色 / 样式。
 两个后端（matplotlib、Plotly）照着同一份计划画，分组规则只写这一次。
@@ -159,8 +159,8 @@ def test_plan_does_not_modify_group(eis_dataset, merge):
 
 
 # ══════════════════════════════════════════════
-# 计划补全（STRUCTURE_REVIEW 6.4）：图层面的信息、xy 与双 Y 轴两种计划
-#   线（CurveSpec）：数据、标签、色带位置、样式、kind（画法）、axis（挂在哪根轴上）
+# 计划补全（docs/WORK_PLAN.md 步骤 6.4）：图层面的信息、xy 与双 Y 轴两种计划
+#   线（LineSpec / ScatterSpec，画法由类型决定）：数据、标签、色带位置、样式、axis（挂在哪根轴上）
 #   图（FigureSpec）：key、各轴单位、neglog（哪根轴的刻度补负号）、layout（按哪套排版画）
 # eis_dataset：S1 = S0 × 2，S2 = S0 × 3；S0 的 Zs' = [10, 20, 30]，Zs'' = [-1, -2, -3]
 # ══════════════════════════════════════════════
@@ -180,15 +180,45 @@ def test_plan_figures_carry_figure_info(eis_dataset, config, merge):
         assert figure.layout == 'multiline'
         assert figure.neglog == set()
         for curve in figure.curves:
-            assert (curve.kind, curve.axis) == ('line', 'left')
+            assert (type(curve).__name__, curve.axis) == ('LineSpec', 'left')
             assert not hasattr(curve, 'x_unit')
 
 
-def test_plan_figures_kind_and_neglog(eis_dataset):
-    """kind（原 plot_kind）原样带到每条线；neglog 记在图上，说明哪根轴的刻度要补负号。"""
-    [figure] = plan(eis_dataset, kind='bar', neglog_x=True)
-    assert [c.kind for c in figure.curves] == ['bar'] * 3
+def test_plan_figures_neglog(eis_dataset):
+    """neglog 记在图上，说明哪根轴的刻度要补负号。"""
+    [figure] = plan(eis_dataset, neglog_x=True)
     assert figure.neglog == {'x'}
+
+
+def test_scatter_plan_shares_rules_and_reads_own_style(eis_dataset):
+    """
+    画法由 spec 的类型决定（4.3）：多线 / 分组计划只产出 LineSpec，plan_scatter_figures 产出 ScatterSpec。
+    两者共用分组规则（不分组、分离、合并三种模式的图、线的顺序、组名、色带位置都相同）；
+    样式按画法只取用得上的分组字段：折线取线型、标记、颜色，散点只取标记、颜色，其余不解析。
+    """
+    from plotlib.plan import plan_scatter_figures
+    from plotlib.plot_spec import LineSpec, ScatterSpec, ScatterStyle
+
+    def styled():
+        return {'A': {'num': [0, 1], 'linestyle': 'dash', 'marker': 'square', 'color': 'red'}, 'B': {'num': [1, 2]}}
+
+    def outline(figures):
+        return [(f.key, f.name, f.layout, [(c.sample_idx, c.group_name, c.color_position, c.label) for c in f.curves])
+                for f in figures]
+
+    for config, merge in [(None, False), (styled(), False), (styled(), True)]:
+        lines = plan(eis_dataset, config and styled(), merge_groups=merge)
+        scatters = plan_scatter_figures(eis_dataset, Group(eis_dataset, styled() if config else {}), 0, 1,
+                                        merge_groups=merge)
+        assert outline(scatters) == outline(lines)
+        assert all(type(c) is LineSpec for f in lines for c in f.curves)
+        assert all(type(c) is ScatterSpec for f in scatters for c in f.curves)
+
+    lines = plan(eis_dataset, styled())
+    scatters = plan_scatter_figures(eis_dataset, Group(eis_dataset, styled()), 0, 1)
+    assert lines[0].curves[0].style == LineStyle(linestyle='dash', marker='square', color='red')
+    assert scatters[0].curves[0].style == ScatterStyle(marker='square', color='red')
+    assert (lines[1].curves[0].style, scatters[1].curves[0].style) == (LineStyle(), ScatterStyle())
 
 
 def test_xy_one_figure_per_sample(eis_dataset):
@@ -209,7 +239,7 @@ def test_xy_one_figure_per_sample(eis_dataset):
         assert curve.x.tolist() == [10 * (k + 1), 20 * (k + 1), 30 * (k + 1)]
         assert curve.y.tolist() == [-1 * (k + 1), -2 * (k + 1), -3 * (k + 1)]
         assert curve.color_position is None
-        assert (curve.kind, curve.axis, curve.style) == ('line', 'left', LineStyle())
+        assert (type(curve).__name__, curve.axis, curve.style) == ('LineSpec', 'left', LineStyle())
 
 
 def test_xy_neglog(eis_dataset):
@@ -224,10 +254,17 @@ def test_xy_neglog(eis_dataset):
 def test_dual_y_two_curves_per_sample(eis_dataset):
     """
     双 Y 轴（原 plot_dual_y）：每个样品一张图、两条线，左线挂左轴、右线挂右轴，共用 X 轴。
-    两条线不带颜色：左红右蓝属于呈现，由排版预设决定（6.6b；画出来的颜色见 test_plotter.py 的排版测试）；两侧 kind 可以不同。
+    两条线不带颜色：左红右蓝属于呈现，由排版预设决定（6.6b；画出来的颜色见 test_plotter.py 的排版测试）；
+    两侧画法可以不同（'line' / 'scatter'），写错时报错并列出可选值。
     """
     from plotlib.plan import plan_dual_y_figures
+    from plotlib.plot_spec import ScatterStyle
 
+    with pytest.raises(ValueError, match="'line'、'scatter'"):
+        plan_dual_y_figures(eis_dataset, left=(FREQ, ZS_RE), right=(ZS_RE, ZS_IM), kinds=('line', 'bar'))  # pyright: ignore[reportArgumentType]
+    for wrong_length in [('scatter',), ('line', 'scatter', 'scatter')]:     # 回归（复审）：曾 IndexError / 静默忽略多余的
+        with pytest.raises(ValueError, match='两个'):
+            plan_dual_y_figures(eis_dataset, left=(FREQ, ZS_RE), right=(ZS_RE, ZS_IM), kinds=wrong_length)  # pyright: ignore[reportArgumentType]
     figures = plan_dual_y_figures(eis_dataset, left=(FREQ, ZS_RE), right=(ZS_RE, ZS_IM),
                                   kinds=('line', 'scatter'))
 
@@ -237,8 +274,8 @@ def test_dual_y_two_curves_per_sample(eis_dataset):
     assert (figure.x_unit, figure.y_unit, figure.y2_unit) == (UNITS[FREQ], UNITS[ZS_RE], UNITS[ZS_IM])
 
     left, right = figure.curves
-    assert (left.axis, left.kind, left.style) == ('left', 'line', LineStyle())
-    assert (right.axis, right.kind, right.style) == ('right', 'scatter', LineStyle())
+    assert (left.axis, type(left).__name__, left.style) == ('left', 'LineSpec', LineStyle())
+    assert (right.axis, type(right).__name__, right.style) == ('right', 'ScatterSpec', ScatterStyle())
     assert left.color_position is None and right.color_position is None
     assert left.x.tolist() == [1, 10, 100] and left.y.tolist() == [10, 20, 30]
     assert right.x.tolist() == [10, 20, 30] and right.y.tolist() == [-1, -2, -3]

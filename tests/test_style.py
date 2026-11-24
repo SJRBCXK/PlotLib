@@ -1,5 +1,5 @@
 """
-测试对象：src/plotlib/style.py —— 公共样式词汇与后端翻译（STRUCTURE_REVIEW 步骤 4.3）
+测试对象：src/plotlib/style.py —— 公共样式词汇与后端翻译（docs/WORK_PLAN.md 步骤 4.3）
 
 约定：程序入口只接受一套标准写法（与后端无关），不认识就报错，也不替用户改写；
       翻译只发生在后端：translate_* 把标准写法换成 matplotlib / Plotly 的原生值。
@@ -187,7 +187,7 @@ def test_translate_unknown_backend_raises(translate, value):
 
 
 # ──────────────────────────────────────────────
-# 排版与尺寸的翻译（STRUCTURE_REVIEW 6.7）：通用的翻译放在这一层，后端只管应用
+# 排版与尺寸的翻译（docs/WORK_PLAN.md 步骤 6.7）：通用的翻译放在这一层，后端只管应用
 # ──────────────────────────────────────────────
 def test_translate_tick_format():
     """刻度格式（与 make_axes_formatter 同一写法）：matplotlib 得到格式函数，Plotly 得到 d3 格式。"""
@@ -199,6 +199,8 @@ def test_translate_tick_format():
     assert translate_tick_format('{x:.1e}', 'plotly') == '.1e'
     with pytest.raises(ValueError, match='Plotly 暂不支持此刻度格式'):
         translate_tick_format('{x:,.2f}', 'plotly')
+    with pytest.raises(ValueError, match='刻度格式'):           # 回归：无效格式曾拖到 canvas.draw() 才报错
+        translate_tick_format('{x:.2q}', 'matplotlib')
 
 
 @pytest.mark.parametrize("position, matplotlib, plotly", [
@@ -309,6 +311,38 @@ def test_translate_line_style():
     assert translate_line_style(LineStyle(linestyle=(3, 5)), 'plotly', dpi=100, dash_width=2)['line_dash'] == '6px,10px'
     with pytest.raises(ValueError):
         translate_line_style(LineStyle(marker='o'), 'matplotlib')          # 后端写法
+
+
+def test_translate_scatter_style():
+    """
+    ScatterStyle → matplotlib 的 scatter 参数 / Plotly 的 marker（两个后端都有的属性全部对应）：
+    实心时填充色就是 color；空心（filled=False）时填充透明、只留描边；描边色没写时跟 color 走。
+    style 没写颜色时用 fallback_color（后端算好的色带色）。尺寸写 NaN、无穷大，开关不是 bool，透明度不在 0~1 都报错。
+    """
+    from plotlib.plot_spec import LineStyle, ScatterStyle
+    from plotlib.style import translate_line_style, translate_scatter_style
+
+    full = ScatterStyle(color='red', marker='square', size=6, edge_color='black', edge_width=1, alpha=0.5)
+    assert translate_scatter_style(full, 'matplotlib') == {
+        'facecolors': 'red', 'edgecolors': 'black', 'marker': 's', 's': 36, 'linewidths': 1, 'alpha': 0.5}
+    native = translate_scatter_style(full, 'plotly', dpi=100)
+    assert (native['marker_color'], native['marker_line_color'], native['marker_symbol'], native['marker_opacity']) == \
+        ('red', 'black', 'square', 0.5)
+    assert (native['marker_size'], native['marker_line_width']) == pytest.approx((6 * PX, 1 * PX))
+
+    hollow = ScatterStyle(filled=False)
+    assert translate_scatter_style(hollow, 'matplotlib', fallback_color='blue') == {'facecolors': 'none', 'edgecolors': 'blue'}
+    assert translate_scatter_style(hollow, 'plotly', dpi=100, fallback_color='blue') == \
+        {'marker_color': 'rgba(0,0,0,0)', 'marker_line_color': 'blue'}
+    assert translate_scatter_style(ScatterStyle(), 'plotly', dpi=100) == {}
+
+    for bad in [ScatterStyle(size=float('nan')), ScatterStyle(edge_width=float('inf')), ScatterStyle(alpha=1.5)]:
+        with pytest.raises(ValueError):
+            translate_scatter_style(bad, 'matplotlib')
+    with pytest.raises(TypeError):
+        translate_scatter_style(ScatterStyle(filled='no'), 'matplotlib')      # pyright: ignore[reportArgumentType]
+    with pytest.raises(ValueError):
+        translate_line_style(LineStyle(width=float('nan')), 'matplotlib')    # 所有尺寸都拒绝非有限值
 
 
 def test_translate_axis_style():

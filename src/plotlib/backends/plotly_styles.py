@@ -155,15 +155,12 @@ def apply_log_format(fig, axis: str) -> None:
 
     Notes
     -----
-    Plotly 的自动主刻度可落在两个整数量级之间。指定 ``tickformat`` 后，
-    Plotly 会格式化这些位置的标签，跳过 ``minorloglabels`` 的处理。
-
-    标签模式为 ``'none'`` 时，若轴上尚未指定 ``dtick`` 或 ``tickmode``，将 ``dtick`` 设为 1，
-    仅在整数量级放置主刻度。放大到不含整数量级的区间时可能没有主刻度标签。
-    ``'full'`` 保留 Plotly 的完整数字格式。``'short'`` 与显式格式冲突。
+    非空的 ``tickformat`` 优先于 Plotly 的 ``minorloglabels``。空字符串使用原生刻度格式。
+    显式格式与 ``'none'`` 同时使用时，如果未指定 ``dtick`` 或 ``tickmode``，
+    默认将主刻度放在 10 的整数次幂处。放大的区间如果不包含这些位置，可能没有主刻度标签。
     """
     current = cast(Any, fig.layout)[axis]
-    if current.type != 'log' or current.tickformat is None:
+    if current.type != 'log' or not current.tickformat:
         return
     labels = _effective(fig, axis, lambda a: a.minorloglabels)
     if labels == MINOR_LABELS['short']:

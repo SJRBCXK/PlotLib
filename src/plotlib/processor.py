@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import TypedDict
 
 import numpy as np
-from .dataset import DataSet, Column
+from .dataset import Column, ColumnList, DataSet
 
 
 
@@ -97,18 +97,20 @@ class DataProcessLayer:
         inherit: bool = False
     ) -> DataProcessLayer:
         """
-        按条件选列，结果放进 ``Selected_data``。
+        按条件选列，并将结果保存到 ``Selected_data``。
+
+        所有条件均成功后才更新筛选结果。筛选失败后可继续使用上一次成功的结果。
 
         Parameters
         ----------
         *args : str, int, list or tuple
             选择条件，写法见类说明。多个条件按顺序依次选出，结果也按这个顺序排列。
         dataset_for_select : DataSet, optional
-            从哪个数据集里选；默认 ``self.dataset``。`by` 用它在上一次的结果里选。
+            待筛选的数据集。默认使用 ``self.dataset``；`by` 使用上一次的筛选结果。
         extended : bool, default: True
-            True：每个条件的结果依次累加；False：每个条件的结果替换前一个，最后只留下最后一个条件的。
+            为真时依次合并各条件的结果，为假时仅保留最后一个条件的结果。
         inherit : bool, default: False
-            True：在上一次的 ``Selected_data`` 后面继续累加；False：先清空。
+            为真时以上一次的 ``Selected_data`` 为初始结果，为假时从空数据集开始。
 
         Returns
         -------
@@ -129,10 +131,8 @@ class DataProcessLayer:
         >>> DataProcessLayer(data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data
         """
 
-        if not inherit:
-            self.Selected_data = DataSet()
-        
-
+        # 在临时数据集中累积结果，全部条件成功后再替换当前结果。
+        result = copy.deepcopy(self.Selected_data) if inherit else DataSet()
         Selected_data = DataSet()
 
         if dataset_for_select is None:
@@ -217,18 +217,15 @@ class DataProcessLayer:
 
 
             if extended:
-                self.Selected_data.expandata(Selected_data)
+                result.expandata(Selected_data)
             else:
-                self.Selected_data = copy.deepcopy(Selected_data)
+                result = copy.deepcopy(Selected_data)
 
-
-
-        self.called_select = True
-
-        if self.Selected_data.status != 'written':
+        if result.status != 'written':
             raise RuntimeError("数据选择未执行。")
-            
 
+        self.Selected_data = result
+        self.called_select = True
         return self
         
     
@@ -266,6 +263,8 @@ class DataProcessLayer:
         ------
         ValueError
             按名字没找到任何列，或两种写法都没给；或没给 *father_dataset*。
+        IndexError
+            *varlist_idx* 里有超出范围的位置（支持负数，-1 是最后一列）。
         """
         Selected_data = DataSet()
 
@@ -278,6 +277,11 @@ class DataProcessLayer:
         if father_dataset is None:
             raise ValueError("必须提供有效的 father_dataset 数据集以供选择。")
         father_dataset.ensure_updated()
+        # 将负索引转换为非负列位置，再记录来源位置。
+        n_cols = father_dataset.data.shape[1]
+        if bad := [i for i in varlist_idx if not -n_cols <= i < n_cols]:
+            raise IndexError(f"列位置超出范围：{bad}（共 {n_cols} 列）")
+        varlist_idx = [i % n_cols for i in varlist_idx]
 
         # 根数据集或未经筛选的数据集可直接使用当前列位置。
         f_initial = father_dataset.initial_idx #type: ignore
@@ -302,7 +306,7 @@ class DataProcessLayer:
         """
         在上一次选择的结果里再筛选一次，结果替换 ``Selected_data``。
 
-        条件里的列位置、列名、单位都相对于上一次的结果，而不是原数据集。
+        列位置、列名和单位均在上一次的筛选结果中解析。
 
         Parameters
         ----------
@@ -325,11 +329,37 @@ class DataProcessLayer:
         --------
         >>> layer.select('samples', [0, 1]).by("Zs'(ohm)", "Zs''(ohm)").Selected_data
         """
-        if self.called_select:
-            self.called_select = False
-            return self.select(*args, dataset_for_select=self.Selected_data, **kwargs)
-        else:
+        if not self.called_select:
             raise RuntimeError("by 方法仅作为子方法使用，不能单独及连续使用。")
+        self.called_select = False
+        try:
+            return self.select(*args, dataset_for_select=self.Selected_data, **kwargs)
+        except Exception:
+            self.called_select = True       # 保留对上一次成功结果继续筛选的能力。
+            raise
+
+def _row_norm(data: np.ndarray, order: int) -> np.ndarray:
+    """
+    通过缩放逐行计算 ``(Σ|x|^order)^(1/order)``，减少中间运算的上溢和下溢。
+
+    取模前将实数和整数提升到至少 ``float64``，将复数提升到至少 ``complex128``。
+    对有限的非零缩放因子 *m*，按 ``m · (Σ(|x|/m)^order)^(1/order)`` 计算。
+    正阶取行内最大模，负阶取最小模，使求和中的各项不超过 1。
+    含 NaN 的行返回 NaN。正阶时，含无穷大的行返回无穷大，全零行返回 0。
+    负阶时，全为无穷大的行返回无穷大，含 0 的行返回 0。
+    """
+    values = np.asarray(data)
+    wide = np.complex128 if np.iscomplexobj(values) else np.float64
+    x = np.abs(values.astype(np.promote_types(values.dtype, wide)))
+    if x.shape[1] == 0:
+        return np.zeros(x.shape[0])
+    scale = np.max(x, axis=1) if order > 0 else np.min(x, axis=1)
+    # 负阶时，溢出为无穷大的比值对求和的贡献为 0。
+    with np.errstate(invalid='ignore', divide='ignore', over='ignore'):
+        ratio = np.where(scale[:, None] > 0, x / scale[:, None], 0.0)
+        norm = scale * np.sum(ratio ** order, axis=1) ** (1 / order)
+    return np.where(np.isinf(scale), np.inf, norm)
+
 
 class DataTransformer:
     """
@@ -341,7 +371,7 @@ class DataTransformer:
     Attributes
     ----------
     dataset : DataSet
-        参与计算的数据集，不会被修改。
+        参与计算的数据集。每次计算均读取其当前的列顺序和元数据。
     result_dataset : DataSet
         计算结果。``extended=True`` 时，同一个变换器上多次计算的结果在这里依次累加。
 
@@ -352,7 +382,8 @@ class DataTransformer:
     - **名字**：只有一列输入时沿用它的名字；输入的列同名（同一样品）时为 ``Results_0_of_样品名``、
       ``Results_1_of_样品名`` ……；否则为 ``Results_0_of_名字1_名字2`` ……（各列名字用 ``_`` 连起来）。
     - **单位**：输入的列单位相同时沿用；否则为 ``unitless_0``、``unitless_1`` ……
-    - **样品号**：输入的列来自同一样品时沿用它的样品号；来自多个样品时分配一个新样品号。
+    - 同一样品的输入列默认沿用原样品号。跨样品计算或设置 ``new_sample=True`` 时，
+      自动分配的新样品号避开当前源数据、输入列及已有结果。
 
     Examples
     --------
@@ -374,28 +405,44 @@ class DataTransformer:
         """
         if dataset is None:
             dataset = DataSet()
-        # 校验后再获取数据和元数据的引用。
         dataset.ensure_updated()
 
         self.dataset = dataset
-        self.data = dataset.data
-        self.names = dataset.names
-        self.units = dataset.units
-        self.sample_idx = dataset.sample_idx
         self.num_samples = dataset.num_samples
-        self.local_idx = dataset.local_idx
-        self.initial_idx = dataset.initial_idx
-        self.father_idx = dataset.father_idx
-        self.column = dataset.column
         self.status = 'ready'
         self.result_dataset = DataSet()
         # 样品号可能不连续，因此从最大样品号之后开始分配。
         existing = [g for g in dataset.sample_idx if g is not None]
         self._next_new_sample = max(existing) + 1 if existing else 0
 
+    @property
+    def data(self) -> np.ndarray:
+        """校验并返回源数据集当前的数据数组。"""
+        return self.dataset.ensure_updated().data
+
+    @property
+    def names(self) -> list:
+        """校验并返回源数据集当前的列名。"""
+        return self.dataset.ensure_updated().names
+
+    @property
+    def units(self) -> list:
+        """校验并返回源数据集当前的列单位。"""
+        return self.dataset.ensure_updated().units
+
+    @property
+    def sample_idx(self) -> list:
+        """校验并返回源数据集当前的各列样品号。"""
+        return self.dataset.ensure_updated().sample_idx
+
+    @property
+    def column(self) -> ColumnList:
+        """返回源数据集的列视图。"""
+        return self.dataset.column
+
 
     def apply(self,
-        func: Callable[..., np.ndarray] = lambda x: x,
+        func: Callable[..., np.ndarray | float] = lambda x: x,
         naming_func: Callable[[], TransformMetadata] | None = None,
         input_name: str | list[str] | None = None,
         indicies: list[int] | int | None = None,
@@ -499,7 +546,7 @@ class DataTransformer:
         Parameters
         ----------
         order : int, default: 2
-            范数的阶数；2 是欧几里得范数。
+            非零整数阶数。2 对应欧几里得范数。
         indicies : int or list of int, optional
             参与计算的列的位置；None 表示全部列。
         column : list of Column, optional
@@ -525,8 +572,7 @@ class DataTransformer:
         ...     print(DataTransformer(sample).Norm(norm_unit='|Z|(ohm)').data[:3])
         """
         col_data, _, _, _ = self._resolve_input_data(column, indicies)
-    
-        norm_value = np.sum(np.abs(col_data)**order, axis=1)**(1/order)
+        norm_value = _row_norm(col_data, order)
 
         local_dataset = self._cal_pipe(
             column = column,
@@ -619,10 +665,13 @@ class DataTransformer:
         """
         取出参与计算的列：返回 ``(数据, 名字列表, 单位列表, 样品号列表)``。
 
-        给了 *column* 用它；否则按 *indicies* 取（整数、列表、元组、数组都行，支持负数）；都没给取全部列。
-        数据总是副本，交给用户函数时原地修改也不会改到数据集。
+        优先使用 *column*，其次按 *indicies* 选择列。两者均为 None 时选择全部列。
+        读取前校验相关数据集，并返回数据副本供计算回调使用。
         """
         if column is not None:
+            # 同一源数据集只需校验一次。
+            for source in {id(col._dataset): col._dataset for col in column}.values():
+                source.ensure_updated()
             col_data = np.array([col.data for col in column]).T
             names = [col.name for col in column]
             units = [col.unit for col in column]
@@ -696,32 +745,29 @@ class DataTransformer:
         new_sample: bool = False,
             ):
         """
-        结果的样品号，优先级：直接指定的 *sample_idx_input* > *new_sample* 分配的新样品号
-        > 输入来自同一样品时沿用 > None（由 `DataSet.update_attributes` 分配新样品号）。
+        确定本次计算的结果样品号。
 
-        新样品号同时避开数据集里和已累计结果里的样品号，同一个变换器多次分配也不会撞号。
+        优先使用显式指定的 *sample_idx_input*。输入仅涉及一个样品且 *new_sample* 为假时，
+        沿用输入的样品号。自动分配的新样品号避开当前源数据集、输入列、累计结果及本变换器已分配的样品号。
         """
-        
-        if sample_idx_input is not None:
-            data_sample_idx = sample_idx_input
-        elif new_sample:
-            # 同时检查已有结果，避免与先前显式指定的样品号冲突。
-            in_results = [idx for idx in self.result_dataset.sample_idx if idx is not None]
-            data_sample_idx = max(self._next_new_sample, max(in_results, default=-1) + 1)
-            self._next_new_sample = data_sample_idx + 1
-            self.num_samples += 1
-        elif len(set(sample_idx_extracted)) == 1:
-            data_sample_idx = sample_idx_extracted[0]
-        else:
-            data_sample_idx = None
 
+        if sample_idx_input is not None:
+            return sample_idx_input
+        if not new_sample and len(set(sample_idx_extracted)) == 1:
+            return sample_idx_extracted[0]
+        taken = [idx for idx in (*self.sample_idx, *sample_idx_extracted, *self.result_dataset.sample_idx)
+                 if idx is not None]
+        data_sample_idx = max(self._next_new_sample, max(taken, default=-1) + 1)
+        self._next_new_sample = data_sample_idx + 1
+        self.num_samples += 1
         return data_sample_idx
     
     
     
     @staticmethod
     def _get_datadim(data):
-        """把计算结果整理成二维：标量变成 1 × 1，一维数组变成一列，二维原样返回。"""
+        """把计算结果整理成二维：标量（含 Python 的 int、float）变成 1 × 1，一维数组变成一列，二维原样返回。"""
+        data = np.asarray(data)
         if data.ndim == 0:
             data = data.reshape(1, 1)
         elif data.ndim == 1:

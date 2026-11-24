@@ -71,6 +71,7 @@ API 参考
    :nosignatures:
 
    LineStyle
+   ScatterStyle
    AxisStyle
    FrameStyle
    LegendStyle
@@ -85,6 +86,7 @@ API 参考
 
    make_axes_formatter
    make_lines_formatter
+   make_scatter_formatter
    make_legend_formatter
    combine_formatters
 

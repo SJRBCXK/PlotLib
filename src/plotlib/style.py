@@ -26,8 +26,9 @@ from typing import Any, Literal, overload
 
 # 使用 Matplotlib 的颜色表校验两个后端共用的 CSS 颜色名。
 from matplotlib.colors import CSS4_COLORS
+from matplotlib.markers import MarkerStyle
 
-from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
+from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
 
 type Backend = Literal["matplotlib", "plotly"]
 
@@ -213,15 +214,6 @@ def translate_color(value, backend: Backend):
     return f"rgb({value[0]},{value[1]},{value[2]})"
 
 
-# LineStyle（颜色之外）对每种画法有哪些字段看得见（两个后端共用）：散点没有线，柱状图没有线和标记。
-# 颜色适用于所有图形类型，由各后端单独处理。
-STYLE_FIELDS_BY_KIND: dict[str, tuple[str, ...]] = {
-    'line': ('width', 'linestyle', 'marker', 'marker_size'),
-    'scatter': ('marker', 'marker_size'),
-    'bar': (),
-}
-
-
 def _check_positive(name: str, value, allow_zero: bool = False) -> None:
     """
     校验长度、宽度、字号这类量：要写数字（磅）且大于 0；*allow_zero* 为 True 时可以为 0（间距类）。
@@ -231,6 +223,8 @@ def _check_positive(name: str, value, allow_zero: bool = False) -> None:
         return
     if not _is_number(value):
         raise TypeError(f"{name} 要写数字（磅），实际是 {value!r}")
+    if not math.isfinite(value):        # NaN 和任何数比较都是 False，不单独查会漏过去
+        raise ValueError(f"{name} 要写有限的数字，实际是 {value!r}")
     if value < 0 or (value == 0 and not allow_zero):
         raise ValueError(f"{name} 要大于 0{'（可以为 0）' if allow_zero else ''}，实际是 {value!r}")
 
@@ -320,13 +314,115 @@ def translate_line_style(style: LineStyle, backend: Backend, dpi: float | None =
     return {key: value for key, value in native.items() if value is not None}
 
 
-def only_fields(style: LineStyle, names: tuple[str, ...]) -> LineStyle:
+def check_scatter_style(style: ScatterStyle) -> None:
     """
-    只保留 *names* 里的字段，其余置 None。
+    校验 `ScatterStyle` 的标记大小和通用样式取值。
 
-    后端用它按画法取出看得见的字段（见 ``STYLE_FIELDS_BY_KIND``），例如散点只要标记和标记大小。
+    Raises
+    ------
+    TypeError, ValueError
+        某个字段写错，信息里带字段名和写错的值。
     """
-    return type(style)(**{name: getattr(style, name) for name in names})
+    _check_positive('size', style.size)
+    _check_positive('edge_width', style.edge_width, allow_zero=True)
+    _check_switch('filled', style.filled)
+    for name in ('color', 'edge_color'):
+        if (value := getattr(style, name)) is not None:
+            check_color(value)
+    if style.marker is not None:
+        check_marker(style.marker)
+    if style.alpha is not None:
+        if not _is_number(style.alpha):
+            raise TypeError(f"alpha 要写 0 ~ 1 的数字，实际是 {style.alpha!r}")
+        if not 0 <= style.alpha <= 1:       # NaN 也不满足
+            raise ValueError(f"alpha 要在 0 ~ 1 之间，实际是 {style.alpha!r}")
+
+
+# 空心散点的填充（透明）在各后端的写法
+HOLLOW_FILL: dict[str, str] = {'matplotlib': 'none', 'plotly': 'rgba(0,0,0,0)'}
+
+
+def translate_scatter_style(style: ScatterStyle, backend: Backend, dpi: float | None = None,
+                            fallback_color=None) -> dict:
+    """
+    将 `ScatterStyle` 转换成后端使用的散点参数。
+
+    Parameters
+    ----------
+    style : ScatterStyle
+        要翻译的散点样式。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+    dpi : float, optional
+        Plotly 把磅换成像素用的分辨率；Plotly 必填，matplotlib 不用。
+    fallback_color : optional
+        未指定 ``color`` 时使用的颜色，格式应符合目标后端的要求。
+
+    Returns
+    -------
+    dict
+        matplotlib：``ax.scatter`` 的参数 ``facecolors``、``edgecolors``、``linewidths``、``s`` （面积，大小²）、
+        ``marker``、``alpha``。Plotly：trace 的扁平写法 ``marker_color``、``marker_line_color``、
+        ``marker_line_width``、``marker_size`` （像素）、``marker_symbol``、``marker_opacity``，
+        可直接交给 ``go.Scatter(...)`` 或 ``trace.update(...)``。
+
+    Raises
+    ------
+    ValueError
+        后端是 Plotly 却没给 *dpi*；或某个字段写错。
+
+    Notes
+    -----
+    空心标记使用透明填充。描边优先采用 ``edge_color``，默认沿用标记颜色。
+    """
+    check_backend(backend)
+    check_scatter_style(style)
+    color = fallback_color if style.color is None else translate_color(style.color, backend)
+    edge = color if style.edge_color is None else translate_color(style.edge_color, backend)
+    fill = HOLLOW_FILL[backend] if style.filled is False else color
+    marker = None if style.marker is None else translate_marker(style.marker, backend)
+    if backend == 'matplotlib':
+        native = {'facecolors': fill, 'edgecolors': edge, 'marker': marker,
+                  's': None if style.size is None else style.size ** 2,
+                  'linewidths': style.edge_width, 'alpha': style.alpha}
+    else:
+        if dpi is None:
+            raise ValueError("Plotly 的标记大小要按 dpi 把磅换成像素，请传入 dpi")
+        px = lambda points: None if points is None else translate_points(points, dpi, backend)   # noqa: E731
+        native = {'marker_color': fill, 'marker_line_color': edge, 'marker_symbol': marker,
+                  'marker_size': px(style.size), 'marker_line_width': px(style.edge_width),
+                  'marker_opacity': style.alpha}
+    return {key: value for key, value in native.items() if value is not None}
+
+
+# 缓存标记的填充色，供空心标记恢复填充时使用。
+_FILL_ATTR = '_plotlib_fill'
+
+
+def remember_fill(artist, color) -> None:
+    """
+    把一组散点的填充色（后端写法）记在画出的对象上；*color* 为 None 时不记。
+
+    后端画散点时调用一次，散点回调改了 ``color`` 时再更新。
+    """
+    if color is not None:
+        setattr(artist, _FILL_ATTR, color)
+
+
+def remembered_fill(artist, default=None):
+    """
+    取出 `remember_fill` 记下的填充色；没记过时返回 *default*。
+    """
+    return getattr(artist, _FILL_ATTR, default)
+
+
+def is_line_marker(marker: str | None) -> bool:
+    """
+    *marker* （通用写法）在 matplotlib 里是不是线形标记（``'x'``、``'cross'``）。
+
+    线形标记没有填充，matplotlib 用填充色画笔画、不接受 ``edgecolors``。
+    """
+    return marker is not None and not MarkerStyle(translate_marker(marker, 'matplotlib')).is_filled()
 
 
 # ══════════════════════════════════════════════
@@ -424,6 +520,11 @@ def translate_tick_format(fmt: str, backend: Backend) -> Callable[[Any, Any], st
         raise ValueError(f"刻度格式 {fmt!r} 里要有 {{x:...}} 或 {{y:...}}，如 '{{x:.2f}}'")
     if backend == 'matplotlib':
         key = match.group(1)
+        try:
+            # 先试一次：格式写错（如 '{x:.2q}'）在这里报，不拖到渲染（canvas.draw / 保存图片）时才报
+            fmt.format(**{key: 1.0})
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise ValueError(f"刻度格式 {fmt!r} 写错了：{exc}") from exc
         return lambda value, _pos: fmt.format(**{key: value})
     if (plotly_match := _PLOTLY_TICK_FORMAT.fullmatch(fmt)) is None:
         raise ValueError(f"Plotly 暂不支持此刻度格式: {fmt!r}")

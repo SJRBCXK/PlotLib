@@ -2,12 +2,13 @@
 从样式对象创建 Matplotlib 或 Plotly 格式化回调。
 
 - `make_axes_formatter`：坐标轴（刻度类型、范围、刻度格式、着色、边框、刻度）；
-- `make_lines_formatter`：线条（线宽、颜色、线型、标记）；
+- `make_lines_formatter`：折线（线宽、颜色、线型、标记）；
+- `make_scatter_formatter`：散点（颜色、标记、大小）；
 - `make_legend_formatter`：图例（位置、字号、边框、拖动）；
 - `combine_formatters`：按顺序组合相同类型的回调。
 
 生成的回调交给 `~plotlib.plotter.DataPlotter` 绘图方法的 ``axes_formatter``、``lines_formatter``、
-``legend_formatter`` 参数，由后端逐轴调用。
+``scatter_formatter``、``legend_formatter`` 参数，由后端逐轴调用。线条回调只收折线，散点回调只收散点。
 
 Notes
 -----
@@ -40,11 +41,13 @@ from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 from matplotlib.lines import Line2D
+from matplotlib.markers import MarkerStyle
 
 if TYPE_CHECKING:
     # 仅用于类型提示；只用 matplotlib 时不需要安装 Plotly。
     import plotly.graph_objects as go
     from matplotlib.axes import Axes
+    from matplotlib.collections import PathCollection
     from matplotlib.figure import Figure
     from matplotlib.legend import Legend
 
@@ -53,17 +56,20 @@ from .backends.plotly_styles import apply_axis as apply_plotly_axis
 from .backends.plotly_styles import apply_frame as apply_plotly_frame
 from .backends.plotly_styles import apply_ticks as apply_plotly_ticks
 from .backends.plotly_styles import figure_dpi
-from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
-from .style import (Backend, check_axis_style, check_backend, check_frame, check_legend_style, check_line_style,
-                    check_ticks, translate_axis_style, translate_frame, translate_legend_style, translate_line_style,
-                    translate_ticks)
+from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
+from .style import (HOLLOW_FILL, Backend, check_axis_style, check_backend, check_frame, check_legend_style, check_line_style,
+                    check_scatter_style, check_ticks, remember_fill, remembered_fill, translate_axis_style,
+                    translate_color, translate_frame, translate_legend_style, translate_line_style,
+                    translate_scatter_style, translate_ticks)
 
 # 各 backend 返回的回调类型；入口函数用 overload 按 backend 选择其一。
 type MplAxesFormatter = Callable[[Axes, Figure], None]
 type MplLinesFormatter = Callable[[Iterable[Line2D]], None]
+type MplScatterFormatter = Callable[[Iterable[PathCollection]], None]
 type MplLegendFormatter = Callable[[Iterable[Legend]], None]
 type PlotlyAxesFormatter = Callable[[str, go.Figure], None]            # (轴名, fig)
-type PlotlyLinesFormatter = Callable[[Iterable[Any]], None]            # 这根轴的 trace 列表
+type PlotlyLinesFormatter = Callable[[Iterable[Any]], None]            # 这根轴的折线 trace 列表
+type PlotlyScatterFormatter = Callable[[Iterable[Any]], None]          # 这根轴的散点 trace 列表
 type PlotlyLegendFormatter = Callable[[Iterable[go.layout.Legend]], None]
 
 
@@ -203,21 +209,21 @@ def make_lines_formatter(style: LineStyle | None = ..., custom: Iterable[Callabl
 def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callable] | None = None, *,
                          backend: Backend = "matplotlib") -> MplLinesFormatter | PlotlyLinesFormatter:
     """
-    创建线条回调，把 `LineStyle` 写了的字段改到这根轴的每一条线上。
+    创建线条回调，把 `LineStyle` 写了的字段改到这根轴的每一条折线上。
 
     Parameters
     ----------
     style : LineStyle, optional
-        曲线样式。省略时只执行 *custom*。
+        折线样式。省略时只执行 *custom*。
     custom : iterable of callable, optional
-        自定义回调，对每条线依次调用：matplotlib 收 ``Line2D`` 等曲线对象，Plotly 收 trace。
+        自定义回调，对每条线依次调用：matplotlib 收 ``Line2D``，Plotly 收 trace。
     backend : {'matplotlib', 'plotly'}, default: 'matplotlib'
         回调作用的后端。
 
     Returns
     -------
     callable
-        ``formatter(lines)``，*lines* 是这根轴上的线（Plotly 是 trace）组成的列表。
+        ``formatter(lines)``，*lines* 是这根轴上的折线（Plotly 是 trace）组成的列表；散点不在其中。
 
     Raises
     ------
@@ -226,9 +232,9 @@ def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callab
 
     Notes
     -----
-    - ``color`` 统一设置该轴上曲线的颜色，包括线条和标记。
+    - ``color`` 统一设置该轴上折线的颜色，包括线条和标记。
     - 对 Plotly 折线设置 ``marker`` 会启用带标记的折线模式。
-    - 散点支持颜色和标记。Plotly 回调跳过柱状图，Matplotlib 回调对柱状图设置颜色时会报错。
+    - 散点用 `make_scatter_formatter`；同一根轴上有折线和散点时，两个回调各改各的。
 
     Examples
     --------
@@ -246,21 +252,14 @@ def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callab
         def formatter(lines, *_args, **_kwargs):
             _ = _args, _kwargs
             for line in lines:
-                if isinstance(line, Line2D):
-                    line.set(**native)
-                elif 'color' in native:         # 散点、柱：只有颜色看得见
-                    line.set_color(native['color'])
+                line.set(**native)
                 for func in custom:
                     func(line)
 
         return formatter
 
     def plotly_formatter(traces):
-        import plotly.graph_objects as go
-
         for trace in traces:
-            if not isinstance(trace, go.Scatter):
-                continue
             # trace.figure 是它所在的图：按这张图的 dpi 把磅换成像素
             native = translate_line_style(style, 'plotly', figure_dpi(trace.figure))
             trace.update(**native)      # update 合并嵌套属性，没写的保持不变
@@ -268,6 +267,107 @@ def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callab
             mode = str(trace.mode or "lines")
             if style.marker is not None and "markers" not in mode:
                 trace.mode = mode + "+markers"
+            for func in custom:
+                func(trace)
+
+    return plotly_formatter
+
+
+# ══════════════════════════════════════════════
+# 散点（ScatterStyle）
+# ══════════════════════════════════════════════
+@overload
+def make_scatter_formatter(style: ScatterStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                           backend: Literal["matplotlib"] = ...) -> MplScatterFormatter: ...
+@overload
+def make_scatter_formatter(style: ScatterStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                           backend: Literal["plotly"]) -> PlotlyScatterFormatter: ...
+@overload
+def make_scatter_formatter(style: ScatterStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                           backend: Backend) -> MplScatterFormatter | PlotlyScatterFormatter: ...
+def make_scatter_formatter(style: ScatterStyle | None = None, custom: Iterable[Callable] | None = None, *,
+                           backend: Backend = "matplotlib") -> MplScatterFormatter | PlotlyScatterFormatter:
+    """
+    创建按轴应用 `ScatterStyle` 的散点格式化回调。
+
+    Parameters
+    ----------
+    style : ScatterStyle, optional
+        应用于该轴各组散点的样式。省略时仅执行 *custom*。
+    custom : iterable of callable, optional
+        应用样式后，按给定顺序对每组散点调用。Matplotlib 回调接收 ``PathCollection``，
+        Plotly 回调接收 trace。
+    backend : {'matplotlib', 'plotly'}, default: 'matplotlib'
+        回调作用的后端。
+
+    Returns
+    -------
+    callable
+        ``formatter(scatters)``，其中 *scatters* 是该轴上各组散点对象的列表。
+
+    Raises
+    ------
+    TypeError, ValueError
+        *style* 含无效字段值。
+
+    Examples
+    --------
+    >>> fmt = make_scatter_formatter(ScatterStyle(color='black', marker='square', size=8))
+    >>> DataPlotter(data).plot_scatter(scatter_formatter=fmt)
+    """
+    check_backend(backend)
+    style = style or ScatterStyle()
+    check_scatter_style(style)
+    custom = list(custom or ())
+    color = None if style.color is None else translate_color(style.color, backend)
+    refill = style.filled is True and style.color is None
+
+    def fill_of(artist, native: dict, key: str, current_fill, current_edge) -> dict:
+        """
+        记录当前填充色或显式指定的颜色，供空心散点恢复填充。
+
+        仅指定 ``filled=True`` 时，空心散点优先恢复记录的填充色，其次使用当前描边色。
+        """
+        remember_fill(artist, current_fill)
+        remember_fill(artist, color)
+        if refill and current_fill is None:
+            return {**native, key: remembered_fill(artist, current_edge)}
+        return native
+
+    if backend == "matplotlib":
+        base = translate_scatter_style(style, backend)
+
+        def formatter(scatters, *_args, **_kwargs):
+            _ = _args, _kwargs
+            for points in scatters:
+                # 保留完整的 RGBA 数组，供恢复逐点配色。无可见填充时视为空心。
+                faces, edges = points.get_facecolor(), points.get_edgecolor()
+                current_fill = faces.copy() if len(faces) and (faces[:, 3] > 0).any() else None
+                native = fill_of(points, base, 'facecolors', current_fill, edges.copy() if len(edges) else None)
+                # 通过 PathCollection 的 setter 应用已转换的属性。
+                setters = {'facecolors': points.set_facecolor, 'edgecolors': points.set_edgecolor,
+                           'linewidths': points.set_linewidth, 'alpha': points.set_alpha,
+                           's': lambda area: points.set_sizes([area])}
+                for key, value in native.items():
+                    if key in setters:
+                        setters[key](value)
+                if 'marker' in native:
+                    marker = MarkerStyle(native['marker'])
+                    points.set_paths([marker.get_path().transformed(marker.get_transform())])
+                for func in custom:
+                    func(points)
+
+        return formatter
+
+    def plotly_formatter(traces):
+        for trace in traces:
+            # 使用所属 Figure 的 DPI 将磅换算为像素。
+            native = translate_scatter_style(style, 'plotly', figure_dpi(trace.figure))
+            # 仅将字符串与透明填充值比较，逐点颜色数组作为整体保留。
+            fill = trace.marker.color
+            hollow = fill is None or (isinstance(fill, str) and fill == HOLLOW_FILL['plotly'])
+            current_fill = None if hollow else fill
+            trace.update(**fill_of(trace, native, 'marker_color', current_fill, trace.marker.line.color))
             for func in custom:
                 func(trace)
 

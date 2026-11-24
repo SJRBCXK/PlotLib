@@ -219,7 +219,9 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - `plotrange` 限制绘制点数
 - `neglog_x` / `neglog_y`：数据取绝对值，刻度文字带负号；两轴同时启用时各保留自己的格式；
   **渲染后**默认刻度格式也是「一个负号 + 数字」（xy 的 X、双 Y 轴的左 Y；双 Y 轴共用的 X 轴只加一次负号）
-- `plot_kind` 为 line / scatter / bar 时生成对应类型的对象，且点 / 柱的数据正确；不支持的类型报错
+- 折线走 `plot_multiline`、散点走 `plot_scatter`，生成对应类型的对象（`Line2D` / `PathCollection`），且数据正确；
+  `plot_scatter` 与折线共用分组规则（不分组、分离、合并），两个后端一致；双 Y 轴两侧可以分别是折线、散点
+- 线条回调只改折线、散点回调只改散点（`make_lines_formatter` / `make_scatter_formatter`，两个后端都验证）
 - `axes_formatter` / `lines_formatter` / `legend_formatter` 都会被调用，拿到正确的对象
 - `lines_formatter` 改线型后，图例同步更新；**渲染后**图例位置和能否拖动不变（图外右侧、图内右下两种）
 - `figsize`：不传时 `plot_multiline` 为 (10, 8)、`plot_groups` 为 (16, 12)、`plot_xy` / `plot_dual_y` 为 (12, 8)；传了则所有绘图方法都用它（xy、双 Y 轴以前忽略它）

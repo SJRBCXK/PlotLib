@@ -3,7 +3,7 @@
 
 同一个入口、同一份绘图计划（plan.plan_*），换后端只换「怎么画」，所以：
   - 构造时对分组参数的约定相同（plan.resolve_groups，与后端无关）；
-  - 同一个 Group 交给两个后端，四种绘图方法画出的图数、曲线条数、顺序、标签、数据一致（BACKEND_PLAN 第 3、4 步的验收）。
+  - 同一个 Group 交给两个后端，四种绘图方法画出的图数、曲线条数、顺序、标签、数据一致（docs/WORK_PLAN.md 附录 C 第 3、4 步的验收）。
 颜色不在这里比：两个库的色带实现不同，各自「位置 → 颜色」在 test_plotter.py / test_plotly_backend.py 里测。
 
 数据来自 conftest.py 的 eis_dataset：3 个样品；配置里样品 1 同时属于 A、B 两组。
@@ -233,7 +233,7 @@ def test_group_marker_applies_to_scatter(eis_dataset, backend):
     """分组写的 marker 对散点图也生效（第三方审查 G；以前分组样式只对折线应用）。"""
     groups = Group(eis_dataset, {'A': {'num': [0, 1], 'marker': 'square'}})
     artist = DataPlotter(eis_dataset, groups=groups, backend=backend) \
-        .plot_groups(plot_kind='scatter').figures['A'].artist(0)
+        .plot_scatter().figures['A'].artist(0)
 
     if backend == 'matplotlib':
         from matplotlib.markers import MarkerStyle
@@ -243,6 +243,149 @@ def test_group_marker_applies_to_scatter(eis_dataset, backend):
     else:
         assert artist.marker.symbol == 'square'
         assert artist.mode == 'markers'                 # 散点不因为写了 marker 变成「线 + 点」
+
+
+@BACKENDS
+def test_plot_scatter_follows_group_rules(eis_dataset, backend):
+    """
+    plot_scatter 与折线共用分组规则（4.3）：没有分组画全部样品；有分组时分离模式每组一张图，
+    合并模式一张图、重复样品只画一次。画出来的是散点（不是线），数据、标签与计划一致。
+    """
+    def points(artist):
+        if backend == 'matplotlib':
+            from matplotlib.collections import PathCollection
+            assert isinstance(artist, PathCollection)
+            x, y = np.asarray(artist.get_offsets()).T
+            return x.tolist(), y.tolist(), artist.get_label()
+        assert artist.mode == 'markers'
+        return list(artist.x), list(artist.y), artist.name
+
+    plotter = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE, backend=backend)
+    assert [points(a) for a in plotter.plot_scatter().figures['main'].artists] == \
+        [([1, 10, 100], [10 * k, 20 * k, 30 * k], f'S{k - 1}') for k in (1, 2, 3)]
+
+    grouped = DataPlotter(eis_dataset, groups=Group(eis_dataset, overlap_config()), backend=backend)
+    assert list(grouped.plot_scatter().figures) == ['A', 'B']
+    merged = grouped.plot_scatter(merge_groups=True).figures['main']
+    assert [points(a)[2] for a in merged.artists] == ['S0', 'S1', 'S2']
+
+
+@BACKENDS
+def test_line_and_scatter_formatters_are_separate(eis_dataset, backend):
+    """
+    线条回调只改折线、散点回调只改散点（用户定：两者解耦）。双 Y 轴左边折线、右边散点：
+    左轴的线条回调改了线宽；右轴的线条回调（绿色）碰不到右边的散点，散点仍是预设的蓝。
+    plot_scatter 的散点回调改散点的颜色和大小。
+    """
+    from plotlib.formatters import make_scatter_formatter
+    from plotlib.plot_spec import ScatterStyle
+
+    drawn = DataPlotter(eis_dataset, backend=backend).plot_dual_y(
+        left=(FREQ, ZS_RE), right=(FREQ, ZS_IM), plot_kinds=('line', 'scatter'),
+        lines_formatter=make_lines_formatter(LineStyle(width=4), backend=backend),
+        right_lines_formatter=make_lines_formatter(LineStyle(color='green'), backend=backend),
+    ).figures[0]
+    line, dots = drawn.artist(0), drawn.artist(0, 'right')
+    scatter = DataPlotter(eis_dataset, backend=backend).plot_scatter(
+        scatter_formatter=make_scatter_formatter(ScatterStyle(color='black', size=9), backend=backend),
+    ).figures['main'].artist(0)
+
+    if backend == 'matplotlib':
+        from matplotlib.colors import to_rgba
+        assert line.get_linewidth() == 4
+        assert tuple(dots.get_facecolor()[0]) == to_rgba('blue')
+        assert (tuple(scatter.get_facecolor()[0]), scatter.get_sizes().tolist()) == (to_rgba('black'), [81])
+    else:
+        assert line.line.width == pytest.approx(4 * 100 / 72)
+        assert (dots.mode, dots.marker.color) == ('markers', 'blue')
+        assert (scatter.marker.color, scatter.marker.size) == ('black', pytest.approx(9 * 100 / 72))
+
+
+@BACKENDS
+def test_scatter_defaults_and_hollow(eis_dataset, backend):
+    """
+    散点按库默认 DEFAULT_SCATTER 画（大小 6 磅、描边 1 磅），不受全局折线样式影响；
+    散点回调写 filled=False 变成空心：填充透明，描边保留原来的颜色。
+    回归（复审）：LineStyle(marker_size=24) 曾让默认散点直径变成 4 倍，matplotlib 里 LineStyle.width 还会改 x 形散点的笔画。
+    """
+    from plotlib.formatters import make_scatter_formatter
+    from plotlib.plot_spec import ScatterStyle
+
+    plotter = DataPlotter(eis_dataset, backend=backend, lines=LineStyle(width=5, marker_size=24))
+    plain = plotter.plot_scatter().figures['main'].artist(0)
+    hollow = plotter.plot_scatter(
+        scatter_formatter=make_scatter_formatter(ScatterStyle(filled=False), backend=backend)).figures['main'].artist(0)
+
+    if backend == 'matplotlib':
+        assert (plain.get_sizes().tolist(), plain.get_linewidths().tolist()) == ([36], [1])
+        face = hollow.get_facecolor()
+        assert len(face) == 0 or face[0][3] == 0                                 # 填充透明（'none' 读回来是空数组）
+        np.testing.assert_allclose(hollow.get_edgecolor()[0], plain.get_facecolor()[0])
+    else:
+        px = 100 / 72
+        assert (plain.marker.size, plain.marker.line.width) == (pytest.approx(6 * px), pytest.approx(px))
+        assert (hollow.marker.color, hollow.marker.line.color) == ('rgba(0,0,0,0)', plain.marker.color)
+
+
+@BACKENDS
+def test_scatter_refill_and_line_markers(eis_dataset, backend):
+    """
+    回归（复审）：
+    1. 先 filled=False 再 filled=True（没写 color）要恢复成画图时的填充色，单独写的描边色不变；
+    2. matplotlib 的 'x'、'cross' 是线形标记，不能传 edgecolors，否则警告；开启「警告即错误」也要能画，空心时也看得见。
+    """
+    import warnings
+
+    from matplotlib.colors import to_rgba
+
+    from plotlib.formatters import combine_formatters, make_scatter_formatter
+    from plotlib.plot_spec import ScatterStyle
+
+    plotter = DataPlotter(eis_dataset, backend=backend)
+    plain = plotter.plot_scatter().figures['main'].artist(0)
+    fmt = lambda style: make_scatter_formatter(style, backend=backend)      # noqa: E731
+    refill = combine_formatters(fmt(ScatterStyle(filled=False, edge_color='black')), fmt(ScatterStyle(filled=True)))
+    points = plotter.plot_scatter(scatter_formatter=refill).figures['main'].artist(0)
+    if backend == 'matplotlib':
+        np.testing.assert_allclose(points.get_facecolor()[0], plain.get_facecolor()[0])
+        np.testing.assert_allclose(points.get_edgecolor()[0], (0, 0, 0, 1))
+    else:
+        assert (points.marker.color, points.marker.line.color) == (plain.marker.color, 'black')
+
+    # 原生回调改的填充色也要记住：之后写 filled=True 不能把它换回画图时的颜色（先转空心再转实心也一样）
+    red = make_scatter_formatter(custom=[
+        (lambda p: p.set_facecolor('red')) if backend == 'matplotlib' else (lambda t: t.update(marker_color='red'))],
+        backend=backend)
+    for chain in ([red, fmt(ScatterStyle(filled=True))],
+                  [red, fmt(ScatterStyle(filled=False)), fmt(ScatterStyle(filled=True))]):
+        points = plotter.plot_scatter(scatter_formatter=combine_formatters(*chain)).figures['main'].artist(0)
+        if backend == 'matplotlib':
+            np.testing.assert_allclose(points.get_facecolor()[0], (1, 0, 0, 1))
+        else:
+            assert points.marker.color == 'red'
+
+    # 逐点颜色：原生回调写的颜色数组也要整组记住；Plotly 的 marker.color 是数组时其他回调也不能出错
+    colors = ['red', 'blue', 'green']
+    per_point = make_scatter_formatter(custom=[
+        (lambda p: p.set_facecolor(colors)) if backend == 'matplotlib'
+        else (lambda t: t.update(marker_color=np.array(colors)))], backend=backend)
+    chain = [per_point, fmt(ScatterStyle(filled=False)), fmt(ScatterStyle(filled=True)), fmt(ScatterStyle(alpha=0.5))]
+    points = plotter.plot_scatter(scatter_formatter=combine_formatters(*chain)).figures['main'].artist(0)
+    if backend == 'matplotlib':
+        np.testing.assert_allclose(points.get_facecolor()[:, :3], [to_rgba(c)[:3] for c in colors])
+    else:
+        assert list(points.marker.color) == colors
+
+    for marker in ('x', 'cross'):
+        grouped = DataPlotter(eis_dataset, groups=Group(eis_dataset, {'A': {'num': [0], 'marker': marker}}),
+                              backend=backend)
+        for filled in (True, False):
+            with warnings.catch_warnings():
+                warnings.simplefilter('error')
+                points = grouped.plot_scatter(scatter_formatter=fmt(ScatterStyle(filled=filled))
+                                              ).figures['A'].artist(0)
+            if backend == 'matplotlib':                                     # 线形标记靠描边显示
+                assert np.asarray(points.get_edgecolor()).shape == (1, 4) and points.get_edgecolor()[0][3] == 1
 
 
 # ══════════════════════════════════════════════
@@ -313,7 +456,8 @@ def test_global_marker(eis_dataset, backend):
 
     lines = plotter.plot_multiline().figures['main'].artists
     grouped = plotter.plot_groups(merge_groups=True).figures['main']
-    scatter = plotter.plot_multiline(plot_kind='scatter').figures['main'].artist(0)
+    scatter = DataPlotter(eis_dataset, backend=backend, lines=LineStyle(marker='diamond')) \
+        .plot_scatter().figures['main'].artist(0)
     if backend == 'matplotlib':
         from matplotlib.markers import MarkerStyle
         assert [line.get_marker() for line in lines] == ['D'] * 3
@@ -324,25 +468,23 @@ def test_global_marker(eis_dataset, backend):
     else:
         assert [(t.mode, t.marker.symbol) for t in lines] == [('lines+markers', 'diamond')] * 3
         assert [grouped.artist(k).marker.symbol for k in (0, 1)] == ['square', 'diamond']
-        template = scatter.figure.layout.template.data.scatter[0]
-        assert (scatter.mode, scatter.marker.symbol, template.marker.symbol) == ('markers', None, 'circle')
+        # 散点按库默认 DEFAULT_SCATTER 明确写圆点，不靠模板（复审：全局折线样式不能漏到散点上）
+        assert (scatter.mode, scatter.marker.symbol) == ('markers', 'circle')
 
 
 @BACKENDS
 def test_backend_rejects_unknown_layout_and_kind(backend):
-    """计划里的版式、画法写错时，两个后端都明确报错，不悄悄画成别的（BACKEND_PLAN 原则 5）。"""
+    """计划里的版式、画法写错时，两个后端都明确报错，不悄悄画成别的（docs/WORK_PLAN.md 原则 5）。"""
     from plotlib.backends import get_backend
-    from plotlib.plot_spec import Appearance, CurveSpec, FigureSpec
+    from plotlib.plot_spec import Appearance, CurveBase, FigureSpec, LineSpec
 
     drawer = get_backend(backend, Appearance(), None)
-
-    def one_curve(kind='line') -> CurveSpec:
-        return CurveSpec(sample_idx=0, x=np.array([0, 1]), y=np.array([0, 1]), label='S0',
-                         group_name=None, color_position=None, kind=kind)  # pyright: ignore[reportArgumentType]
+    line = LineSpec(sample_idx=0, x=np.array([0, 1]), y=np.array([0, 1]), label='S0',
+                    group_name=None, color_position=None)
 
     with pytest.raises(ValueError, match='版式'):
-        drawer.draw(FigureSpec(key='k', x_unit='', y_unit='', curves=[one_curve()],
+        drawer.draw(FigureSpec(key='k', x_unit='', y_unit='', curves=[line],
                                layout='pie'), figsize=(4, 3))  # pyright: ignore[reportArgumentType]  故意写错
-    with pytest.raises(ValueError, match='plot_kind'):
-        drawer.draw(FigureSpec(key='k', x_unit='', y_unit='', curves=[one_curve('pie')]),  # pyright: ignore[reportArgumentType]
-                    figsize=(4, 3))
+    with pytest.raises(ValueError, match='画法'):                # 不认识的 spec 类型
+        unknown = CurveBase(label='S0', group_name=None, color_position=None)
+        drawer.draw(FigureSpec(key='k', x_unit='', y_unit='', curves=[unknown]), figsize=(4, 3))  # pyright: ignore[reportArgumentType]  故意传基类

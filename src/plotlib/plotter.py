@@ -10,7 +10,7 @@ from typing import Any
 from .backends import get_backend
 from .dataset import DataSet
 from .group import Group
-from .plan import plan_dual_y_figures, plan_multiline_figures, plan_xy_figures, resolve_groups
+from .plan import plan_dual_y_figures, plan_multiline_figures, plan_scatter_figures, plan_xy_figures, resolve_groups
 from .plot_spec import (Appearance, AxesFormatter, CurveKind, DrawnFigure, FigureSpec, FrameStyle, LegendStyle,
                         LineStyle, TickStyle)
 
@@ -46,7 +46,8 @@ class DataPlotter:
     坐标轴、曲线和图例回调均按轴调用。可用整图回调访问图形及其全部坐标轴。
 
     - ``axes_formatter``：matplotlib 以 ``(ax, fig)`` 调用，Plotly 以 ``(轴名, fig)`` 调用，如 ``('yaxis2', fig)``；
-    - ``lines_formatter``：这根轴上的线组成的列表（matplotlib 是 ``Line2D`` 等，Plotly 是 trace）；
+    - ``lines_formatter``：这根轴上的折线组成的列表（matplotlib 是 ``Line2D``，Plotly 是 trace）；
+    - ``scatter_formatter``：这根轴上的散点组成的列表（matplotlib 是 ``PathCollection``，Plotly 是 trace）；
     - ``legend_formatter``：matplotlib 收 ``[Legend]``，Plotly 收 ``[fig.layout.legend]``；
     - ``figure_formatter``：``(fig, axes)``，``axes`` 在 matplotlib 是 ``{'left': ax, ...}``，
       在 Plotly 是 ``{'left': 'yaxis', ...}``。
@@ -55,7 +56,7 @@ class DataPlotter:
     后端先应用默认版式，再运行各轴回调和整图回调，最后处理负对数刻度。
 
     构造时指定的 ``lines``、``frame``、``legend`` 和 ``ticks`` 应用于所有绘图方法。
-    ``plotlib.formatters`` 提供坐标轴、曲线和图例的回调工厂。
+    ``plotlib.formatters`` 提供坐标轴、折线、散点和图例的回调工厂。
 
     See Also
     --------
@@ -176,15 +177,24 @@ class DataPlotter:
         """
         渲染绘图计划并将结果保存到 ``self.figures``，返回 ``self``。
 
-        画图的事（建图、画线、排版、回调、负对数刻度）全在后端。多张计划时按后端的能力分两种：
-        有 ``draw_pages`` 的后端（Plotly）画成一个 Figure 多页，其余（matplotlib）一张计划一张图。
-        判断依据是「后端有没有这个方法」，不看后端的名字。
+        支持 ``draw_pages`` 的后端在同一个 Figure 中渲染多页。其他后端为每项计划创建一张图。
+
+        全部渲染成功后才替换 ``self.figures``。逐图渲染时，若某张图失败，
+        通过后端提供的 ``close`` 方法关闭本次调用中已完成的图。
         """
         draw_pages = getattr(self.backend, 'draw_pages', None)
         if draw_pages is not None and len(specs) > 1:
             drawn = draw_pages(specs, figsize, formatters, figure_formatter)
         else:
-            drawn = [self.backend.draw(spec, figsize, formatters, figure_formatter) for spec in specs]
+            drawn = []
+            try:
+                for spec in specs:
+                    drawn.append(self.backend.draw(spec, figsize, formatters, figure_formatter))
+            except BaseException:
+                if (close := getattr(self.backend, 'close', None)) is not None:
+                    for page in drawn:
+                        close(page)
+                raise
         self.figures = {page.spec.key: page for page in drawn}
         return self
 
@@ -287,12 +297,11 @@ class DataPlotter:
                        legend_formatter=None,
                        neglog_x: bool = False,
                        neglog_y: bool = False,
-                       plot_kind: CurveKind = 'line',
                        figure_formatter: FigureFormatter | None = None,
                        legend_title: str | None = None,
                        ) -> DataPlotter:
         """
-        多线图：所有样品画在同一坐标系，每个样品一条线，颜色按样品在色带上取。
+        多线图：所有样品画在同一坐标系，每个样品一条折线，颜色按样品在色带上取。散点用 `plot_scatter`。
 
         Parameters
         ----------
@@ -301,8 +310,6 @@ class DataPlotter:
             一般用 `~plotlib.formatters.make_axes_formatter` 等工厂生成。
         neglog_x, neglog_y : bool, default: False
             负对数：数据取绝对值后画，刻度文字补回负号。适合全为负数、又想用对数轴的数据。
-        plot_kind : {'line', 'scatter', 'bar'}, default: 'line'
-            画法。
         figure_formatter : callable, optional
             整图回调 ``figure_formatter(fig, axes)``，在各轴回调之后调用一次。
         legend_title : str, optional
@@ -322,7 +329,7 @@ class DataPlotter:
         # 不分组（groups=None）：一张 'main' 图，全部样品；不看 self.groups
         specs = plan_multiline_figures(self.dataset, None, self.channel_x, self.channel_y,
                                        plotrange=self.plotrange, neglog_x=neglog_x, neglog_y=neglog_y,
-                                       kind=plot_kind, legend_title=legend_title)
+                                       legend_title=legend_title)
         formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
         return self._render(specs, self.figsize or (10, 8), formatters, figure_formatter)
 
@@ -333,20 +340,19 @@ class DataPlotter:
                     lines_formatter=None,
                     legend_formatter=None,
                     merge_groups: bool = False,
-                    plot_kind: CurveKind = 'line',
                     figure_formatter: FigureFormatter | None = None,
                     legend_title: str | None = None,
                     ) -> DataPlotter:
         """
         按 ``self.groups`` 分组画多线图。
 
-        没有分组时等同于 `plot_multiline`。
+        没有分组时等同于 `plot_multiline`。分组画散点用 `plot_scatter`。
 
         Parameters
         ----------
         merge_groups : bool, default: False
             False：每个分组单独一张图；True：所有分组合并到一张图。
-        neglog_x, neglog_y, axes_formatter, lines_formatter, legend_formatter, plot_kind, figure_formatter
+        neglog_x, neglog_y, axes_formatter, lines_formatter, legend_formatter, figure_formatter
             同 `plot_multiline`。
         legend_title : str, optional
             图例标题，默认不加。分离模式下 ``'{name}'`` 换成组名，如 ``'Group {name}'``。
@@ -359,8 +365,7 @@ class DataPlotter:
 
         Notes
         -----
-        线型应用于折线，标记应用于折线和散点，颜色应用于所有图形类型。
-        分组样式覆盖全局样式，``lines_formatter`` 可进一步覆盖分组样式。
+        分组样式读取 ``linestyle``、``marker``、``color``，覆盖全局样式；``lines_formatter`` 可进一步覆盖分组样式。
 
         未指定分组颜色时，分离模式按样品配色，合并模式采用各组第一个样品的颜色。
         合并时，属于多个分组的样品只绘制一次，采用配置中第一个包含该样品的分组样式。
@@ -372,7 +377,7 @@ class DataPlotter:
         """
         if not self.groups.names:
             return self.plot_multiline(
-                plot_kind=plot_kind, neglog_x=neglog_x, neglog_y=neglog_y,
+                neglog_x=neglog_x, neglog_y=neglog_y,
                 axes_formatter=axes_formatter, lines_formatter=lines_formatter,
                 legend_formatter=legend_formatter, figure_formatter=figure_formatter,
                 legend_title=legend_title,
@@ -380,16 +385,62 @@ class DataPlotter:
 
         specs = plan_multiline_figures(self.dataset, self.groups, self.channel_x, self.channel_y,
                                        merge_groups=merge_groups, plotrange=self.plotrange,
-                                       neglog_x=neglog_x, neglog_y=neglog_y, kind=plot_kind,
-                                       legend_title=legend_title)
+                                       neglog_x=neglog_x, neglog_y=neglog_y, legend_title=legend_title)
         formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
         return self._render(specs, self.figsize or (16, 12), formatters, figure_formatter)
+
+    def plot_scatter(self,
+                     neglog_x: bool = False,
+                     neglog_y: bool = False,
+                     axes_formatter=None,
+                     scatter_formatter=None,
+                     legend_formatter=None,
+                     merge_groups: bool = False,
+                     figure_formatter: FigureFormatter | None = None,
+                     legend_title: str | None = None,
+                     ) -> DataPlotter:
+        """
+        为每个样品绘制一组散点。
+
+        配置分组时，按 `plot_groups` 的规则选择样品、配色和分图。未配置分组时，在一张图中绘制全部样品。
+
+        Parameters
+        ----------
+        scatter_formatter : callable, optional
+            接收该轴上各组散点对象的列表。可用 `~plotlib.formatters.make_scatter_formatter` 创建。
+        merge_groups : bool, default: False
+            为真时将各分组合并到同一张图，为假时为每个分组分别绘图。
+        neglog_x, neglog_y, axes_formatter, legend_formatter, figure_formatter
+            同 `plot_multiline`。
+        legend_title : str, optional
+            图例标题，默认不加。分离模式下 ``'{name}'`` 换成组名。
+
+        Returns
+        -------
+        DataPlotter
+            ``self``，可以链式调用。不分组、合并模式 ``figures = {'main': DrawnFigure}``；
+            分离模式 ``figures = {组名: DrawnFigure}``。取散点用 ``figures[key].artist(样品号)``。
+
+        Notes
+        -----
+        散点的分组样式由 ``marker`` 和 ``color`` 指定，可通过 ``scatter_formatter`` 覆盖。
+
+        Examples
+        --------
+        >>> groups = Group(data, {'A': {'num': [0, 1], 'marker': 'square'}, 'B': {'num': [2, 3]}})
+        >>> DataPlotter(data, groups=groups).plot_scatter(merge_groups=True)
+        """
+        specs = plan_scatter_figures(self.dataset, self.groups, self.channel_x, self.channel_y,
+                                     merge_groups=merge_groups, plotrange=self.plotrange,
+                                     neglog_x=neglog_x, neglog_y=neglog_y, legend_title=legend_title)
+        formatters = {'left': AxesFormatter(axes_formatter, legend=legend_formatter, scatter=scatter_formatter)}
+        default_size = (16, 12) if self.groups.names else (10, 8)      # 与 plot_groups / plot_multiline 一致
+        return self._render(specs, self.figsize or default_size, formatters, figure_formatter)
 
     def plot_xy(self,
                 axes_formatter=None,
                 lines_formatter=None,
                 legend_formatter=None,
-                plot_kind: CurveKind = 'line',
                 neglog_x: bool = False,
                 neglog_y: bool = False,
                 channel_x: int | None = None,
@@ -408,7 +459,7 @@ class DataPlotter:
             横轴、纵轴的通道号；不传时用构造时的 *channel_x*、*channel_y*。
         legend_title : str, optional
             图例标题，默认不加。``'{name}'`` 换成每张图的样品名。
-        axes_formatter, lines_formatter, legend_formatter, plot_kind, neglog_x, neglog_y, figure_formatter
+        axes_formatter, lines_formatter, legend_formatter, neglog_x, neglog_y, figure_formatter
             同 `plot_multiline`。
 
         Returns
@@ -425,7 +476,7 @@ class DataPlotter:
         specs = plan_xy_figures(self.dataset,
                                 self.channel_x if channel_x is None else channel_x,
                                 self.channel_y if channel_y is None else channel_y,
-                                plotrange=self.plotrange, neglog_x=neglog_x, neglog_y=neglog_y, kind=plot_kind,
+                                plotrange=self.plotrange, neglog_x=neglog_x, neglog_y=neglog_y,
                                 legend_title=legend_title)
         formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
         return self._render(specs, self.figsize or (12, 8), formatters, figure_formatter)
@@ -446,6 +497,8 @@ class DataPlotter:
                     plot_kinds: tuple[CurveKind, CurveKind] = ('line', 'line'),
                     figure_formatter: FigureFormatter | None = None,
                     legend_title: str | None = '{name}',
+                    scatter_formatter=None,
+                    right_scatter_formatter=None,
                     ) -> DataPlotter:
         """
         双 Y 轴图：每个样品一张图，左线挂左轴、右线挂右轴，共用 X 轴。
@@ -468,13 +521,15 @@ class DataPlotter:
         neglog_x, neglog_y, neglog_x2, neglog_y2 : bool, default: False
             左线的 X、Y 与右线的 X、Y 是否按负对数画。X 轴左右共用，刻度负号只按 *neglog_x* 加一次，
             *neglog_x2* 只对右线的 X 数据取绝对值。
-        plot_kinds : tuple of (str, str), default: ('line', 'line')
-            左线、右线的画法。
+        plot_kinds : tuple of ({'line', 'scatter'}, {'line', 'scatter'}), default: ('line', 'line')
+            左线、右线的画法，如 ``('scatter', 'line')`` 画「数据点 + 拟合线」。
         figure_formatter : callable, optional
             整图回调 ``figure_formatter(fig, axes)``，``axes = {'left': 左轴, 'right': 右轴}``，
             可以同时调整两根轴。
         legend_title : str or None, default: '{name}'
             图例标题，``'{name}'`` 换成样品名；None 表示不加。
+        scatter_formatter, right_scatter_formatter : callable, optional
+            左侧、右侧的散点回调，只作用于画成散点的那一侧（线条回调只作用于折线）。
 
         Returns
         -------
@@ -486,7 +541,7 @@ class DataPlotter:
         Raises
         ------
         ValueError
-            给了 *right_legend_formatter*。
+            给了 *right_legend_formatter*；或 *plot_kinds* 里有不认识的画法。
 
         Examples
         --------
@@ -501,7 +556,8 @@ class DataPlotter:
         )
         # 每根轴一组回调
         formatters = {
-            'left':  AxesFormatter(axes_formatter, lines_formatter, legend_formatter),
-            'right': AxesFormatter(right_axes_formatter, right_lines_formatter, right_legend_formatter),
+            'left':  AxesFormatter(axes_formatter, lines_formatter, legend_formatter, scatter_formatter),
+            'right': AxesFormatter(right_axes_formatter, right_lines_formatter, right_legend_formatter,
+                                   right_scatter_formatter),
         }
         return self._render(specs, self.figsize or (12, 8), formatters, figure_formatter)

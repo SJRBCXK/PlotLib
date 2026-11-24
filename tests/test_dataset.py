@@ -487,3 +487,13 @@ def test_unchanged_dataset_is_not_rechecked(eis_dataset, monkeypatch):
     eis_dataset.column_positions
     assert [ds for ds in calls if ds is eis_dataset] == []
     assert eis_dataset.status == 'loaded'
+
+
+def test_failed_check_keeps_index(eis_dataset):
+    """校验失败（同通道单位冲突）时，已取得的列索引视图和通道号保持上一次成功时的样子。"""
+    view = eis_dataset.column_positions
+    before, channels = dict(view), list(eis_dataset.channel_idx)
+    eis_dataset.sample_idx[0] = 1                   # S0 的频率列并进 S1：S1 的通道 1 变成频率
+    with pytest.raises(RuntimeError, match="单位不一致"):
+        eis_dataset.update_attributes()
+    assert (dict(view), eis_dataset.channel_idx) == (before, channels)

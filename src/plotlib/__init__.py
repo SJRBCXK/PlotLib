@@ -9,9 +9,11 @@ PlotLib 按样品和通道组织数据，并通过共同的绘图接口生成 Ma
 - `DataProcessLayer`：按样品、列名、单位选列；
 - `DataTransformer`：逐样品计算（自定义函数、范数）；
 - `Group`：样品分组，用于分组绘图和逐分组计算；
-- `DataPlotter` 提供多线图、分组图、X-Y 图和双 Y 轴图。
-- `LineStyle`、`AxisStyle`、`FrameStyle`、`LegendStyle`、`TickStyle`：线、坐标轴、边框、图例、刻度的样式；
-- `make_axes_formatter`、`make_lines_formatter`、`make_legend_formatter`：单根轴、单条线、图例的格式化回调。
+- `DataPlotter` 提供多线图、分组图、散点图、X-Y 图和双 Y 轴图。
+- `LineStyle`、`ScatterStyle`、`AxisStyle`、`FrameStyle`、`LegendStyle`、`TickStyle`：
+  折线、散点、坐标轴、边框、图例、刻度的样式；
+- `make_axes_formatter`、`make_lines_formatter`、`make_scatter_formatter`、`make_legend_formatter`：
+  单根轴、折线、散点、图例的格式化回调。
 
 Examples
 --------
@@ -29,10 +31,11 @@ from .formatters import (
     make_axes_formatter,
     make_legend_formatter,
     make_lines_formatter,
+    make_scatter_formatter,
 )
 from .group import Group
 from .plan import color_positions
-from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, TickStyle
+from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
 
 __all__ = [
     'DataSet',
@@ -43,6 +46,7 @@ __all__ = [
     'DataPlotter',
     'make_axes_formatter',
     'make_lines_formatter',
+    'make_scatter_formatter',
     'make_legend_formatter',
     'combine_formatters',
     'Group',
@@ -51,6 +55,7 @@ __all__ = [
     'FrameStyle',
     'LegendStyle',
     'LineStyle',
+    'ScatterStyle',
     'TickStyle',
 ]
 

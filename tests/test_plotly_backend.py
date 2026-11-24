@@ -1,5 +1,5 @@
 """
-测试对象：src/plotlib/backends/plotly_backend.py 的 PlotlyBackend（STRUCTURE_REVIEW 6.7）
+测试对象：src/plotlib/backends/plotly_backend.py 的 PlotlyBackend（docs/WORK_PLAN.md 步骤 6.7）
 
 与 matplotlib 后端同一个接口：draw(计划, figsize, formatters, figure_formatter) -> DrawnFigure，
 DataPlotter(backend='plotly') 的四种绘图方法结果形状与 matplotlib 相同（figures = {key: DrawnFigure}）。
@@ -18,7 +18,7 @@ import plotly.colors as plyc
 import plotly.graph_objects as go
 
 from plotlib.group import Group
-from plotlib.plot_spec import Appearance, CurveSpec, FigureSpec, LineStyle
+from plotlib.plot_spec import Appearance, FigureSpec, LineSpec, LineStyle
 from plotlib.plotter import DataPlotter
 
 FREQ, ZS_RE, ZS_IM = 0, 1, 2
@@ -44,10 +44,10 @@ def plotly_backend(**appearance):
 # ══════════════════════════════════════════════
 def test_backend_draws_only_from_plan():
     spec = FigureSpec(key='hand', x_unit='X(u)', y_unit='Y(u)', curves=[
-        CurveSpec(sample_idx=7, x=np.array([0, 1, 2]), y=np.array([3, 4, 5]), label='手写一',
-                  group_name=None, color_position=None, style=LineStyle(color=(255, 0, 0))),
-        CurveSpec(sample_idx=8, x=np.array([0, 1, 2]), y=np.array([6, 7, 8]), label='手写二',
-                  group_name=None, color_position=0.5),
+        LineSpec(sample_idx=7, x=np.array([0, 1, 2]), y=np.array([3, 4, 5]), label='手写一',
+                 group_name=None, color_position=None, style=LineStyle(color=(255, 0, 0))),
+        LineSpec(sample_idx=8, x=np.array([0, 1, 2]), y=np.array([6, 7, 8]), label='手写二',
+                 group_name=None, color_position=0.5),
     ])
     drawn = plotly_backend().draw(spec, figsize=(6, 4))
 
@@ -238,20 +238,13 @@ def test_figure_formatter_gets_axis_names(eis_dataset):
 
 
 # ══════════════════════════════════════════════
-# 画法：散点、柱状图也按计划上色（6.5 颜色一次赋值；Plotly 的这部分 6.7 补测）
+# 画法：散点也按计划上色（6.5 颜色一次赋值；柱状图在 plot_bars 测）
 # ══════════════════════════════════════════════
-@pytest.mark.parametrize("plot_kind, trace_type, mode", [
-    ('scatter', go.Scatter, 'markers'),
-    ('bar',     go.Bar,     None),
-])
-def test_plot_kind_and_group_color(eis_dataset, plot_kind, trace_type, mode):
+def test_scatter_group_color(eis_dataset):
     groups = Group(eis_dataset, {'A': {'num': [0, 1], 'color': (255, 0, 0)}})
-    trace = DataPlotter(eis_dataset, groups=groups, backend='plotly') \
-        .plot_groups(plot_kind=plot_kind).figures['A'].artist(0)
-    assert isinstance(trace, trace_type)
-    assert trace.marker.color == 'rgb(255,0,0)'
-    if mode is not None:
-        assert trace.mode == mode
+    trace = DataPlotter(eis_dataset, groups=groups, backend='plotly').plot_scatter().figures['A'].artist(0)
+    assert isinstance(trace, go.Scatter)
+    assert (trace.mode, cast(Any, trace).marker.color) == ('markers', 'rgb(255,0,0)')    # marker 的类型标注过宽
 
 
 # ══════════════════════════════════════════════

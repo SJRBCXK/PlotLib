@@ -5,7 +5,7 @@
 ``DrawnFigure.axes`` 保存布局中的轴名，例如 ``{'left': 'yaxis', 'right': 'yaxis2'}``，
 可通过 ``fig.layout[轴名]`` 访问。
 """
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any, Literal, cast
 
@@ -13,20 +13,26 @@ import plotly.colors as plyc
 import plotly.graph_objects as go
 
 from ..layouts import LAYOUTS, NO_LEGEND_MESSAGE, LayoutPreset, resolve_frame, resolve_legend
-from ..plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_TICKS, Appearance, AxesFormatter,
-                         CurveSpec, DrawnFigure, FigureSpec, LineStyle)
-from ..style import (STYLE_FIELDS_BY_KIND, only_fields, translate_color, translate_figsize, translate_frame,
-                     translate_legend_style, translate_line_style, translate_points, translate_ticks)
+from ..plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_SCATTER, DEFAULT_TICKS, Appearance,
+                         AxesFormatter,
+                         CurveBase, DrawnFigure, FigureSpec, LineSpec, LineStyle, ScatterSpec)
+from ..style import (remember_fill, translate_color, translate_figsize, translate_frame, translate_legend_style,
+                     translate_line_style, translate_points, translate_scatter_style, translate_ticks)
 from .plotly_styles import apply_axis, apply_frame, apply_log_format
 
 # 滑块模式：single 每档只显示一条曲线；cumulative 每档累加显示到当前曲线
 type SliderMode = Literal['single', 'cumulative']
 
-# 线挂的轴（CurveSpec.axis）→ Plotly 配置里的纵轴名、trace 上的 yaxis 引用
+# 线挂的轴（CurveBase.axis）→ Plotly 配置里的纵轴名、trace 上的 yaxis 引用
 _Y_AXIS = {'left': 'yaxis', 'right': 'yaxis2'}
 _TRACE_Y = {'left': 'y', 'right': 'y2'}
 # 排版预设 / 计划里的轴名（'x'、'y'、'y2'）→ Plotly 配置里的轴名
 _LAYOUT_AXIS = {'x': 'xaxis', 'y': 'yaxis', 'y2': 'yaxis2'}
+
+
+def _artists_of(spec_type: type, axis: str, curves: Sequence[CurveBase], artists: list) -> list:
+    """这根轴上某种画法（*spec_type*，如 `LineSpec`）的 trace，按绘制顺序（与 matplotlib 后端的同名函数一致）。"""
+    return [artist for curve, artist in zip(curves, artists) if curve.axis == axis and isinstance(curve, spec_type)]
 
 
 class PlotlyBackend:
@@ -163,24 +169,50 @@ class PlotlyBackend:
         return [DrawnFigure(spec=spec, fig=fig, axes=axes, artists=page_artists)
                 for spec, page_artists in zip(specs, pages)]
 
-    def _draw_curve(self, fig: go.Figure, curve: CurveSpec, preset: LayoutPreset):
+    def _draw_curve(self, fig: go.Figure, curve: CurveBase, preset: LayoutPreset):
         """
-        画一条线，返回 Figure 里实际保存的 trace。颜色、分组样式、所在的轴在画的时候一次给出。
+        按曲线的类型往 Figure 里加一条 trace，返回 Figure 里实际保存的那一个（``fig.data[-1]``，不是传入前的对象）。
+
+        颜色、样式、所在的轴在画的时候一次给出（颜色由 ``_curve_color`` 给出，样式里写的颜色已算在里面）：
+
+        - `LineSpec`：``mode='lines'`` 的 ``go.Scatter``。标记按「DataPlotter 全局 < 分组」叠加
+          （全局标记只给折线，写进模板会连散点一起改）；有标记时改成 ``'lines+markers'``，标记才显示
+          （matplotlib 不需要这一步）。线和点都写上颜色，否则点会用 Plotly 默认配色。
+        - `ScatterSpec`：``mode='markers'`` 的 ``go.Scatter``。
+
+        Raises
+        ------
+        ValueError
+            不认识的曲线类型。
         """
-        color = self._curve_color(curve, preset)
-        # 线和点都写上颜色，否则点会用 Plotly 默认配色；柱状图（go.Bar）没有 line 属性，只写 marker
-        colors = {'marker': dict(color=color)} if curve.kind == 'bar' else \
-                 {'line': dict(color=color), 'marker': dict(color=color)}
-        # 右线挂右轴（也进图例，与 matplotlib 一致）
-        placement = {'yaxis': _TRACE_Y['right']} if curve.axis == 'right' else {}
-        return self._plot_data(fig, curve.x, curve.y, curve.kind, name=curve.label,
-                               **colors, **placement, **self._native_style(curve))
+        placement = {'yaxis': _TRACE_Y['right']} if curve.axis == 'right' else {}     # 右线挂右轴（也进图例）
+        match curve:
+            case LineSpec():
+                color = self._curve_color(curve, preset)
+                style = LineStyle(marker=self.appearance.lines.marker).updated(replace(curve.style, color=None))
+                native = translate_line_style(style, 'plotly', self.dpi, dash_width=self.line_width)
+                mode = 'lines+markers' if 'marker_symbol' in native else 'lines'
+                trace = go.Scatter(x=curve.x, y=curve.y, name=curve.label, mode=mode,
+                                   line=dict(color=color), marker=dict(color=color), **placement, **native)
+            case ScatterSpec():
+                # 先套库默认（大小、描边都写明），模板里的折线样式就漏不到散点上
+                style = DEFAULT_SCATTER.updated(replace(curve.style, color=None))
+                color = self._curve_color(curve, preset)
+                native = translate_scatter_style(style, 'plotly', self.dpi, fallback_color=color)
+                trace = go.Scatter(x=curve.x, y=curve.y, name=curve.label, mode='markers', **placement, **native)
+                fig.add_trace(trace)
+                remember_fill(fig.data[-1], color)      # add_trace 会复制，要记在 Figure 里那一个上
+                return fig.data[-1]
+            case _:
+                raise ValueError(f"不支持的画法：{type(curve).__name__}（可用 LineSpec、ScatterSpec）")
+        fig.add_trace(trace)
+        return fig.data[-1]
 
     # ========================================================================
     # 曲线颜色和样式
     # ========================================================================
 
-    def _curve_color(self, curve: CurveSpec, preset: LayoutPreset) -> str | None:
+    def _curve_color(self, curve: LineSpec | ScatterSpec, preset: LayoutPreset) -> str | None:
         """
         算出一条线的最终颜色。
 
@@ -196,51 +228,6 @@ class PlotlyBackend:
         if axis_style is not None and axis_style.color is not None:
             return cast(str, translate_color(axis_style.color, 'plotly'))
         return None
-
-    def _native_style(self, curve: CurveSpec) -> dict:
-        """
-        把分组样式翻译成 trace 属性，画线时一次给出；颜色另由 ``_curve_color`` 给出。
-
-        只取这种画法看得见的字段（``style.STYLE_FIELDS_BY_KIND``）：折线全取，散点只取标记，柱状图都不取。
-        折线的标记按「DataPlotter 全局 < 分组」叠加；有标记时绘制模式改成 ``'lines+markers'``，
-        标记才显示（matplotlib 不需要这一步）。散点本来就是 ``'markers'``。
-        """
-        fields = STYLE_FIELDS_BY_KIND.get(curve.kind, ())     # 画法写错时由 _plot_data 报错
-        style = curve.style
-        if curve.kind == 'line':
-            # 全局标记只应用于折线。设置在模板中会同时影响散点。
-            style = LineStyle(marker=self.appearance.lines.marker).updated(style)
-        native = translate_line_style(only_fields(style, fields), 'plotly', self.dpi, dash_width=self.line_width)
-        if 'marker_symbol' in native and curve.kind == 'line':
-            native['mode'] = 'lines+markers'
-        return native
-
-    # ========================================================================
-    # 渲染：画线
-    # ========================================================================
-
-    @staticmethod
-    def _plot_data(fig: go.Figure, x, y, plot_kind: str = 'line', **kwargs):
-        """
-        按画法往 Figure 里加一条 trace（折线、散点是 ``go.Scatter``，柱状图是 ``go.Bar``），
-        返回 Figure 里实际保存的那一个（``fig.data[-1]``，不是传入前的对象）。*kwargs* 里给了 ``mode`` 时以它为准。
-
-        Raises
-        ------
-        ValueError
-            不认识的画法。
-        """
-        match plot_kind:
-            case 'line':
-                trace = go.Scatter(x=x, y=y, **({'mode': 'lines'} | kwargs))
-            case 'scatter':
-                trace = go.Scatter(x=x, y=y, **({'mode': 'markers'} | kwargs))
-            case 'bar':
-                trace = go.Bar(x=x, y=y, **kwargs)
-            case _:
-                raise ValueError(f"不支持的 plot_kind: '{plot_kind}'")
-        fig.add_trace(trace)
-        return fig.data[-1]
 
     # ========================================================================
     # 版式应用
@@ -274,11 +261,12 @@ class PlotlyBackend:
     # ========================================================================
 
     @staticmethod
-    def _apply_optional_formatters(fig: go.Figure, axes: dict, curves: list[CurveSpec], artists: list,
+    def _apply_optional_formatters(fig: go.Figure, axes: dict, curves: Sequence[CurveBase], artists: list,
                                    formatters: dict[str, AxesFormatter]):
         """
-        执行坐标轴和曲线回调，再执行整图图例回调。
+        执行坐标轴、线条和散点回调，再执行整图图例回调。
 
+        线条回调只收这根轴上的折线 trace，散点回调只收散点 trace，两者互不干扰。
         Plotly 会随轨迹样式更新图例。图例回调通过左轴处理。
 
         Raises
@@ -292,7 +280,9 @@ class PlotlyBackend:
             if fm.axes is not None:
                 fm.axes(axis_name, fig)
             if fm.lines is not None:
-                fm.lines([artist for curve, artist in zip(curves, artists) if curve.axis == axis])
+                fm.lines(_artists_of(LineSpec, axis, curves, artists))
+            if fm.scatter is not None:
+                fm.scatter(_artists_of(ScatterSpec, axis, curves, artists))
 
         for axis, fm in fms.items():
             if fm.legend is not None:

@@ -16,8 +16,8 @@ from plotlib.plotter import DataPlotter
 from plotlib.dataset import DataSet
 from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
-from plotlib.formatters import make_axes_formatter
-from plotlib.plot_spec import AxisStyle
+from plotlib.formatters import make_axes_formatter, make_scatter_formatter
+from plotlib.plot_spec import AxisStyle, ScatterStyle
 from plotlib.group import Group
 
 plt.close('all')
@@ -180,17 +180,35 @@ for dataslice in Selected_data:
     f_delta_peak_slice = DT(dataslice).apply(func=f_peak,extended=False)
     f_delta_peak.expandata(f_delta_peak_slice)
 
-fig, ax = plt.subplots()
-ax2 = ax.twinx()
+# 汇总图每行对应一个原始样品，保留按输入行顺序检出的第一个峰。
+peak_sample_names = f_delta_peak.names[::2]
+peak_sample_positions = np.arange(len(peak_sample_names))
+first_peaks = f_delta_peak.data[0].reshape(-1, 2)
+peak_summary = DataSet().form_array(
+    data=np.column_stack((peak_sample_positions, first_peaks)),
+    name=['Loss peaks'] * 3,
+    unit=['', 'Peak tan δ', 'Peak frequency (Hz)'],
+    sample_idx=0,
+    repeat_times=3,
+)
 
-x_labels = f_delta_peak.names[0::2]
-x = range(len(x_labels))
 
-ax.plot(x, f_delta_peak.data[0, 0::2], 'o', markersize=10)
-ax2.plot(x, f_delta_peak.data[0, 1::2], 'x', markersize=10)
-ax.set_xticks(x)
-ax.set_xticklabels(x_labels, rotation=45, ha='right')
-ax2.set_yscale('log')
+def format_peak_summary(fig, axes):
+    """在共享 X 轴上显示样品标签。"""
+    axes['left'].set_xticks(peak_sample_positions, peak_sample_names, fontsize=11, rotation=45, ha='right')
+    fig.tight_layout()
+
+
+peak_plotter = DataPlotter(peak_summary).plot_dual_y(
+    left=(0, 1),
+    right=(0, 2),
+    plot_kinds=('scatter', 'scatter'),
+    scatter_formatter=make_scatter_formatter(ScatterStyle(marker='circle', size=10)),
+    right_scatter_formatter=make_scatter_formatter(ScatterStyle(marker='x', size=10)),
+    right_axes_formatter=make_axes_formatter(y=AxisStyle(scale='log')),
+    figure_formatter=format_peak_summary,
+    legend_title=None,
+)
 
 
 plt.show()

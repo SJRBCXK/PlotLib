@@ -91,26 +91,19 @@ def artist_xy(
     raise TypeError(type(artist))
 
 
-@pytest.mark.parametrize("plot_kind, artist_type", [
-    ('line',    Line2D),
-    ('scatter', PathCollection),
-    ('bar',     BarContainer),
+@pytest.mark.parametrize("method, artist_type", [
+    ('plot_multiline', Line2D),
+    ('plot_scatter',   PathCollection),
 ])
-def test_plot_kind(eis_dataset, plot_kind, artist_type):
-    """对象类型对，且画的数据也对（只查类型的话，数据全画成 0 也能通过）。"""
-    plotter = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE) \
-        .plot_multiline(plot_kind=plot_kind)
+def test_plot_kind(eis_dataset, method, artist_type):
+    """折线、散点各走自己的方法：对象类型对，且画的数据也对（只查类型的话，数据全画成 0 也能通过）。"""
+    plotter = getattr(DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE), method)()
 
     for k, artist in enumerate(plotter.figures['main'].artists):
         assert isinstance(artist, artist_type)
         x, y = artist_xy(artist)
-        np.testing.assert_allclose(x, [1, 10, 100]) 
+        np.testing.assert_allclose(x, [1, 10, 100])
         np.testing.assert_allclose(y, np.array([10, 20, 30]) * (k + 1))
-
-
-def test_unknown_plot_kind_raises(eis_dataset):
-    with pytest.raises(ValueError, match="不支持的 plot_kind: 'pie'"):
-        DataPlotter(eis_dataset).plot_multiline(plot_kind='pie')  # pyright: ignore[reportArgumentType]  故意传错值
 
 
 @pytest.mark.parametrize("figsize, expected_objects, expected_groups", [
@@ -358,18 +351,14 @@ def test_artist_lookup_by_sample(eis_dataset):
         group.figures['A'].artist(2)            # 样品 2 不在 A 组
 
 
-@pytest.mark.parametrize("plot_kind", ['scatter', 'bar'])
-def test_group_color_applies_to_every_kind(eis_dataset, plot_kind):
+def test_group_color_applies_to_scatter(eis_dataset):
     """
-    颜色一次赋值（6.5，用户定的方案 B）：分组写的 color 在画的时候就给出，散点、柱状图也生效。
-    以前只对折线生效（先用色带色画，再只给折线覆盖样式）。
+    颜色一次赋值（6.5，用户定的方案 B）：分组写的 color 在画的时候就给出，散点也生效。
+    以前只对折线生效（先用色带色画，再只给折线覆盖样式）。柱状图的颜色在 plot_bars（第 4 节第二步）测。
     """
     groups = Group(eis_dataset, {'A': {'num': [0, 1], 'color': (255, 0, 0)}})
-    artist = DataPlotter(eis_dataset, groups=groups).plot_groups(plot_kind=plot_kind).figures['A'].artist(0)
-    patches = [artist] if plot_kind == 'scatter' else list(artist)     # 柱状图：每根柱子一个矩形
-    for patch in patches:
-        np.testing.assert_allclose(patch.get_facecolor()[:3] if plot_kind == 'bar'
-                                   else patch.get_facecolor()[0][:3], (1.0, 0.0, 0.0))
+    artist = DataPlotter(eis_dataset, groups=groups).plot_scatter().figures['A'].artist(0)
+    np.testing.assert_allclose(artist.get_facecolor()[0][:3], (1.0, 0.0, 0.0))
 
 
 # ══════════════════════════════════════════════
@@ -379,21 +368,14 @@ def test_group_color_applies_to_every_kind(eis_dataset, plot_kind):
 PLASMA = plt.get_cmap('plasma')       # DataPlotter 默认色带
 
 
-def test_bar_colors_follow_plan(sparse_dataset):
-    """
-    柱状图也按计划的位置上色：合并模式下样品 5、9 都是组首（样品 5）的位置 1/3（步骤 6.2 用户选 A 的行为变化）。
-    以前 BarContainer 没有 set_color，合并模式下柱子各用各的样品色。
-    """
-    groups = Group(sparse_dataset, {'A': {'num': [5, 9]}})
-    plotter = DataPlotter(sparse_dataset, groups=groups).plot_groups(merge_groups=True, plot_kind='bar')
-    for sample in (5, 9):
-        for bar in plotter.figures['main'].artist(sample):   # BarContainer 里每根柱子是一个矩形
-            np.testing.assert_allclose(bar.get_facecolor(), PLASMA(1/3))
-
-
 # ══════════════════════════════════════════════
 # 负对数刻度（取绝对值在计划里；刻度文字补负号是 matplotlib 的事）
 # ══════════════════════════════════════════════
+# 一个负号 + 数字：线性轴的负号由 matplotlib 的格式器写（Unicode 的 '−'），对数轴是加在前面的 '-'；
+# 刻度 0 取负还是 '0'。双负号（如 '-−2.5'）不匹配。
+NEGATIVE_NUMBER = r'0(\.0+)?|[-−]\d+(\.\d+)?'
+
+
 def test_neglog_x(eis_dataset):
     """
     X 轴负对数：用 Zs''（全负）当 X。多线图横轴没有预设格式，用的是 matplotlib 默认格式器：
@@ -405,7 +387,7 @@ def test_neglog_x(eis_dataset):
     np.testing.assert_array_equal(m.artists[0].get_xdata(), [1, 2, 3])
     m.fig.canvas.draw()
     labels = [label.get_text() for label in m.axes['left'].get_xticklabels() if label.get_text()]
-    assert labels and all(re.fullmatch(r'-\d+(\.\d+)?', text) for text in labels)
+    assert labels and all(re.fullmatch(NEGATIVE_NUMBER, text) for text in labels)
 
 
 def test_neglog_both_axes_keep_their_own_format(eis_dataset):
@@ -438,7 +420,7 @@ def test_neglog_ticks_render_numbers(eis_dataset, draw, axis):
     drawn = draw(eis_dataset).figures[0]
     drawn.fig.canvas.draw()
     texts = [t.get_text() for t in getattr(drawn.axes['left'], f'get_{axis}ticklabels')() if t.get_text()]
-    assert texts and all(re.fullmatch(r'-\d+(\.\d+)?', t) for t in texts), texts
+    assert texts and all(re.fullmatch(NEGATIVE_NUMBER, t) for t in texts), texts
 
 
 # ══════════════════════════════════════════════
@@ -450,13 +432,13 @@ def test_backend_draws_only_from_plan():
     画出的数据、标签、颜色、轴标题就是计划写的。6.7 的 Plotly 后端照同一形状测。
     """
     from plotlib.backends.matplotlib_backend import MatplotlibBackend
-    from plotlib.plot_spec import Appearance, CurveSpec, FigureSpec
+    from plotlib.plot_spec import Appearance, FigureSpec, LineSpec
 
     spec = FigureSpec(key='hand', x_unit='X(u)', y_unit='Y(u)', curves=[
-        CurveSpec(sample_idx=7, x=np.array([0, 1, 2]), y=np.array([3, 4, 5]), label='手写一',
-                  group_name=None, color_position=None, style=LineStyle(color=(255, 0, 0))),
-        CurveSpec(sample_idx=8, x=np.array([0, 1, 2]), y=np.array([6, 7, 8]), label='手写二',
-                  group_name=None, color_position=0.5),
+        LineSpec(sample_idx=7, x=np.array([0, 1, 2]), y=np.array([3, 4, 5]), label='手写一',
+                 group_name=None, color_position=None, style=LineStyle(color=(255, 0, 0))),
+        LineSpec(sample_idx=8, x=np.array([0, 1, 2]), y=np.array([6, 7, 8]), label='手写二',
+                 group_name=None, color_position=0.5),
     ])
     drawn = MatplotlibBackend(Appearance(), cmap=None).draw(spec, figsize=(6, 4))
 
@@ -750,3 +732,22 @@ def test_appearance_dpi(eis_dataset):
     assert MatplotlibBackend(Appearance(dpi=150), cmap=None).rc_params['figure.dpi'] == 150
     fig = DataPlotter(eis_dataset, dpi=150).plot_multiline().figures['main'].fig
     assert fig.dpi == 150
+
+
+def test_failed_plot_closes_its_figure(eis_dataset):
+    """回调出错时，这次调用新建的图窗（含已画好的前几张）都要关掉，批量绘图里捕获异常重试不会积累图窗。"""
+    def boom(_points):
+        raise RuntimeError('boom')
+
+    def boom_on_second(_points, calls=[]):
+        calls.append(1)
+        if len(calls) == 2:                 # 分组画两张图：第一张画好了，第二张出错
+            raise RuntimeError('boom')
+
+    grouped = DataPlotter(eis_dataset, groups=Group(eis_dataset, {'A': {'num': [0]}, 'B': {'num': [1]}}))
+    before = plt.get_fignums()
+    for plot in (lambda: DataPlotter(eis_dataset).plot_scatter(scatter_formatter=boom),
+                 lambda: grouped.plot_scatter(scatter_formatter=boom_on_second)):
+        with pytest.raises(RuntimeError, match='boom'):
+            plot()
+        assert plt.get_fignums() == before

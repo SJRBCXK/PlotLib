@@ -308,7 +308,7 @@ class Group():
 
     def apply(
         self,
-        callback: Callable[..., np.ndarray],
+        callback: Callable[..., np.ndarray | float],
         select: tuple | None = None,
         naming: Callable | None = None,
     ) -> DataSet:
@@ -321,10 +321,9 @@ class Group():
         Parameters
         ----------
         callback : callable
-            ``callback(*slices) -> ndarray``。``slices[i]`` 是这组第 i 个样品的子数据集，
-            样品顺序与配置中的 ``num`` 一致，例如 ``slices[1] - slices[0]`` 表示第二个样品减第一个样品。
-            每个子数据集的列顺序与 *select* 的条件顺序一致。返回形状 ``(行数, 结果列数)`` 的数组
-            （标量、一维数组也可以，会整理成二维）。
+            以 ``callback(*slices)`` 调用。每个参数是一个样品的子数据集，按配置中的 ``num`` 排列。
+            子数据集的列顺序由 *select* 决定。返回值可以是形状为 ``(行数, 结果列数)`` 的数组、
+            一维数组或数值标量。一维数组转换为单列，标量转换为 1 × 1 数组。
         select : tuple, optional
             每组再筛选列的条件，按顺序交给 `~plotlib.processor.DataProcessLayer.by`，
             如 ``("Frequency(Hz)", "Zs'(ohm)", "Zs''(ohm)")``；None 表示用全部列。
@@ -411,7 +410,7 @@ class Group():
                 )
 
             # 调用用户回调
-            result_data = callback(*slices)
+            result_data = np.asarray(callback(*slices))
             if result_data.ndim == 0:
                 result_data = result_data.reshape(1, 1)
             if result_data.ndim == 1:

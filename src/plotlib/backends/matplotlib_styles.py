@@ -35,8 +35,8 @@ def apply_axis(ax, letter: str, native: dict) -> None:
 
     Notes
     -----
-    仅在指定轴类型时调用 ``set_xscale`` 或 ``set_yscale``，因为调用会重置格式器。
-    对数轴的主刻度放在 10 的整数次幂处。轴标题、刻度线、刻度标签和对应轴线使用同一颜色。
+    指定轴类型时，先更新刻度类型，再应用范围和格式。对数轴的主刻度位于 10 的整数次幂。
+    范围中的 None 表示自动计算相应边界。两端均为 None 时，后续添加绘图对象也会触发自动缩放。
     """
     axis = ax.xaxis if letter == 'x' else ax.yaxis
     if 'scale' in native:
@@ -45,7 +45,12 @@ def apply_axis(ax, letter: str, native: dict) -> None:
             axis.set_major_locator(LogLocator(base=10))
     if 'limits' in native:
         low, high = native['limits']
-        if letter == 'x':
+        if low is None or high is None:
+            # 启用自动缩放，从数据重新计算未指定的边界。
+            ax.autoscale(enable=True, axis=letter)
+        if low is None and high is None:
+            pass        # 保持自动缩放，以便后续绘图对象也参与范围计算。
+        elif letter == 'x':
             ax.set_xlim(left=low, right=high)
         else:
             ax.set_ylim(bottom=low, top=high)
@@ -141,19 +146,39 @@ def apply_minor(ax, native: dict, only_defaults: bool) -> None:
 
     Notes
     -----
-    线性轴自动细分主刻度间隔。对数轴显式设置定位器，以便全局样式合并时保留单轴的可见性设置。
+    线性轴细分主刻度间隔，对数轴使用对数定位器。其他刻度类型优先使用自身的次刻度定位器。
     """
     for axis in visible_axes(ax):
-        log = axis.get_scale() == 'log'
+        scale = axis.get_scale()
+        log = scale == 'log'
         if 'minor_visible' in native and (axis.isDefault_minloc or not only_defaults):
             if not native['minor_visible']:
                 axis.set_minor_locator(NullLocator())
-            elif not log:
+            elif scale == 'linear':
                 axis.set_minor_locator(AutoMinorLocator())
-            else:
+            elif log:
                 axis.set_minor_locator(LogLocator(base=axis.get_transform().base, subs='auto'))
+            else:
+                axis.set_minor_locator(_scale_minor_locator(axis))
         if 'minor_labels' in native and (axis.isDefault_minfmt or not only_defaults):
             axis.set_minor_formatter(_minor_formatter(native['minor_labels'], log))
+
+
+def _scale_minor_locator(axis):
+    """
+    获取当前刻度类型的默认次刻度定位器，并保留轴上已有的主刻度定位器及标签格式器。
+
+    由刻度类型生成定位器，以保留底数、线性区宽度等参数。默认定位器为空时使用线性细分。
+    """
+    keep = (axis.get_major_locator(), axis.get_major_formatter(), axis.get_minor_formatter(),
+            axis.isDefault_majloc, axis.isDefault_majfmt, axis.isDefault_minfmt)
+    axis._scale.set_default_locators_and_formatters(axis)
+    locator = axis.get_minor_locator()
+    axis.set_major_locator(keep[0])
+    axis.set_major_formatter(keep[1])
+    axis.set_minor_formatter(keep[2])
+    axis.isDefault_majloc, axis.isDefault_majfmt, axis.isDefault_minfmt = keep[3:]
+    return AutoMinorLocator() if isinstance(locator, NullLocator) else locator
 
 
 def _minor_formatter(minor_labels: str, log: bool):

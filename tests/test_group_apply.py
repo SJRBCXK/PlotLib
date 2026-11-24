@@ -123,3 +123,9 @@ def test_slices_with_different_column_counts_raise():
         Group(ds, {'g': {'num': [0, 1]}}).apply(subtract)
 
 
+
+
+def test_callback_may_return_python_scalar(eis_dataset):
+    """回调返回 Python 标量（如 1.0）当作 1 × 1。"""
+    result = Group(eis_dataset, {'g': {'num': [0, 1]}}).apply(lambda *s: 1.0, select=ZS)
+    assert result.data.tolist() == [[1.0]]

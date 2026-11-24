@@ -294,9 +294,8 @@ class DataSet():
         """
         返回由 ``(样品号, 通道号)`` 映射到列位置的只读视图。
 
-        读取属性时会调用 `ensure_updated`。底层索引原地重建，因此已取得的视图也会反映
-        成功校验后的更新。直接编辑元数据列表后，应重新读取此属性并在校验成功后使用映射。
-        在数据集结构固定的一次操作中，可以共用同一个映射。
+        读取时调用 `ensure_updated`。已取得的视图随校验成功后的索引更新而变化。
+        校验失败时，视图保留上一次成功校验的映射。直接编辑元数据列表后，应重新读取此属性以触发校验。
 
         Raises
         ------
@@ -440,10 +439,14 @@ class DataSet():
             for i in missing:
                 self.sample_idx[i] = new_group
 
+        # 统一校验通道单位后，再更新通道号和列位置索引。
+        channels, positions = self._get_channel_idx()
+        self._channel_units_unify_check(channels)
         self.num_samples = self.count_samples()
-        self._get_channel_idx()
-        # Ensure same group-local position uses a consistent unit across groups.
-        self._channel_units_unify_check()
+        self.channel_idx = channels
+        # 原地更新索引，使已有的只读视图继续有效。
+        self._column_positions.clear()
+        self._column_positions.update(positions)
         self.status = 'written'
         self._checkpoint = self._snapshot()
 
@@ -459,26 +462,35 @@ class DataSet():
     
 
 
-    def _get_channel_idx(self):
+    def _get_channel_idx(self) -> tuple[list[int], dict[tuple[int, int], int]]:
         """
-        按样品内的列顺序从零编号，并同时构建列位置索引。
+        按样品内的列顺序从零编号，并返回对应的列位置索引。
+
+        Returns
+        -------
+        channels : list of int
+            每列的通道号。
+        positions : dict
+            ``{(样品号, 通道号): 列位置}``。
         """
         counter = {}
-        self.channel_idx = []
-        # 原地重建，使已返回的只读视图继续引用同一个索引。
-        self._column_positions.clear()
+        channels, positions = [], {}
         for position, g in enumerate(self.sample_idx):
             counter[g] = counter.get(g, 0)
-            self.channel_idx.append(counter[g])
-            self._column_positions[(g, counter[g])] = position
+            channels.append(counter[g])
+            positions[(g, counter[g])] = position
             counter[g] += 1
+        return channels, positions
 
-        return self
-    
 
-    def _channel_units_unify_check(self):
+    def _channel_units_unify_check(self, channels: list[int]):
         """
-        检查约定 2：同一通道在各样品里单位相同（通道 0 都是频率、通道 1 都是 Zs' ……）。
+        校验同一通道在所有样品中的单位是否一致。
+
+        Parameters
+        ----------
+        channels : list of int
+            由 `_get_channel_idx` 计算的候选通道号。
 
         Raises
         ------
@@ -486,7 +498,7 @@ class DataSet():
             有通道的单位不一致，信息里指出是哪一列、哪个样品。
         """
         unit_by_channel = {}
-        for i, channel in enumerate(self.channel_idx):
+        for i, channel in enumerate(channels):
             unit = self.units[i]
             if channel in unit_by_channel and unit_by_channel[channel] != unit:
                 raise RuntimeError(
@@ -545,14 +557,15 @@ class DataSet():
         Returns
         -------
         DataSet
-            ``self`` （*extended* 为 True）或新数据集。新列的 ``initial_idx`` 沿用原列的，仍能追溯到原始位置。
+            拼接后的 ``self`` 或新数据集。每列的 ``father_idx`` 记录列在其所在数据集中的位置，
+            ``initial_idx`` 沿用该列的原始来源位置。
         """
         local_dataset = DataSet()
         local_dataset.data = np.column_stack([col.data for col in columns]) if columns else np.empty((self.data.shape[0], 0))
         local_dataset.names = [col.name for col in columns]
         local_dataset.units = [col.unit for col in columns]
         local_dataset.sample_idx = [col.sample_idx for col in columns]
-        local_dataset.father_idx = [col.father_idx for col in columns]
+        local_dataset.father_idx = [col.local_idx for col in columns]
         local_dataset.initial_idx = [col.initial_idx for col in columns]
         local_dataset.update_attributes()
 

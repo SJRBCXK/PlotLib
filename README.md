@@ -280,6 +280,7 @@ plt.show()
 | `tools/` | 使用 Tk 或 Qt 的数据预处理工具 |
 | `learning/` | GUI 和测试相关的学习示例 |
 | `docs/api/` | Sphinx API 文档源文件 |
+| `docs/WORK_PLAN.md` | 工作计划：协作方式、架构、下一阶段设计、进度和执行记录 |
 | `tests/` | 自动化测试。 [测试说明](tests/README.md) |
 
 ## API 文档

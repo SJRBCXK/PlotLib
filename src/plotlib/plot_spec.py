@@ -1,7 +1,8 @@
 """
 绘图计划、样式配置和渲染结果的数据类型。
 
-`CurveSpec` 描述一条曲线及其所属坐标轴。`FigureSpec` 描述整张图的版式、曲线和轴信息。
+`LineSpec`、`ScatterSpec` 描述一条折线、一组散点及其所属坐标轴，画法由类型决定（共同的基类 `CurveBase`）。
+`FigureSpec` 描述整张图的版式、曲线和轴信息。
 后端接收绘图计划、外观配置和格式化回调，返回 `DrawnFigure`。
 """
 from collections.abc import Callable
@@ -10,7 +11,7 @@ from typing import Any, Literal, Self
 
 import numpy as np
 
-type CurveKind = Literal['line', 'scatter', 'bar']
+type CurveKind = Literal['line', 'scatter']      # 双 Y 轴每一侧的画法
 type Axis = Literal['left', 'right']
 type Layout = Literal['multiline', 'xy', 'dual_y']
 
@@ -57,10 +58,10 @@ class StyleLayer:
 @dataclass(frozen=True)
 class LineStyle(StyleLayer):
     """
-    折线、散点和柱状图的通用样式。
+    折线的样式。
 
     可用于全局线条设置、分组样式和 `~plotlib.formatters.make_lines_formatter`。
-    长度单位为磅，取值见 `plotlib.style`。
+    长度单位为磅，取值见 `plotlib.style`。散点用 `ScatterStyle`。
 
     Parameters
     ----------
@@ -80,8 +81,7 @@ class LineStyle(StyleLayer):
 
     Notes
     -----
-    不是每种画法都看得见每个字段（见 ``style.STYLE_FIELDS_BY_KIND``）：折线全部生效；
-    散点只有标记和标记大小；柱状图只有颜色。
+    分组配置里，折线读取 ``linestyle``、``marker``、``color`` 三个字段。
 
     Examples
     --------
@@ -93,6 +93,54 @@ class LineStyle(StyleLayer):
     linestyle: str | tuple | None = None    # 'solid'、'dash'、'dot'、'dashdot'，或自定义虚线 (实线长, 空白长, ...)
     marker: str | None = None           # 'circle'、'square'、'triangle-up'、'triangle-down'、'diamond'、'cross'、'x'
     marker_size: float | None = None    # 标记大小（磅）
+
+
+@dataclass(frozen=True)
+class ScatterStyle(StyleLayer):
+    """
+    定义散点的颜色、标记和描边。
+
+    可传给 `~plotlib.formatters.make_scatter_formatter`。标记大小和描边宽度以磅为单位。
+
+    Parameters
+    ----------
+    color : str or tuple of int, optional
+        接受 CSS 颜色名、``'#rrggbb'`` 或三个 0–255 的整数 ``(r, g, b)``。
+        用于实心标记的填充和默认描边。绘图时省略此项可沿用样品配色。
+    marker : str, optional
+        标记形状，可选值同 `LineStyle` 的 ``marker``。
+    size : float, optional
+        标记大小（磅），与 `LineStyle` 的 ``marker_size`` 同一量度（标记的直径）。
+    filled : bool, optional
+        为真时填充标记，为假时仅绘制描边。格式化现有散点时，
+        仅指定 ``filled=True`` 可恢复空心标记之前的填充色。单独指定 ``color`` 也会应用填充色。
+    edge_color : str or tuple of int, optional
+        描边颜色，写法同 ``color``。
+    edge_width : float, optional
+        描边宽度（磅），可以为 0。
+    alpha : float, optional
+        不透明度，0（全透明）~ 1（不透明）。
+
+    Notes
+    -----
+    所有字段两个后端都支持：matplotlib 对应 ``scatter`` 的 ``facecolors``、``edgecolors``、``linewidths``、
+    ``s``、``marker``、``alpha``；Plotly 对应 ``marker`` 的 ``color``、``line.color``、``line.width``、
+    ``size``、``symbol``、``opacity``。库默认见 ``DEFAULT_SCATTER``，不受全局折线样式影响。
+
+    分组配置可通过 ``marker`` 和 ``color`` 指定散点样式。
+
+    Examples
+    --------
+    >>> make_scatter_formatter(ScatterStyle(color='black', marker='square', size=8))
+    >>> make_scatter_formatter(ScatterStyle(filled=False, edge_width=1.5))      # 空心点
+    """
+    color: str | tuple | None = None    # 颜色：CSS 颜色名、'#rrggbb'、RGB 三个 0~255 的整数
+    marker: str | None = None           # 标记形状，同 LineStyle.marker
+    size: float | None = None           # 标记大小（磅）
+    filled: bool | None = None          # True 实心；False 空心（只画描边）
+    edge_color: str | tuple | None = None   # 默认沿用 color 作为描边色
+    edge_width: float | None = None     # 描边宽度（磅），可以为 0
+    alpha: float | None = None          # 不透明度 0 ~ 1
 
 
 type AxisScale = Literal['linear', 'log', 'symlog', 'logit']    # 'symlog'、'logit' 只有 matplotlib
@@ -251,6 +299,8 @@ class TickStyle(StyleLayer):
 
 # 库默认值（最底下一层）
 DEFAULT_LINES = LineStyle(width=3, linestyle='solid', marker_size=6)
+# 散点的库默认：大小、描边都明确写出，画的时候总是带上，所以不受全局折线样式（matplotlib 的 rc、Plotly 模板）影响
+DEFAULT_SCATTER = ScatterStyle(marker='circle', size=6, filled=True, edge_width=1)
 DEFAULT_FRAME = FrameStyle(width=3, top=False, right=False)
 DEFAULT_LEGEND = LegendStyle(position='upper right', font_size=10, frame=False, draggable=False)
 # 默认显示主刻度和次刻度线，并隐藏次刻度标签。
@@ -261,19 +311,16 @@ DEFAULT_TICKS = TickStyle(direction='out', length=6, width=3, minor=True,
 # ══════════════════════════════════════════════
 # 计划与结果
 # ══════════════════════════════════════════════
-@dataclass
-class CurveSpec:
+@dataclass(kw_only=True)
+class CurveBase:
     """
-    单条曲线的数据、图例标签、样式和轴归属。
+    图里一项内容（一条折线、一组散点）共有的信息：图例、分组、配色和所在的轴。
 
-    绘图计划使用色带位置和跨后端通用的样式。渲染时由后端解析为颜色和原生参数。
+    画法由子类的类型决定（`LineSpec`、`ScatterSpec`），后端按类型选择画法；直接用基类画会报错。
+    所有字段只能按关键字给出。
 
     Parameters
     ----------
-    sample_idx : int
-        这条线所属的样品号。
-    x, y : numpy.ndarray
-        已取好的数据（负对数时已取绝对值，``plotrange`` 已截断）。
     label : str
         图例文字：一般是样品名；双 Y 轴图是这条线的单位（样品名在图例标题里）。
     group_name : str or None
@@ -281,22 +328,57 @@ class CurveSpec:
     color_position : float or None
         默认颜色在色带上的位置（0 ~ 1）；合并模式下已换成组首样品的位置。
         None 表示不按色带取色（用版式预设的轴颜色或后端默认色）。
-    style : LineStyle, default: LineStyle()
-        分组写了的样式；没写的字段为 None。
-    kind : {'line', 'scatter', 'bar'}, default: 'line'
-        画法。
     axis : {'left', 'right'}, default: 'left'
         挂在哪根 Y 轴上；只有双 Y 轴图有 ``'right'``。
+    """
+    label: str                  # 图例文字：样品名；双 Y 轴是这条线的单位（样品名在图例标题里）
+    group_name: str | None      # 不分组时为 None
+    color_position: float | None    # 默认颜色在色带上的位置（合并模式已换成组首位置）；None：用后端默认色
+    axis: Axis = 'left'         # 挂在哪根 Y 轴上；只有双 Y 轴图有 'right'
+
+
+@dataclass(kw_only=True)
+class LineSpec(CurveBase):
+    """
+    一条折线：一个样品的 X、Y 两列数据。其余字段见 `CurveBase`。
+
+    Parameters
+    ----------
+    sample_idx : int
+        这条线所属的样品号。
+    x, y : numpy.ndarray
+        已取好的数据（负对数时已取绝对值，``plotrange`` 已截断）。
+    style : LineStyle, default: LineStyle()
+        分组写了的样式（线型、标记、颜色）；没写的字段为 None。
     """
     sample_idx: int
     x: np.ndarray
     y: np.ndarray
-    label: str                  # 图例文字：样品名；双 Y 轴是这条线的单位（样品名在图例标题里）
-    group_name: str | None      # 不分组时为 None
-    color_position: float | None    # 默认颜色在色带上的位置（合并模式已换成组首位置）；None：用后端默认色
     style: LineStyle = field(default_factory=LineStyle)     # 分组写了的样式；没写的字段为 None
-    kind: CurveKind = 'line'    # 画法（原 plot_kind）
-    axis: Axis = 'left'         # 挂在哪根 Y 轴上；只有双 Y 轴图有 'right'
+
+
+@dataclass(kw_only=True)
+class ScatterSpec(CurveBase):
+    """
+    一组散点：一个样品的 X、Y 两列数据。其余字段见 `CurveBase`。
+
+    Parameters
+    ----------
+    sample_idx : int
+        这组散点所属的样品号。
+    x, y : numpy.ndarray
+        已取好的数据（负对数时已取绝对值，``plotrange`` 已截断）。
+    style : ScatterStyle, default: ScatterStyle()
+        分组指定的标记形状和颜色。
+    """
+    sample_idx: int
+    x: np.ndarray
+    y: np.ndarray
+    style: ScatterStyle = field(default_factory=ScatterStyle)
+
+
+# 计划里能出现的曲线（按画法列举；加新画法时在这里加上它的 spec 类型）
+type Curve = LineSpec | ScatterSpec
 
 
 @dataclass
@@ -309,7 +391,7 @@ class FigureSpec:
     key : str or int
         这张图在结果字典 ``DataPlotter.figures`` 里的键：分组名或 ``'main'``；
         xy 图、双 Y 轴图是样品号。
-    curves : list of CurveSpec
+    curves : list of LineSpec or ScatterSpec
         曲线列表，按绘制及图例顺序排列。
     x_unit, y_unit : str
         X 轴、左 Y 轴的标题（通道单位）。同一通道的单位在各样品间一致，所以属于图而不属于线。
@@ -327,7 +409,7 @@ class FigureSpec:
         Plotly 使用该名称作为翻页滑块的档位标签。
     """
     key: str | int              # 分组名或 'main'；xy、双 Y 轴图是样品号
-    curves: list[CurveSpec]
+    curves: list[Curve]
     x_unit: str                 # 轴标题：同一通道的单位在各样品间一致，所以属于图，不属于线
     y_unit: str
     y2_unit: str | None = None  # 右轴单位；只有双 Y 轴图有
@@ -355,7 +437,7 @@ class DrawnFigure:
         ``{'left': 左轴}``，双 Y 轴图再有 ``'right'``。matplotlib 是 Axes 对象；
         Plotly 没有轴对象，是 layout 里的轴名（``'yaxis'``、``'yaxis2'``）。
     artists : list
-        画出的曲线对象（``Line2D`` / ``PathCollection`` / ``BarContainer`` / Plotly trace），
+        画出的曲线对象（折线 ``Line2D``、散点 ``PathCollection``，Plotly 都是 trace），
         与 ``spec.curves`` 一一对应、顺序相同。
 
     See Also
@@ -365,7 +447,7 @@ class DrawnFigure:
     spec: FigureSpec
     fig: Any
     axes: dict[str, Any]
-    artists: list               # 曲线对象（Line2D / PathCollection / BarContainer / trace）
+    artists: list               # 曲线对象（Line2D / PathCollection / trace）
 
     def artist(self, sample_idx: int, axis: Axis = 'left'):
         """
@@ -396,7 +478,8 @@ class DrawnFigure:
         >>> plotter.figures[0].artist(0, 'right')     # 样品 0 的右线
         """
         for curve, artist in zip(self.spec.curves, self.artists):
-            if curve.sample_idx == sample_idx and curve.axis == axis:
+            # 基类不带样品号（以后的柱状图一组柱不一定是一个样品），按有没有这个字段取
+            if getattr(curve, 'sample_idx', None) == sample_idx and curve.axis == axis:
                 return artist
         raise KeyError(f"图 {self.spec.key!r} 里没有样品 {sample_idx} 挂在 {axis} 轴上的线")
 
@@ -453,10 +536,13 @@ class AxesFormatter:
     axes : callable, optional
         坐标轴回调。matplotlib 以 ``(ax, fig)`` 调用，Plotly 以 ``(轴名, fig)`` 调用。
     lines : callable, optional
-        线条回调，以这根轴上的线（Plotly 是 trace）组成的列表调用。
+        线条回调，以这根轴上的折线（Plotly 是 trace）组成的列表调用；散点不在其中。
     legend : callable, optional
         图例回调，以图例列表调用。一张图只有一个图例，归左轴；给其他轴配了会报错。
+    scatter : callable, optional
+        散点回调，以这根轴上的散点（matplotlib 是 ``PathCollection``，Plotly 是 trace）组成的列表调用。
     """
     axes: Callable[..., Any] | None = None
     lines: Callable[..., Any] | None = None
     legend: Callable[..., Any] | None = None
+    scatter: Callable[..., Any] | None = None

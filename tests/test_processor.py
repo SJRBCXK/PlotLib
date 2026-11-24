@@ -166,3 +166,29 @@ def test_by_without_select_raises(eis_dataset):
 def test_getdata_bad_arguments_raise(eis_dataset, kwargs, msg):
     with pytest.raises(ValueError, match=msg):
         DataProcessLayer(eis_dataset).getdata(**kwargs)
+
+
+# ══════════════════════════════════════════════
+# 筛选失败后的状态与列来源
+# ══════════════════════════════════════════════
+def test_failed_select_changes_nothing(eis_dataset):
+    """某个条件失败时整次选择不生效：上一次的结果和 by 的状态都保持原样。"""
+    layer = DataProcessLayer(eis_dataset).select('samples', [2])
+    for args in ((0, 'missing'), ('missing',)):
+        with pytest.raises(ValueError):
+            layer.select(*args)
+        assert set(layer.Selected_data.sample_idx) == {2}
+    with pytest.raises(ValueError):
+        layer.by(0, 'missing')
+    assert layer.by(0).Selected_data.initial_idx == [6]     # 仍在样品 2 的结果里筛选
+
+
+def test_column_sources_recorded(eis_dataset):
+    """负数位置记成真实位置；从筛选过的子数据集取列，father_idx 是在这个子数据集里的位置。"""
+    from plotlib.dataset import DataSet
+
+    picked = select(eis_dataset, -1)
+    assert (picked.father_idx, picked.initial_idx) == ([8], [8])
+    sub = select(eis_dataset, 'samples', [2])
+    taken = DataSet().columns_to_dataset([sub.column[1]], extended=False)
+    assert (taken.father_idx, taken.initial_idx) == ([1], [7])

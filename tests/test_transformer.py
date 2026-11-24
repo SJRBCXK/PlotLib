@@ -4,7 +4,7 @@
 结果的命名规则（未手动指定时）：
   - 名字：只有一列 → 沿用原名；多列同名 → Results_i_of_<名>；否则 Results_i_of_<名1>_<名2>
   - 单位：所有输入单位相同 → 沿用；否则 unitless_i
-  - 样品号：所有输入属于同一样品 → 沿用；new_sample=True → 新样品号
+  - 样品号：所有输入属于同一样品 → 沿用；new_sample=True 或输入跨样品 → 新样品号
 
 eis_dataset 列号：S0 = 0~2，S1 = 3~5，S2 = 6~8；每个样品 [Freq, Zs', Zs'']
 """
@@ -37,8 +37,7 @@ def test_apply_same_group_different_units(eis_dataset):
 
 
 def test_apply_different_names_same_unit(eis_dataset):
-    """S0、S1 的 Zs'：名字不同、单位相同 → 名字拼接、单位沿用。
-    （跨样品时结果的样品号有 bug，见 test_dataset.py::test_none_sample_idx_gives_consistent_metadata）"""
+    """不同样品的同单位列使用组合名称，并沿用输入单位。"""
     result = DataTransformer(eis_dataset).apply(lambda d: d, indicies=[1, 4])
     assert result.names == ['Results_0_of_S0_S1', 'Results_1_of_S0_S1']
     assert result.units == [ZS_RE, ZS_RE]
@@ -207,3 +206,72 @@ def test_norm_new_sample_with_sparse_sample_ids():
     ds.expandata(DataSet().form_array(np.ones(2), ['b'], ['u'], 3))
     result = DataTransformer(ds).Norm(indicies=0, new_sample=True)
     assert result.sample_idx == [4]
+
+
+# ══════════════════════════════════════════════
+# 样品号分配、源数据校验与数值边界
+# ══════════════════════════════════════════════
+def two_samples(dtype=float):
+    """第 0 列是样品 3（[1, 2]），第 1 列是样品 0（[10, 20]），单位相同。"""
+    from plotlib.dataset import DataSet
+
+    ds = DataSet().form_array(np.array([1, 2], dtype=dtype), ['A'], ['u'], 3)
+    return ds.expandata(DataSet().form_array(np.array([10, 20], dtype=dtype), ['B'], ['u'], 0))
+
+
+def test_cross_sample_results_get_new_samples():
+    """输入来自多个样品时，每次计算分配一个新样品号（类说明的规则），不会合进同一个样品。"""
+    t = DataTransformer(two_samples())
+    t.apply(lambda d: d.sum(axis=1))
+    result = t.apply(lambda d: d[:, 0] - d[:, 1])
+    assert result.sample_idx == [4, 5]
+
+    # 变换器创建后源数据集又加了样品 4：分配时按源数据集当前的样品号避开，不撞号
+    from plotlib.dataset import DataSet
+
+    ds = two_samples()
+    t = DataTransformer(ds)
+    ds.expandata(DataSet().form_array(np.array([5, 6], dtype=float), ['C'], ['u'], 4))
+    assert t.apply(lambda d: d.sum(axis=1), indicies=[0, 1]).sample_idx == [5]
+
+
+def test_transformer_reads_current_dataset():
+    """数据集在变换器创建后被排序：按位置取列和按 Column 取列读到的是同一列（当前的）。"""
+    ds = two_samples()
+    t = DataTransformer(ds)
+    ds.sort_columns()                                       # 样品 0 排到第 0 列
+    by_index = t.apply(indicies=0, extended=False)
+    by_column = t.apply(column=[ds.column[0]], extended=False)
+    assert by_index.data.ravel().tolist() == by_column.data.ravel().tolist() == [10, 20]
+
+    # 同通道单位冲突时两条入口都拦下：按 Column 取列也要校验列所在的数据集
+    col = ds.column[0]
+    ds.units[0] = 'ms'
+    for call in (lambda: t.apply(indicies=0), lambda: t.apply(column=[col])):
+        with pytest.raises(RuntimeError, match='单位不一致'):
+            call()
+
+
+def test_norm_without_overflow():
+    """整数平方不在整数类型里溢出；浮点的中间平方溢出、结果可表示时也算得出来；复数取模、负阶也照常。"""
+    from plotlib.dataset import DataSet
+
+    for row, order, expected in (([50000, 50000], 2, 50000 * 2 ** 0.5), ([3e200, 4e200], 2, 5e200),
+                                 ([3, 4], 1, 7), ([3, 4], 3, 91 ** (1 / 3)), ([0, 0], 2, 0),
+                                 ([3 + 4j, 0], 2, 5),                        # 复数取模，不丢虚部
+                                 ([1e200, 1e-200], -1, 1e-200),             # 负阶：由最小的数主导，不下溢成 0
+                                 ([2, 0], -1, 0)):
+        dtype = {int: np.int32, float: float, complex: complex}[type(row[0])]
+        ds = DataSet().form_array(np.array([row], dtype=dtype), ['A', 'A'], ['u', 'u'], 0, repeat_times=2)
+        np.testing.assert_allclose(DataTransformer(ds).Norm(order=order).data.ravel(), [expected], rtol=1e-12)
+
+    # complex64 取模时不能在单精度里溢出：|3e38+3e38j| ≈ 4.24e38 超出 float32，结果 2.12e38 可以表示
+    z = np.array([[3e38 + 3e38j, 3e38 + 3e38j]], dtype=np.complex64)
+    ds = DataSet().form_array(z, ['A', 'A'], ['u', 'u'], 0, repeat_times=2)
+    np.testing.assert_allclose(DataTransformer(ds).Norm(order=-1).data.ravel(), [3e38 * 2 ** 0.5 / 2], rtol=1e-6)
+
+
+def test_apply_accepts_python_scalar(eis_dataset):
+    """回调返回 Python 标量（如 1.0）当作 1 × 1，与返回 np.float64 一样。"""
+    result = DataTransformer(eis_dataset).apply(lambda d: float(d.max()), indicies=1)
+    assert result.data.tolist() == [[30.0]]

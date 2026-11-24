@@ -3,7 +3,7 @@ from pathlib import Path
 from plotlib.dataloader import Dataloader
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
-from plotlib.plot_spec import AxisStyle, TickStyle
+from plotlib.plot_spec import AxesFormatter, AxisStyle, TickStyle
 from plotlib.html_export import write_fit_html
 
 # 右侧压缩示意图面板（含 rev 翻转规则），导出时拼进页面
@@ -50,7 +50,7 @@ interactive_plot = DataPlotter(dataset=data,
                                channel_y=dataRowNum_unit5,
                                backend=backend,
                                )
-fig = interactive_plot.plot_multiline(axes_formatter=axes_fmt).add_slider(mode="cumulative")
+fig = interactive_plot.plot(formatters=AxesFormatter(axes=axes_fmt)).add_slider(mode="cumulative")
 
 # 导出可随窗口等比缩放的页面（PPT 中嵌入不会出现滚动条），右侧附压缩示意图
 OUTPUT_HTML.parent.mkdir(parents=True, exist_ok=True)

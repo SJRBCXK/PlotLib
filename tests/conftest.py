@@ -31,6 +31,42 @@ import pytest
 
 from plotlib.dataloader import Dataloader
 from plotlib.dataset import DataSet
+from plotlib.plot_spec import BarSpec, LineSpec, ScatterSpec
+
+
+# ── 按画法取出计划里的曲线（断言类型，类型检查也能据此收窄，直接读 x、y、heights）──
+def xy_curves(figure) -> list[LineSpec | ScatterSpec]:
+    """折线 / 散点计划的曲线；*figure* 是 FigureSpec，或带 ``spec`` 的 DrawnFigure。"""
+    curves = getattr(figure, 'spec', figure).curves
+    assert all(isinstance(curve, (LineSpec, ScatterSpec)) for curve in curves)
+    return [curve for curve in curves if isinstance(curve, (LineSpec, ScatterSpec))]
+
+
+def bar_specs(figure) -> list[BarSpec]:
+    """柱状图计划的各个系列；*figure* 是 FigureSpec，或带 ``spec`` 的 DrawnFigure。"""
+    curves = getattr(figure, 'spec', figure).curves
+    assert all(isinstance(curve, BarSpec) for curve in curves)
+    return [curve for curve in curves if isinstance(curve, BarSpec)]
+
+
+def bar_data() -> DataSet:
+    """
+    柱状图的测试数据：两个样品，样品号无序（3 在前、0 在后），每个样品 4 个通道，行数不等（拼接时补 NaN）：
+
+        通道 0 F(N)    样品 3: [1, 3, 100]   样品 0: [2]
+        通道 1 E(%)    样品 3: [10]          样品 0: [20, 40]
+        通道 2 F(N)    样品 3: [NaN, 10]     样品 0: [5]        （与通道 0 列标题相同）
+        通道 3 dF(N)   样品 3: [9, 1, NaN]   样品 0: [0.2]      （误差通道）
+
+    每次调用新建一份，测试可以随意改。
+    """
+    nan = np.nan
+    units = ['F(N)', 'E(%)', 'F(N)', 'dF(N)']
+    data = DataSet().form_array(np.array([[1, 10, nan, 9], [3, nan, 10, 1], [100, nan, nan, nan]]),
+                                ['S3'] * 4, units, 3, repeat_times=4)
+    data.expandata(DataSet().form_array(np.array([[2, 20, 5, 0.2], [nan, 40, nan, nan]]),
+                                        ['S0'] * 4, units, 0, repeat_times=4))
+    return data
 
 
 @pytest.fixture(autouse=True)

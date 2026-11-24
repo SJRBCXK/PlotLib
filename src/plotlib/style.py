@@ -12,6 +12,9 @@
     ``'circle'``、``'square'``、``'triangle-up'``、``'triangle-down'``、``'diamond'``、``'cross'``、``'x'``。
 颜色
     CSS 颜色名（W3C 标准的 148 个，不区分大小写）；六位色号 ``'#rrggbb'``；三个 0~255 的整数 ``(r, g, b)``。
+纹理（柱状图）
+    ``'slash'``、``'backslash'``、``'vertical'``、``'horizontal'``、``'cross'``、``'x'``、``'dot'``；
+    ``'none'`` 清除纹理。纹理颜色跟随描边色，疏密用各后端的原生默认。
 
 Notes
 -----
@@ -28,7 +31,7 @@ from typing import Any, Literal, overload
 from matplotlib.colors import CSS4_COLORS
 from matplotlib.markers import MarkerStyle
 
-from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
+from .plot_spec import AxisStyle, BarStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
 
 type Backend = Literal["matplotlib", "plotly"]
 
@@ -49,6 +52,19 @@ MARKERS: dict[str, dict[str, str]] = {
     'diamond':       {'matplotlib': 'D', 'plotly': 'diamond'},
     'cross':         {'matplotlib': '+', 'plotly': 'cross'},
     'x':             {'matplotlib': 'x', 'plotly': 'x'},
+}
+
+# 柱状图的纹理：两个后端都能渲染的 7 种（matplotlib 3.10、Plotly 7 实测），'none' 表示清除纹理。
+# 纹理颜色跟随描边色（edge_color）；疏密用各后端的原生默认，两边不完全一样。
+HATCHES: dict[str, dict[str, str]] = {
+    'slash':      {'matplotlib': '/',  'plotly': '/'},
+    'backslash':  {'matplotlib': '\\', 'plotly': '\\'},
+    'vertical':   {'matplotlib': '|',  'plotly': '|'},
+    'horizontal': {'matplotlib': '-',  'plotly': '-'},
+    'cross':      {'matplotlib': '+',  'plotly': '+'},
+    'x':          {'matplotlib': 'x',  'plotly': 'x'},
+    'dot':        {'matplotlib': '.',  'plotly': '.'},
+    'none':       {'matplotlib': '',   'plotly': ''},
 }
 
 _HEX_COLOR = re.compile(r'#[0-9a-fA-F]{6}')
@@ -156,6 +172,24 @@ def check_color(value) -> None:
             raise ValueError(f"RGB 颜色 {value!r} 的元素必须在 0~255 之间")
         return
     raise TypeError(f"颜色 {value!r} 的类型不支持：应为 CSS 颜色名、'#rrggbb' 或 RGB 元组")
+
+
+def check_hatch(value) -> None:
+    """
+    校验柱状图纹理：必须是标准词之一（见 ``HATCHES``），``'none'`` 表示清除。
+
+    Raises
+    ------
+    TypeError
+        不是字符串。
+    ValueError
+        不认识的纹理词。
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"纹理 {value!r} 的类型不支持：应为 {_words(HATCHES)} 之一")
+    if value not in HATCHES:
+        raise ValueError(f"不支持的纹理 {value!r}，可用 {_words(HATCHES)}"
+                         f"（后端写法如 '/'、'///' 请改用标准词，疏密用后端默认）")
 
 
 # ══════════════════════════════════════════════
@@ -336,6 +370,81 @@ def check_scatter_style(style: ScatterStyle) -> None:
             raise TypeError(f"alpha 要写 0 ~ 1 的数字，实际是 {style.alpha!r}")
         if not 0 <= style.alpha <= 1:       # NaN 也不满足
             raise ValueError(f"alpha 要在 0 ~ 1 之间，实际是 {style.alpha!r}")
+
+
+def check_bar_style(style: BarStyle) -> None:
+    """
+    校验 `BarStyle` 的宽度、颜色和纹理。
+
+    Raises
+    ------
+    TypeError, ValueError
+        某个字段写错，信息里带字段名和写错的值。
+    """
+    _check_positive('edge_width', style.edge_width, allow_zero=True)
+    _check_positive('error_width', style.error_width)
+    _check_positive('capsize', style.capsize, allow_zero=True)
+    for name in ('color', 'edge_color', 'error_color'):
+        if (value := getattr(style, name)) is not None:
+            check_color(value)
+    if style.hatch is not None:
+        check_hatch(style.hatch)
+
+
+def translate_bar_style(style: BarStyle, backend: Backend, dpi: float | None = None) -> dict:
+    """
+    将 `BarStyle` 中显式指定的字段转换为后端参数。
+
+    纹理沿用描边色。在 Plotly 中，``edge_color`` 同时设置 ``marker_pattern_fgcolor``。
+    ``hatch='none'`` 转换为空字符串，用于清除纹理。
+
+    Parameters
+    ----------
+    style : BarStyle
+        要翻译的样式。
+    backend : {'matplotlib', 'plotly'}
+        目标后端。
+    dpi : float, optional
+        Plotly 把磅换成像素用的分辨率；Plotly 必填，matplotlib 不用。
+
+    Returns
+    -------
+    dict
+        matplotlib：``ax.bar`` 的 ``color``、``edgecolor``、``linewidth``、``hatch``，误差棒的 ``ecolor``、
+        ``elinewidth``、``capsize`` （都是磅）。Plotly：trace 的扁平写法 ``marker_color``、``marker_line_color``、
+        ``marker_line_width``、``marker_pattern_shape``、``marker_pattern_fgcolor``、``error_y_color``、
+        ``error_y_thickness``、``error_y_width`` （像素；``error_y_width`` 与 matplotlib 的 ``capsize`` 一样是端帽的半长）。
+
+    Raises
+    ------
+    ValueError
+        后端是 Plotly 却没给 *dpi*；或某个字段写错。
+    """
+    check_backend(backend)
+    check_bar_style(style)
+
+    def color(value):
+        return None if value is None else translate_color(value, backend)
+
+    hatch = None if style.hatch is None else HATCHES[style.hatch][backend]
+    if backend == 'matplotlib':
+        native = {'color': color(style.color), 'edgecolor': color(style.edge_color), 'linewidth': style.edge_width,
+                  'hatch': hatch, 'ecolor': color(style.error_color), 'elinewidth': style.error_width,
+                  'capsize': style.capsize}
+        return {key: value for key, value in native.items() if value is not None}
+
+    if dpi is None:
+        raise ValueError("Plotly 的描边、误差棒宽度要按 dpi 把磅换成像素，请传入 dpi")
+
+    def px(points):
+        return None if points is None else translate_points(points, dpi, backend)
+
+    native = {'marker_color': color(style.color), 'marker_line_color': color(style.edge_color),
+              'marker_line_width': px(style.edge_width), 'marker_pattern_shape': hatch,
+              'marker_pattern_fgcolor': color(style.edge_color),
+              'error_y_color': color(style.error_color), 'error_y_thickness': px(style.error_width),
+              'error_y_width': px(style.capsize)}
+    return {key: value for key, value in native.items() if value is not None}
 
 
 # 空心散点的填充（透明）在各后端的写法

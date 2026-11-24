@@ -8,7 +8,7 @@ from plotlib.dataset import DataSet
 from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
 from plotlib.formatters import make_axes_formatter
-from plotlib.plot_spec import AxisStyle
+from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer
 
 plt.close('all')
 
@@ -62,11 +62,7 @@ print(EB_data.names)
 
 Tensile = DataPlotter(
     dataset=data,
-).plot_xy(
-    channel_x=2,
-    channel_y=1,
-    axes_formatter=Tensile_formatter
-)
+).plot(Layer(2, 1), by='sample', formatters=AxesFormatter(axes=Tensile_formatter))
 
     
 plt.show()

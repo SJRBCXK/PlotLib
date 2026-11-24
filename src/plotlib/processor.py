@@ -2,14 +2,14 @@
 数据选择与逐样品计算。
 
 - `DataProcessLayer`：按样品号、列名、单位、位置从数据集中选列，可链式二次筛选；
-- `DataTransformer`：对选出的列做计算（自定义函数 `DataTransformer.apply`、范数 `DataTransformer.Norm`），
-  结果带上自动生成的名字、单位和样品号，成为新的 `~plotlib.dataset.DataSet`。
+- `DataTransformer`：对选出的列做计算（自定义函数 `DataTransformer.apply`、范数 `DataTransformer.Norm`、
+  每列汇总成一个值 `DataTransformer.Reduce`），结果带上名字、单位和样品号，成为新的 `~plotlib.dataset.DataSet`。
 
-按分组计算（一组样品得到一个新样品）见 `plotlib.group.Group.apply`。
+按分组计算（一组样品得到一个新样品）见 `plotlib.group.Group.apply`、`plotlib.group.Group.reduce`。
 """
 import copy
 from collections.abc import Callable
-from typing import TypedDict
+from typing import Any, Literal, TypedDict
 
 import numpy as np
 from .dataset import Column, ColumnList, DataSet
@@ -361,6 +361,201 @@ def _row_norm(data: np.ndarray, order: int) -> np.ndarray:
     return np.where(np.isinf(scale), np.inf, norm)
 
 
+# ══════════════════════════════════════════════
+# 汇总：一列数值 → 一个数（DataTransformer.Reduce、Group.reduce、柱状图共用）
+# ══════════════════════════════════════════════
+type Reduction = Literal['mean', 'median', 'first', 'last', 'max', 'min', 'std', 'sem'] | Callable[[np.ndarray], Any]
+
+
+def _scale(values: np.ndarray):
+    """缩放因子：最大的模。为 0 或无穷大时返回 None（不缩放）。"""
+    largest = np.max(np.abs(values))
+    return largest if 0 < largest < np.inf else None
+
+
+# 平方不会上溢、也不会下溢成 0 的量级范围（双精度的上下限约为 1e±308，平方后要留在里面）
+_SAFE_SQUARE = (1e-150, 1e150)
+
+
+def _std(values: np.ndarray, divisor: float = 1.0):
+    """
+    样本标准差（``ddof=1``）除以 *divisor*；有效值少于 2 个时为 NaN。
+
+    常规量级直接计算，以减少大偏置、小波动数据的舍入误差。
+    对超出 ``_SAFE_SQUARE`` 的量级，先按最大绝对值缩放数据，避免平方时上溢或下溢。
+    先除以 *divisor* 再恢复原量级，可保留标准差上溢时仍可表示的标准误差。
+    """
+    if values.size < 2:
+        return np.nan
+    scale = _scale(values)
+    if scale is None or _SAFE_SQUARE[0] < scale < _SAFE_SQUARE[1]:
+        return np.std(values, ddof=1) / divisor
+    return scale * (np.std(values / scale, ddof=1) / divisor)
+
+
+def _without_overflow(func: Callable[[np.ndarray], Any]) -> Callable[[np.ndarray], Any]:
+    """
+    求和类统计（均值、中位数）的中间和溢出时，缩放后重算。
+
+    仅当输入均为有限值且结果非有限时，才用缩放后的数据重算。
+    """
+    def reduce(values: np.ndarray):
+        with np.errstate(over='ignore', invalid='ignore'):
+            result = func(values)
+        if not np.isfinite(result) and np.all(np.isfinite(values)):
+            scale = _scale(values)
+            result = scale * func(values / scale)
+        return result
+    return reduce
+
+
+_REDUCTIONS: dict[str, Callable[[np.ndarray], Any]] = {
+    'mean': _without_overflow(np.mean),
+    'median': _without_overflow(np.median),
+    'first': lambda values: values[0],
+    'last': lambda values: values[-1],
+    'max': np.max,
+    'min': np.min,
+    'std': _std,
+    'sem': lambda values: _std(values, divisor=np.sqrt(values.size)),
+}
+
+
+def check_reduction(how) -> None:
+    """
+    校验汇总方式的写法（在计算前调用，尽早报错）。
+
+    Raises
+    ------
+    ValueError
+        不认识的名字。
+    TypeError
+        既不是名字、函数，也不是 None。
+    """
+    if how is None or callable(how):
+        return
+    if not isinstance(how, str):
+        raise TypeError(f"汇总方式应为 {', '.join(map(repr, _REDUCTIONS))} 之一、函数或 None，实际是 {how!r}")
+    if how not in _REDUCTIONS:
+        raise ValueError(f"不支持的汇总方式 {how!r}，可选：{', '.join(map(repr, _REDUCTIONS))}，或传入函数")
+
+
+def reduce_values(values, how: Reduction | None, where: str = ''):
+    """
+    把一列数值汇总成一个数。
+
+    先提升到至少双精度（精度更高的不降），再去掉 NaN；全是 NaN 时结果为 NaN。
+
+    Parameters
+    ----------
+    values : array_like
+        一列数值（一维；拼接时补的 NaN 会被忽略）。
+    how : str, callable or None
+        汇总方式，见 `DataTransformer.Reduce`。None 表示至多一个有效值，原样取出。
+    where : str, default: ''
+        报错信息里说明是哪一列，如 ``"样品 S0（样品号 0）的 F(N) "``。
+
+    Returns
+    -------
+    numpy.floating
+        汇总结果。
+
+    Raises
+    ------
+    TypeError
+        数据是复数（先取模，如 `DataTransformer.Norm`）；函数返回的不是一个实数（数组、字符串、None、复数）。
+    ValueError
+        *how* 为 None 而有效值多于一个。
+    """
+    check_reduction(how)
+    raw = np.asarray(values)
+    if np.iscomplexobj(raw):
+        raise TypeError(f"{where}是复数，汇总不支持复数：先取模（如 DataTransformer.Norm）或取实部、虚部")
+    wide = np.promote_types(raw.dtype, np.float64)
+    data = raw.astype(wide).ravel()
+    data = data[~np.isnan(data)]
+
+    if how is None:
+        if data.size > 1:
+            raise ValueError(f"{where}有 {data.size} 个有效值，请写明汇总方式（如 'mean'）")
+        return data[0] if data.size else wide.type(np.nan)
+    if data.size == 0:
+        return wide.type(np.nan)
+
+    func = how if callable(how) else _REDUCTIONS[how]
+    returned = func(data)
+    result = np.asarray(returned)
+    if result.ndim != 0:
+        raise TypeError(f"{where}的汇总函数应返回一个数，实际返回了形状为 {result.shape} 的数组")
+    # 只收实数（整数、浮点）；NaN 是浮点，可以用来表示缺失
+    if not (np.issubdtype(result.dtype, np.integer) or np.issubdtype(result.dtype, np.floating)):
+        raise TypeError(f"{where}的汇总函数应返回一个实数，实际返回了 {returned!r}")
+    return result.astype(np.promote_types(result.dtype, wide))[()]
+
+
+# 选出某一行的汇总方式：误差直接取那一行的
+_ROW_PICKERS: dict[str | None, Callable[[np.ndarray], int]] = {
+    None: lambda valid_rows: valid_rows[0],
+    'first': lambda valid_rows: valid_rows[0],
+    'last': lambda valid_rows: valid_rows[-1],
+}
+
+
+def reduce_with_error(values, errors, how: Reduction | None, where: str = ''):
+    """
+    汇总一列数值，并按原行对齐取出显示用的误差（误差来自另一个通道）。
+
+    先由数值列确定有效行（非 NaN）。``'first'``、``'last'``、``'max'``、``'min'`` 和 None 选中某一行，
+    误差取同一行的；``'mean'``、``'median'``、``'std'``、``'sem'`` 和函数对有效行的误差用同一个 *how* 汇总。
+    对应行没有误差时误差为 NaN。这是显示规则，误差传递由调用方负责。
+
+    Parameters
+    ----------
+    values, errors : array_like
+        数值列和误差列，行数相同。
+    how : str, callable or None
+        汇总方式，见 `reduce_values`。
+    where : str, default: ''
+        报错信息里说明是哪一列。
+
+    Returns
+    -------
+    tuple
+        ``(数值, 误差)``。
+
+    Raises
+    ------
+    ValueError
+        误差列的有效行里有负数；其余同 `reduce_values`。
+
+    Examples
+    --------
+    第一个有效值在第 2 行，误差也取第 2 行，即 10 ± 1：
+
+    >>> value, error = reduce_with_error([np.nan, 10], [9, 1], 'first')
+    """
+    value = reduce_values(values, how, where)
+    data = np.asarray(values, dtype=np.promote_types(np.asarray(values).dtype, np.float64)).ravel()
+    error_data = np.asarray(errors, dtype=np.promote_types(np.asarray(errors).dtype, np.float64)).ravel()
+    valid_rows = np.flatnonzero(~np.isnan(data))
+    used = error_data[valid_rows]
+    if np.any(used[~np.isnan(used)] < 0):
+        raise ValueError(f"{where}的误差有负数：误差棒是对称的，误差要写非负的大小")
+    if valid_rows.size == 0:
+        return value, error_data.dtype.type(np.nan)
+
+    # 先分清名字和函数再按名字分派：可调用对象可能不可哈希（如普通 dataclass 实例），不能拿去查字典
+    name = 'function' if callable(how) else how
+    if name in ('max', 'min'):
+        pick = np.argmax if name == 'max' else np.argmin
+        row = valid_rows[pick(data[valid_rows])]
+    elif name in (None, 'first', 'last'):
+        row = _ROW_PICKERS[name](valid_rows)
+    else:
+        return value, reduce_values(used, how, where=f"{where}的误差")
+    return value, error_data[row]
+
+
 class DataTransformer:
     """
     变换所选数据列并为结果生成元数据。
@@ -583,13 +778,102 @@ class DataTransformer:
             new_sample = new_sample
         )
 
-        if extended:      
+        if extended:
             self.result_dataset.expandata(local_dataset)
         else:
             self.result_dataset = copy.deepcopy(local_dataset)
 
 
         return self.result_dataset
+
+    def Reduce(
+        self,
+        how: Reduction | None,
+        indicies: list[int] | int | None = None,
+        column: list[Column] | None = None,
+        extended: bool = True,
+    ) -> DataSet:
+        """
+        将每个选定列汇总为一个值，保留输入列的名称、单位和样品号。
+
+        跨样品的分组汇总见 `~plotlib.group.Group.reduce`。
+
+        Parameters
+        ----------
+        how : str, callable or None
+            汇总方式。计算前先提升到至少双精度，并忽略 NaN（拼接时补的 NaN），全是 NaN 的列结果为 NaN：
+
+            - ``'mean'``、``'median'``、``'max'``、``'min'``：均值、中位数、最大值、最小值；
+            - ``'first'``、``'last'``：第一个、最后一个有效值；
+            - ``'std'``：样本标准差（``ddof=1``），有效值少于 2 个时为 NaN；
+            - ``'sem'``：标准误差 ``std / √n``，*n* 是有效值个数；
+            - 函数 ``f(values) -> 数``：*values* 是去掉 NaN 的一维数组；
+            - None：每列至多一个有效值，原样取出；多于一个时报错。
+        indicies : int or list of int, optional
+            参与计算的列的位置（支持负数）；None 表示全部列。
+        column : list of Column, optional
+            参与计算的列，优先于 *indicies*。
+        extended : bool, default: True
+            True：结果累加到 ``result_dataset`` 并返回它（之前累加过多行的结果时，返回的数据集仍有多行，
+            本次新增的列只有第一行有值）；False：返回只含这次结果的新数据集。
+
+        Returns
+        -------
+        DataSet
+            本次汇总的每列一个值（一行）。``father_idx``、``initial_idx`` 记录输入列的来源位置。
+            `~plotlib.dataset.DataSet` 按各样品的列顺序从 0 开始重编通道号。后续绘图须使用结果集的通道号。
+
+        Raises
+        ------
+        ValueError
+            *how* 是不认识的名字；*how* 为 None 而某列有多个有效值（信息里带样品和单位）。
+        TypeError
+            *how* 的类型不对；数据是复数；函数返回的不是一个数。
+
+        Examples
+        --------
+        每个样品各通道的均值和标准差：
+
+        >>> mean = DataTransformer(data).Reduce('mean')
+        >>> std = DataTransformer(data).Reduce('std')
+
+        只汇总原通道 1、2，再画柱状图（结果里它们是通道 0、1）：
+
+        >>> chosen = [i for i, c in enumerate(data.ensure_updated().channel_idx) if c in (1, 2)]
+        >>> means = DataTransformer(data).Reduce('mean', indicies=chosen)
+        >>> DataPlotter(means).plot_bars([0, 1])
+        """
+        check_reduction(how)
+        columns = self._input_columns(column, indicies)
+        # 各列单独汇总，以支持来自不同数据集且行数不同的列。
+        values = [reduce_values(col.data, how, where=f"样品 {col.name}（样品号 {col.sample_idx}）的 {col.unit} ")
+                  for col in columns]
+        local_dataset = DataSet()
+        local_dataset.data = np.array([values]).reshape(1, len(columns))
+        local_dataset.names = [col.name for col in columns]
+        local_dataset.units = [col.unit for col in columns]
+        local_dataset.sample_idx = [col.sample_idx for col in columns]
+        local_dataset.father_idx = [col.local_idx for col in columns]     # 同 columns_to_dataset：记录来源位置
+        local_dataset.initial_idx = [col.initial_idx for col in columns]
+        local_dataset.update_attributes()
+
+        if extended:
+            self.result_dataset.expandata(local_dataset)
+        else:
+            self.result_dataset = local_dataset
+        return self.result_dataset
+
+    def _input_columns(self, column: list[Column] | None, indicies: list[int] | int | None) -> list[Column]:
+        """参与计算的列（`Column` 视图），选法同 `_resolve_input_data`；读取前校验各自的数据集。"""
+        if column is not None:
+            for source in {id(col._dataset): col._dataset for col in column}.values():
+                source.ensure_updated()
+            return list(column)
+        self.dataset.ensure_updated()
+        if indicies is None:
+            return list(self.column)
+        idx = [indicies] if isinstance(indicies, int) else list(indicies)
+        return [self.column[i] for i in idx]
 
 
     def _cal_pipe(self,

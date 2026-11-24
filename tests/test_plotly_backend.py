@@ -1,5 +1,5 @@
 """
-测试对象：src/plotlib/backends/plotly_backend.py 的 PlotlyBackend（docs/WORK_PLAN.md 步骤 6.7）
+验证 PlotlyBackend 的绘图、回调及滑块行为。
 
 与 matplotlib 后端同一个接口：draw(计划, figsize, formatters, figure_formatter) -> DrawnFigure，
 DataPlotter(backend='plotly') 的四种绘图方法结果形状与 matplotlib 相同（figures = {key: DrawnFigure}）。
@@ -16,9 +16,10 @@ import pytest
 pytest.importorskip("plotly")
 import plotly.colors as plyc
 import plotly.graph_objects as go
+from conftest import xy_curves
 
 from plotlib.group import Group
-from plotlib.plot_spec import Appearance, FigureSpec, LineSpec, LineStyle
+from plotlib.plot_spec import Appearance, AxesFormatter, FigureSpec, Layer, LineSpec, LineStyle
 from plotlib.plotter import DataPlotter
 
 FREQ, ZS_RE, ZS_IM = 0, 1, 2
@@ -68,8 +69,10 @@ def test_backend_draws_only_from_plan():
 # 双 Y 轴：右轴是 layout 里的 yaxis2，右线挂到 y2；左红右蓝来自排版预设
 # ══════════════════════════════════════════════
 def test_dual_y(eis_dataset):
-    drawn = DataPlotter(eis_dataset, backend='plotly').plot_dual_y(
-        right=(FREQ, ZS_IM)).figures[0]
+    drawn = DataPlotter(eis_dataset, backend='plotly').plot(
+        [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+    ).figures[0]
     left, right = drawn.artist(0), drawn.artist(0, 'right')
     lay = layout(drawn.fig)
 
@@ -95,12 +98,11 @@ def test_dual_y(eis_dataset):
 # ══════════════════════════════════════════════
 def test_layout_preset_applied(eis_dataset):
     """多线图：图例在图外右侧、纵轴两位小数（横轴不写格式）；xy：纵轴四位小数、图例在右下角。"""
-    multi = layout(DataPlotter(eis_dataset, backend='plotly').plot_multiline().figures['main'].fig)
+    multi = layout(DataPlotter(eis_dataset, backend='plotly').plot().figures['main'].fig)
     assert multi['legend']['x'] == 1.02 and multi['legend']['xanchor'] == 'left'
     assert 'tickformat' not in multi['xaxis'] and multi['yaxis']['tickformat'] == '.2f'
 
-    xy = layout(DataPlotter(eis_dataset, backend='plotly').plot_xy(
-        channel_x=ZS_RE, channel_y=ZS_IM).figures[0].fig)
+    xy = layout(DataPlotter(eis_dataset, backend='plotly').plot(Layer(ZS_RE, ZS_IM), by='sample').figures[0].fig)
     assert xy['yaxis']['tickformat'] == '.4f' and 'tickformat' not in xy['xaxis']
     assert xy['legend']['xanchor'] == 'right' and xy['legend']['yanchor'] == 'bottom'
 
@@ -145,14 +147,16 @@ def test_frame_by_layout(eis_dataset):
     """
     from plotlib.plot_spec import FrameStyle
 
-    multi = layout(DataPlotter(eis_dataset, backend='plotly').plot_multiline().figures['main'].fig)
+    multi = layout(DataPlotter(eis_dataset, backend='plotly').plot().figures['main'].fig)
     assert multi['xaxis']['mirror'] is False and multi['yaxis']['mirror'] is False
 
-    dual = layout(DataPlotter(eis_dataset, backend='plotly').plot_dual_y(right=(FREQ, ZS_IM)).figures[0].fig)
+    dual = layout(DataPlotter(eis_dataset, backend='plotly').plot(
+        [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+    ).figures[0].fig)
     assert dual['xaxis']['mirror'] is True and dual['yaxis']['mirror'] is False
 
-    boxed = layout(DataPlotter(eis_dataset, backend='plotly', frame=FrameStyle(top=True, right=True))
-                   .plot_multiline().figures['main'].fig)
+    boxed = layout(DataPlotter(eis_dataset, backend='plotly', frame=FrameStyle(top=True, right=True)).plot().figures['main'].fig)
     assert boxed['xaxis']['mirror'] is True and boxed['yaxis']['mirror'] is True
 
 
@@ -162,7 +166,7 @@ def test_global_legend_and_lines_in_template(eis_dataset):
 
     px = 100 / 72
     drawn = DataPlotter(eis_dataset, backend='plotly', lines=LineStyle(width=2), legend=LegendStyle(
-        font_size=14, position='upper left')).plot_multiline().figures['main']
+        font_size=14, position='upper left')).plot().figures['main']
     lay = layout(drawn.fig)
     assert lay['template']['data']['scatter'][0]['line']['width'] == pytest.approx(2 * px)
     assert lay['legend']['font']['size'] == pytest.approx(14 * px)
@@ -173,12 +177,12 @@ def test_label_pad_applies_as_whole_pixels(eis_dataset):
     """全局 TickStyle(label_pad=4) 能画：4 磅换成整数像素写进模板（回归，1.0 发布前复审：曾传 5.56 被 Plotly 拒绝）。"""
     from plotlib.plot_spec import TickStyle
 
-    fig = DataPlotter(eis_dataset, backend='plotly', ticks=TickStyle(label_pad=4)).plot_multiline().figures['main'].fig
+    fig = DataPlotter(eis_dataset, backend='plotly', ticks=TickStyle(label_pad=4)).plot().figures['main'].fig
     assert layout(fig)['template']['layout']['xaxis']['ticklabelstandoff'] == round(4 * 100 / 72)
 
 
 def test_minor_label_style_rejected_by_plotly(eis_dataset):
-    """Plotly 的次刻度没有文字属性：全局或单轴设了次刻度文字的字号 → 创建时就报错（用户定）。"""
+    """Plotly 在创建时拒绝全局或单轴的次刻度文字字号设置。"""
     from plotlib.formatters import make_axes_formatter
     from plotlib.plot_spec import TickStyle
 
@@ -190,14 +194,15 @@ def test_minor_label_style_rejected_by_plotly(eis_dataset):
 
 def test_neglog_tickprefix(eis_dataset):
     """负对数：数据在计划里已取绝对值，Plotly 给对应的轴加负号前缀。"""
-    lay = layout(DataPlotter(eis_dataset, backend='plotly', channel_x=FREQ, channel_y=ZS_IM)
-                 .plot_multiline(neglog_y=True).figures['main'].fig)
+    lay = layout(DataPlotter(eis_dataset, backend='plotly', channel_x=FREQ, channel_y=ZS_IM).plot(
+        Layer(neglog_y=True),
+    ).figures['main'].fig)
     assert lay['yaxis']['tickprefix'] == '-'
     assert 'tickprefix' not in lay['xaxis']
 
 
 # ══════════════════════════════════════════════
-# 回调：按轴回调拿到这根轴自己的东西（第三方审查 E，做法 2，与 matplotlib 的 (ax, fig) / lines / legends 对应）；
+# 按轴回调的参数及作用范围。
 # 整图回调收 (fig, axes)，axes 是 Plotly 配置里的轴名
 # ══════════════════════════════════════════════
 def test_formatters_receive_own_axis(eis_dataset):
@@ -207,13 +212,16 @@ def test_formatters_receive_own_axis(eis_dataset):
     回归：三种回调曾都只收 fig，不知道自己是替哪根轴调用的。
     """
     received = {}
-    plotter = DataPlotter(eis_dataset, backend='plotly').plot_dual_y(
-        right=(FREQ, ZS_IM),
-        axes_formatter=lambda axis, fig: received.setdefault('left_axes', (axis, fig)),
-        right_axes_formatter=lambda axis, fig: received.setdefault('right_axes', (axis, fig)),
-        lines_formatter=lambda traces: received.setdefault('left_lines', traces),
-        right_lines_formatter=lambda traces: received.setdefault('right_lines', traces),
-        legend_formatter=lambda legends: received.setdefault('legends', legends),
+    plotter = DataPlotter(eis_dataset, backend='plotly').plot(
+        [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+        formatters={
+            'left': AxesFormatter(axes=lambda axis, fig: received.setdefault('left_axes', (axis, fig)),
+                                  lines=lambda traces: received.setdefault('left_lines', traces),
+                                  legend=lambda legends: received.setdefault('legends', legends)),
+            'right': AxesFormatter(axes=lambda axis, fig: received.setdefault('right_axes', (axis, fig)),
+                                   lines=lambda traces: received.setdefault('right_lines', traces)),
+        },
     )
     fig = plotter.figures[0].fig            # 三个样品三页，共用一个 Figure（6.8）
 
@@ -231,8 +239,10 @@ def test_figure_formatter_gets_axis_names(eis_dataset):
     """双 Y 轴的整图回调：axes 是 {'left': 'yaxis', 'right': 'yaxis2'}，用它改右轴配置。"""
     def color_right_title(fig, axes):
         fig.layout[axes['right']].title.text = '右轴'
-    drawn = DataPlotter(eis_dataset, backend='plotly').plot_dual_y(
-        right=(FREQ, ZS_IM), figure_formatter=color_right_title,
+    drawn = DataPlotter(eis_dataset, backend='plotly').plot(
+        [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+        figure_formatter=color_right_title,
     ).figures[0]
     assert layout(drawn.fig)['yaxis2']['title']['text'] == '右轴'
 
@@ -242,7 +252,10 @@ def test_figure_formatter_gets_axis_names(eis_dataset):
 # ══════════════════════════════════════════════
 def test_scatter_group_color(eis_dataset):
     groups = Group(eis_dataset, {'A': {'num': [0, 1], 'color': (255, 0, 0)}})
-    trace = DataPlotter(eis_dataset, groups=groups, backend='plotly').plot_scatter().figures['A'].artist(0)
+    trace = DataPlotter(eis_dataset, groups=groups, backend='plotly').plot(
+        Layer(kind='scatter'),
+        by='group',
+    ).figures['A'].artist(0)
     assert isinstance(trace, go.Scatter)
     assert (trace.mode, cast(Any, trace).marker.color) == ('markers', 'rgb(255,0,0)')    # marker 的类型标注过宽
 
@@ -263,14 +276,14 @@ def traces_of(plotter: DataPlotter, key='main') -> tuple:
 def test_plot_data_and_repeated_calls(eis_dataset):
     """每条 trace 与不分组计划的曲线一一对应（顺序、名字、数据）；坐标轴标题是单位；重复调用生成新的 Figure。"""
     plotter = plotly_plotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE)
-    first = plotter.plot_multiline().figures['main']
-    for trace, curve in zip(first.artists, first.spec.curves):
+    first = plotter.plot().figures['main']
+    for trace, curve in zip(first.artists, xy_curves(first)):
         assert trace.name == curve.label
         np.testing.assert_array_equal(trace.x, curve.x)
         np.testing.assert_array_equal(trace.y, curve.y)
     assert layout(first.fig)['yaxis']['title']['text'] == "Zs'(ohm)"
 
-    second = plotter.plot_multiline().figures['main']
+    second = plotter.plot().figures['main']
     assert second.fig is not first.fig
     assert all(a is b for a, b in zip(second.artists, cast(go.Figure, second.fig).data))
 
@@ -278,7 +291,7 @@ def test_plot_data_and_repeated_calls(eis_dataset):
 def test_merge_mode_group_head_color(eis_dataset):
     """合并模式按计划的位置上色：样品 0、1 归 A（位置 0），样品 2 归 B、用 B 的组首样品 1 的位置 1/3。"""
     config = {'A': {'num': [0, 1], 'linestyle': 'dash'}, 'B': {'num': [1, 2]}}
-    plotter = plotly_plotter(eis_dataset, config).plot_groups(merge_groups=True)
+    plotter = plotly_plotter(eis_dataset, config).plot(by='group', merge_groups=True)
     assert [t.line.color for t in traces_of(plotter)] == [plasma(0), plasma(0), plasma(1/3)]
 
 
@@ -294,7 +307,7 @@ LINE_PX = 3 * 100 / 72      # 默认线宽 3 磅，dpi 100 → 像素；自定�
 ], ids=['dash', 'custom-dash', 'marker', 'rgb-color', 'no-style'])
 def test_group_style_translated(eis_dataset, style, expected):
     """分组写了的样式按 Plotly 写法放到 trace 上（标准写法 → style.translate_*(v, 'plotly')）。"""
-    trace = plotly_plotter(eis_dataset, {'A': {'num': [0, 1], **style}}).plot_groups().figures['A'].artist(0)
+    trace = plotly_plotter(eis_dataset, {'A': {'num': [0, 1], **style}}).plot(by='group').figures['A'].artist(0)
     for path, value in expected.items():
         obj = trace
         for attr in path.split('.'):
@@ -304,7 +317,7 @@ def test_group_style_translated(eis_dataset, style, expected):
 
 def test_group_marker_color_follows_line(eis_dataset):
     """写了 marker 时，点的颜色与线一致，不会落回 Plotly 的默认配色。"""
-    plotter = plotly_plotter(eis_dataset, {'A': {'num': [0, 1], 'marker': 'square'}}).plot_groups()
+    plotter = plotly_plotter(eis_dataset, {'A': {'num': [0, 1], 'marker': 'square'}}).plot(by='group')
     for trace in traces_of(plotter, 'A'):
         props = trace.to_plotly_json()
         assert props['marker']['color'] == props['line']['color']
@@ -312,7 +325,7 @@ def test_group_marker_color_follows_line(eis_dataset):
 
 def test_template_hides_minor_log_labels(eis_dataset):
     """对数轴 10^n 之间默认显示小号 2、5 标签，大小不一致，模板默认关闭。"""
-    fig = plotly_plotter(eis_dataset).plot_multiline().figures['main'].fig
+    fig = plotly_plotter(eis_dataset).plot().figures['main'].fig
     template_layout = layout(fig)['template']['layout']
     assert template_layout['xaxis']['minorloglabels'] == 'none'
     assert template_layout['yaxis']['minorloglabels'] == 'none'
@@ -328,7 +341,7 @@ def test_log_format_keeps_minor_labels_hidden(eis_dataset):
 
     def xaxis(style=AxisStyle(scale='log', format='{x:.0e}'), ticks=None, custom=None) -> dict[str, Any]:
         fmt = make_axes_formatter(x=style, ticks=ticks, custom=custom, backend='plotly')
-        return layout(plotly_plotter(eis_dataset).plot_multiline(axes_formatter=fmt).figures['main'].fig)['xaxis']
+        return layout(plotly_plotter(eis_dataset).plot(formatters=AxesFormatter(axes=fmt)).figures['main'].fig)['xaxis']
 
     assert (xaxis()['tickformat'], xaxis()['dtick']) == ('.0e', 1)
     assert xaxis(custom=[lambda _axis, fig: fig.update_xaxes(dtick=2)])['dtick'] == 2
@@ -342,7 +355,7 @@ def test_log_format_keeps_minor_labels_hidden(eis_dataset):
 def test_empty_dataset_has_clear_error():
     from plotlib.dataset import DataSet
     with pytest.raises(RuntimeError, match='数据集为空'):
-        DataPlotter(DataSet(), backend='plotly').plot_multiline()
+        DataPlotter(DataSet(), backend='plotly').plot()
 
 
 # ──────────────────────────────────────────────
@@ -353,7 +366,7 @@ def test_empty_dataset_has_clear_error():
     ("cumulative", [[True, False, False], [True, True, False], [True, True, True]]),
 ])
 def test_slider_steps(eis_dataset, mode, expected):
-    plotter = plotly_plotter(eis_dataset).plot_multiline()
+    plotter = plotly_plotter(eis_dataset).plot()
     fig = plotter.add_slider(mode)
     assert fig is plotter.figures['main'].fig
     assert [trace.visible for trace in traces_of(plotter)] == expected[0]
@@ -371,7 +384,7 @@ def test_slider_steps(eis_dataset, mode, expected):
 
 def test_slider_default_look(eis_dataset):
     """初始标题等于第 0 档；短标签放得下时可见；用户回调可覆盖默认值。"""
-    fig = plotly_plotter(eis_dataset).plot_multiline().add_slider(
+    fig = plotly_plotter(eis_dataset).plot().add_slider(
         slider_formatter=lambda s: s.update(currentvalue_prefix="G: "))
     lay = layout(fig)
     slider = lay['sliders'][0]
@@ -398,14 +411,14 @@ def test_slider_errors(eis_dataset):
     with pytest.raises(RuntimeError, match='图中没有曲线'):
         plotly_backend().add_slider(go.Figure())
 
-    plotter = plotly_plotter(eis_dataset).plot_multiline()
+    plotter = plotly_plotter(eis_dataset).plot()
     before = cast(go.Figure, plotter.figures['main'].fig).to_json()
     with pytest.raises(ValueError, match='不支持的 mode'):
         plotter.add_slider('typo')
     assert cast(go.Figure, plotter.figures['main'].fig).to_json() == before
 
     with pytest.raises(NotImplementedError, match='Plotly'):
-        DataPlotter(eis_dataset).plot_multiline().add_slider()
+        DataPlotter(eis_dataset).plot().add_slider()
 
 
 # ══════════════════════════════════════════════
@@ -419,7 +432,7 @@ def overlap_config():
 
 def test_pages_share_one_figure(eis_dataset):
     """分组分离模式：两页共用一个 Figure、共 4 条 trace；每页的 artists 只有自己那页的 trace；刚画完只显示第一页。"""
-    plotter = plotly_plotter(eis_dataset, overlap_config()).plot_groups()
+    plotter = plotly_plotter(eis_dataset, overlap_config()).plot(by='group')
     a, b = plotter.figures['A'], plotter.figures['B']
 
     assert a.fig is b.fig
@@ -433,7 +446,7 @@ def test_pages_share_one_figure(eis_dataset):
 
 def test_each_page_matches_its_plan(eis_dataset):
     """同一样品在两页里是两条 trace，各用各组的样式（A 页虚线、B 页实线），颜色按样品（两页同色）。"""
-    plotter = plotly_plotter(eis_dataset, overlap_config()).plot_groups()
+    plotter = plotly_plotter(eis_dataset, overlap_config()).plot(by='group')
     in_a, in_b = plotter.figures['A'].artist(1), plotter.figures['B'].artist(1)
 
     assert in_a is not in_b
@@ -442,8 +455,8 @@ def test_each_page_matches_its_plan(eis_dataset):
 
 
 @pytest.mark.parametrize("draw, traces_per_page", [
-    (lambda p: p.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM), 1),
-    (lambda p: p.plot_dual_y(right=(FREQ, ZS_IM)), 2),
+    (lambda p: p.plot(Layer(ZS_RE, ZS_IM), by='sample'), 1),
+    (lambda p: p.plot([Layer(0, 1), Layer(FREQ, ZS_IM, side='right')], by='sample'), 2),
 ], ids=['xy', 'dual_y'])
 def test_per_sample_figures_become_pages(eis_dataset, draw, traces_per_page):
     """xy、双 Y 轴每个样品一张计划：在 Plotly 里也是一个 Figure 三页，只显示第一页。"""
@@ -458,7 +471,7 @@ def test_per_sample_figures_become_pages(eis_dataset, draw, traces_per_page):
 
 def test_single_plan_is_not_paged(eis_dataset):
     """只有一张计划（多线图）照旧：所有线都显示，没有滑块。"""
-    fig = plotly_plotter(eis_dataset).plot_multiline().figures['main'].fig
+    fig = plotly_plotter(eis_dataset).plot().figures['main'].fig
     assert all(t.visible is not False for t in cast(tuple, cast(go.Figure, fig).data))
     assert 'sliders' not in layout(fig)
 
@@ -469,9 +482,10 @@ def test_paged_callbacks_called_once(eis_dataset):
     （各页的轴配置相同——同一次计划画出来的。）
     """
     calls = []
-    plotly_plotter(eis_dataset, overlap_config()).plot_groups(
-        axes_formatter=lambda axis, fig: calls.append(('axes', axis)),
-        lines_formatter=lambda traces: calls.append(('lines', len(traces))),
+    plotly_plotter(eis_dataset, overlap_config()).plot(
+        by='group',
+        formatters=AxesFormatter(axes=lambda axis, fig: calls.append(('axes', axis)),
+                                 lines=lambda traces: calls.append(('lines', len(traces)))),
         figure_formatter=lambda fig, axes: calls.append(('figure', tuple(axes))),
     )
     assert calls == [('axes', 'yaxis'), ('lines', 4), ('figure', ('left',))]
@@ -483,7 +497,7 @@ def test_paged_callbacks_called_once(eis_dataset):
 ])
 def test_page_slider_modes(eis_dataset, mode, expected):
     """翻页滑块与曲线滑块同一套模式（用户要求），只是一档对应一页的 trace，而不是一条。"""
-    fig = plotly_plotter(eis_dataset, overlap_config()).plot_groups().add_page_slider(mode)
+    fig = plotly_plotter(eis_dataset, overlap_config()).plot(by='group').add_page_slider(mode)
     steps = layout(fig)['sliders'][0]['steps']
     assert [list(step['args'][0]['visible']) for step in steps] == expected
 
@@ -493,7 +507,7 @@ def test_page_slider(eis_dataset):
     add_page_slider（默认 'single'）：每页一档，档位标签是每页的名字（这里是组名）；
     翻页时标题和图例标题换成这一页的；当前值默认不加前缀；初始停在第 0 档；重复添加只保留一个；slider_formatter 最后执行。
     """
-    plotter = plotly_plotter(eis_dataset, overlap_config()).plot_groups(legend_title='Group {name}')
+    plotter = plotly_plotter(eis_dataset, overlap_config()).plot(by='group', legend_title='Group {name}')
     fig = plotter.add_page_slider()
     assert fig is plotter.figures['A'].fig
 
@@ -517,7 +531,7 @@ def test_page_slider(eis_dataset):
 
 def test_page_slider_labels_are_sample_names(eis_dataset):
     """每个样品一页（xy）：档位标签是样品名。"""
-    fig = plotly_plotter(eis_dataset).plot_xy(channel_x=ZS_RE, channel_y=ZS_IM).add_page_slider()
+    fig = plotly_plotter(eis_dataset).plot(Layer(ZS_RE, ZS_IM), by='sample').add_page_slider()
     assert [step['label'] for step in layout(fig)['sliders'][0]['steps']] == ['S0', 'S1', 'S2']
 
 
@@ -529,9 +543,9 @@ def add_reference_lines(fig, axes):
 
 
 @pytest.mark.parametrize("draw, add, labels", [
-    (lambda p: p.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM, figure_formatter=add_reference_lines),
+    (lambda p: p.plot(Layer(ZS_RE, ZS_IM), by='sample', figure_formatter=add_reference_lines),
      lambda p: p.add_page_slider(), ['S0', 'S1', 'S2']),
-    (lambda p: p.plot_multiline(figure_formatter=add_reference_lines),
+    (lambda p: p.plot(figure_formatter=add_reference_lines),
      lambda p: p.add_slider('single'), ['S0', 'S1', 'S2']),
 ], ids=['page_slider', 'curve_slider'])
 def test_sliders_keep_shared_traces(eis_dataset, draw, add, labels):
@@ -554,12 +568,14 @@ def test_two_sliders_misuse(eis_dataset):
     未绘图 → RuntimeError；matplotlib → NotImplementedError；mode 写错 → ValueError（与 add_slider 相同）。
     """
     with pytest.raises(ValueError, match='不支持的 mode'):
-        plotly_plotter(eis_dataset, overlap_config()).plot_groups().add_page_slider('typo')  # pyright: ignore[reportArgumentType]
+        plotly_plotter(eis_dataset, overlap_config()).plot(
+            by='group',
+        ).add_page_slider('typo')  # pyright: ignore[reportArgumentType]
     with pytest.raises(RuntimeError, match='add_page_slider'):
-        plotly_plotter(eis_dataset, overlap_config()).plot_groups().add_slider()
+        plotly_plotter(eis_dataset, overlap_config()).plot(by='group').add_slider()
     with pytest.raises(RuntimeError, match='add_slider'):
-        plotly_plotter(eis_dataset).plot_multiline().add_page_slider()
+        plotly_plotter(eis_dataset).plot().add_page_slider()
     with pytest.raises(RuntimeError, match='请先调用绘图方法'):
         plotly_plotter(eis_dataset).add_page_slider()
     with pytest.raises(NotImplementedError, match='Plotly'):
-        DataPlotter(eis_dataset, groups=Group(eis_dataset, overlap_config())).plot_groups().add_page_slider()
+        DataPlotter(eis_dataset, groups=Group(eis_dataset, overlap_config())).plot(by='group').add_page_slider()

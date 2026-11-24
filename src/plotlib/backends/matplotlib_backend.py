@@ -1,21 +1,25 @@
 """
 将绘图计划渲染为 Matplotlib 静态图。
 
-多线图、X-Y 图和双 Y 轴图共用渲染流程。绘图计划确定数据及轴归属，版式预设提供轴和图例的默认样式。
+多线图、X-Y 图、双 Y 轴图和柱状图共用渲染流程。绘图计划确定数据及轴归属，版式预设提供轴和图例的默认样式。
+柱状图的位置由这里按系列序号算（并排偏移、堆叠底部）。
 """
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any
 
 import matplotlib.pyplot as plt
-from matplotlib.ticker import Formatter, NullFormatter
+import numpy as np
+from matplotlib.ticker import Formatter, NullFormatter, NullLocator
 
 from ..layouts import LAYOUTS, NO_LEGEND_MESSAGE, LayoutPreset, resolve_frame, resolve_legend
-from ..plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_SCATTER, DEFAULT_TICKS, Appearance,
-                         AxesFormatter,
+from ..plot_spec import (DEFAULT_BARS, DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_SCATTER, DEFAULT_TICKS,
+                         Appearance, AxesFormatter, BarSpec,
                          CurveBase, DrawnFigure, FigureSpec, LineSpec, ScatterSpec)
-from ..style import (is_line_marker, remember_fill, translate_axis_style, translate_color, translate_frame,
-                     translate_legend_style, translate_line_style, translate_scatter_style, translate_ticks)
+from ..style import (is_line_marker, remember_fill, translate_axis_style, translate_bar_style, translate_color,
+                     translate_frame, translate_legend_style, translate_line_style, translate_scatter_style,
+                     translate_ticks)
+from .bar_layout import stack_bottoms
 from .matplotlib_styles import apply_axis, apply_frame, apply_minor, apply_tick_params, legend_kwargs
 
 
@@ -153,11 +157,23 @@ class MatplotlibBackend:
             apply_frame(axis_ax, frame)
 
         artists = []    # 与 spec.curves 一一对应
+        bottoms = stack_bottoms([curve for curve in spec.curves if isinstance(curve, BarSpec)])
         for curve in spec.curves:
-            artists.append(self._draw_curve(axes[curve.axis], curve, preset))
+            artist = self._draw_curve(axes[curve.axis], curve, preset, bottoms.get(id(curve)))
+            # 恢复计划中的空标签。Matplotlib 会为未命名的对象生成内部标签，
+            # 图例重建时则读取对象的当前标签。
+            if artist.get_label() != curve.label:
+                artist.set_label(curve.label)
+            artists.append(artist)
+        bars = [curve for curve in spec.curves if isinstance(curve, BarSpec)]
+        if bars:
+            self._apply_categories(axes['left'], bars[0].categories)
+        # 图例条目按计划显式给出：一条曲线（一个系列）一项，先左轴、后右轴，各侧按绘制顺序；规则见 _make_legend
+        order = sorted(range(len(spec.curves)), key=lambda i: spec.curves[i].axis != 'left')
+        entries = [(artists[i], spec.curves[i].label) for i in order]
 
-        self._apply_layout(fig, axes, spec, preset, legend)
-        self._apply_optional_formatters(fig, axes, spec, spec.curves, artists, formatters, legend)
+        self._apply_layout(fig, axes, spec, preset, legend, entries)
+        self._apply_optional_formatters(fig, axes, spec, spec.curves, artists, formatters, legend, entries)
         self._apply_figure_formatter(fig, axes, figure_formatter)
         # 改变轴类型会重置次刻度。回调完成后仅补充仍采用默认值的设置。
         for axis_ax in axes.values():
@@ -174,7 +190,7 @@ class MatplotlibBackend:
     # 曲线颜色和样式
     # ========================================================================
 
-    def _curve_color(self, curve: LineSpec | ScatterSpec, preset: LayoutPreset) -> dict:
+    def _curve_color(self, curve: LineSpec | ScatterSpec | BarSpec, preset: LayoutPreset) -> dict:
         """
         算出一条线的最终颜色，写成画线参数 ``{'color': ...}``。
 
@@ -194,12 +210,14 @@ class MatplotlibBackend:
     # 渲染：画线
     # ========================================================================
 
-    def _draw_curve(self, ax, curve: CurveBase, preset: LayoutPreset):
+    def _draw_curve(self, ax, curve: CurveBase, preset: LayoutPreset, bottom: np.ndarray | None = None):
         """
-        按曲线的类型画出来，返回画出的对象：`LineSpec` → ``Line2D``，`ScatterSpec` → ``PathCollection``。
+        按曲线的类型画出来，返回画出的对象：`LineSpec` → ``Line2D``，`ScatterSpec` → ``PathCollection``，
+        `BarSpec` → ``BarContainer``。
 
         颜色由 ``_curve_color`` 一次给出（样式里写的颜色已算在里面），其余样式按画法翻译
         （如 ``LineStyle(linestyle='dash')`` → ``{'linestyle': '--'}``，散点大小换成面积 ``s``）。
+        *bottom* 是堆叠柱状图这个系列的底部（见 `stack_bottoms`）。
 
         Raises
         ------
@@ -223,8 +241,42 @@ class MatplotlibBackend:
                     points.set_edgecolor(edge)
                 remember_fill(points, color)
                 return points
+            case BarSpec():
+                return self._draw_bars(ax, curve, preset, bottom)
             case _:
-                raise ValueError(f"不支持的画法：{type(curve).__name__}（可用 LineSpec、ScatterSpec）")
+                raise ValueError(f"不支持的画法：{type(curve).__name__}（可用 LineSpec、ScatterSpec、BarSpec）")
+
+    def _draw_bars(self, ax, bar: BarSpec, preset: LayoutPreset, bottom: np.ndarray | None):
+        """
+        画柱状图的一个系列，返回 ``BarContainer`` （误差棒在它的 ``errorbar`` 上）。
+
+        类别 *k* 对应 X = *k*。并排时每根柱宽为 ``width / 系列数``，第 *i* 个系列偏移 ``(i - (n - 1) / 2) × 每根柱宽``。
+        堆叠时使用完整柱宽，基线由 `stack_bottoms` 计算。误差棒以柱的末端为中心，``caps=False`` 时省略端帽。
+        """
+        style = DEFAULT_BARS.updated(replace(bar.style, color=None))
+        if not bar.caps:
+            style = replace(style, capsize=0)
+        native = translate_bar_style(style, 'matplotlib')
+        errors = {key: native.pop(key) for key in ('ecolor', 'elinewidth', 'capsize')}
+        count = len(bar.heights)
+        if bar.mode == 'group':
+            width = bar.width / bar.series_count
+            x = np.arange(count) + (bar.series_index - (bar.series_count - 1) / 2) * width
+        else:
+            width, x = bar.width, np.arange(count, dtype=float)
+        if bar.errors is not None:
+            # 端帽线宽（capthick）与竖线一致，与 make_bar_formatter 改 error_width 时的效果相同
+            native.update(yerr=bar.errors, capsize=errors['capsize'],
+                          error_kw=dict(ecolor=errors['ecolor'], elinewidth=errors['elinewidth'],
+                                        capthick=errors['elinewidth']))
+        return ax.bar(x, bar.heights, width, bottom=bottom, label=bar.label,
+                      **native, **self._curve_color(bar, preset))
+
+    @staticmethod
+    def _apply_categories(ax, categories: list[str]):
+        """柱状图的类别刻度：数字位置 0、1、2 …… 配类别文字（同名类别也分开）；X 轴是类别轴，不画次刻度。"""
+        ax.set_xticks(range(len(categories)), categories)
+        ax.xaxis.set_minor_locator(NullLocator())
 
     # ========================================================================
     # 版式应用
@@ -232,16 +284,17 @@ class MatplotlibBackend:
 
     _Y_AXIS_NAME = {'left': 'y', 'right': 'y2'}     # 线挂的轴（CurveBase.axis）→ 预设里的纵轴名
 
-    def _apply_layout(self, fig, axes: dict, spec: FigureSpec, preset: LayoutPreset, legend: dict):
+    def _apply_layout(self, fig, axes: dict, spec: FigureSpec, preset: LayoutPreset, legend: dict,
+                      entries: list[tuple[Any, str]]):
         """
         按版式预设设置图例、轴标题、轴样式和边距。
 
-        *legend* 为合并后转换得到的 Matplotlib 图例参数。
+        *legend* 为合并后转换得到的 Matplotlib 图例参数；*entries* 见 `_make_legend`。
         """
         left = axes['left']
 
         # 图例：一张图一个，建在左轴上，收所有轴上的线（双 Y 轴左右两条都在）；标题来自计划
-        self._make_legend(axes, legend, spec.legend_title)
+        self._make_legend(axes, legend, spec.legend_title, entries)
 
         left.set_xlabel(spec.x_unit)
         left.set_ylabel(spec.y_unit)
@@ -257,18 +310,28 @@ class MatplotlibBackend:
             fig.subplots_adjust(**preset.margins)
 
     @staticmethod
-    def _make_legend(axes: dict, legend: dict, title: str | None):
+    def _make_legend(axes: dict, legend: dict, title: str | None, entries: list[tuple[Any, str]]):
         """
-        建图例并返回它：一张图一个，建在左轴上，收所有轴上的线（左轴的线在前）。
+        在左轴创建整图图例。*entries* 按左轴、右轴的顺序提供 ``(绘图对象, 计划标签)``。
 
-        ``ax.legend()`` 默认只收自己这根轴的线，所以右轴（``twinx``）的线要手动收进来。
-        排版时建一次；用户的线条回调改了样式后，再按同样的参数重建一次（图例句柄是建图例时的样式快照）。
+        计划条目使用对象的当前标签，保留原有的空标签和以下划线开头的标签。标签为 ``None`` 时略去该项，
+        回调将标签改为以下划线开头的名称时也略去该项。随后按 Matplotlib 的规则收集参考线等额外对象。
+
+        图例句柄保存创建时的样式。线条、散点和柱状图回调执行后，用相同的版式参数重建图例。
         """
         handles, labels = [], []
+        for artist, planned in entries:
+            label = artist.get_label()
+            if label is None or (label.startswith('_') and label != planned):
+                continue
+            handles.append(artist)
+            labels.append(label)
+        planned_ids = {id(artist) for artist, _ in entries}
         for ax in axes.values():
-            ax_handles, ax_labels = ax.get_legend_handles_labels()
-            handles += ax_handles
-            labels += ax_labels
+            for handle, label in zip(*ax.get_legend_handles_labels()):
+                if id(handle) not in planned_ids:
+                    handles.append(handle)
+                    labels.append(label)
         made = axes['left'].legend(handles, labels, title=title, **legend_kwargs(legend))
         if legend.get('draggable'):
             made.set_draggable(True)
@@ -292,7 +355,8 @@ class MatplotlibBackend:
     # ========================================================================
 
     def _apply_optional_formatters(self, fig, axes: dict, spec: FigureSpec, curves: Sequence[CurveBase],
-                                   artists: list, formatters: dict[str, AxesFormatter], legend: dict):
+                                   artists: list, formatters: dict[str, AxesFormatter], legend: dict,
+                                   entries: list[tuple[Any, str]]):
         """
         执行坐标轴、线条、散点和图例回调。
 
@@ -313,11 +377,13 @@ class MatplotlibBackend:
                 fm.lines(_artists_of(LineSpec, axis, curves, artists))
             if fm.scatter is not None:
                 fm.scatter(_artists_of(ScatterSpec, axis, curves, artists))
+            if fm.bars is not None:
+                fm.bars(_artists_of(BarSpec, axis, curves, artists))
 
         # 使用原始图例参数重建，避免重复转换锚点，或从曲线复制坐标变换。
-        restyled = any(fm.lines is not None or fm.scatter is not None for fm in fms.values())
+        restyled = any(fm.lines is not None or fm.scatter is not None or fm.bars is not None for fm in fms.values())
         if restyled and axes['left'].get_legend() is not None:
-            self._make_legend(axes, legend, spec.legend_title)
+            self._make_legend(axes, legend, spec.legend_title, entries)
 
         for axis, fm in fms.items():
             if fm.legend is not None:

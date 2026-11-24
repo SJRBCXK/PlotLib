@@ -41,11 +41,12 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `test_dataloader.py` | `src/plotlib/dataloader.py` | 数据文件能正确读成 DataSet |
 | `test_dataset.py` | `src/plotlib/dataset.py` | DataSet 的创建、拼接、列视图（改样品号、单位都校验并回滚）、遍历、重排；列位置索引 `column_positions` 与逐列扫描对拍；直接改列表后「使用时自动检查」（各入口、失败不留旧索引、没改不重查） |
 | `test_processor.py` | `src/plotlib/processor.py` 的 `DataProcessLayer` | `select` / `by` 按样品号、名字、单位、索引选列 |
-| `test_transformer.py` | `src/plotlib/processor.py` 的 `DataTransformer` | `apply` / `Norm` 的计算结果与自动命名 |
+| `test_transformer.py` | `src/plotlib/processor.py` 的 `DataTransformer` | `apply` / `Norm` / `Reduce` 的计算结果与自动命名 |
 | `test_group.py` | `src/plotlib/group.py` 的 `Group` | `num` 各种写法的格式化；创建时校验、读接口返回副本、增删改先校验再修改 |
-| `test_group_apply.py` | `src/plotlib/group.py` 的 `Group` | 分组计算结果、命名、结果样品号正确 |
+| `test_group_apply.py` | `src/plotlib/group.py` 的 `Group` | 分组计算（`apply`、组内汇总 `reduce`）结果、命名、结果样品号正确 |
 | `test_plan_helpers.py` | `src/plotlib/plan.py` 的公共函数 | 生成计划用的函数：样品号 → 色带位置；分组参数检查 `resolve_groups`；共用取数 |
-| `test_plot_plan.py` | `src/plotlib/plan.py` 的 `plan_multiline_figures` / `plan_xy_figures` / `plan_dual_y_figures` | 绘图计划：多线图（不分组 / 分离 / 合并各画几张图、哪些线、归哪个分组、色带位置、样式）、xy、双 Y 轴；图层面的单位、neglog、版式；不开图窗 |
+| `test_plot_plan.py` | `src/plotlib/plan.py` 的 `plan_figures`、`plan_bars` | 绘图计划：`by` 三种分图（不分组 / 分离 / 合并各画几张图、哪些线、归哪个分组、色带位置、样式；每样品一张）、多个图层、双 Y 轴；图层面的单位、neglog、版式；入口校验；柱状图的「类别 × 系列」表、误差、样式；不开图窗 |
+| `test_bars.py` | `DataPlotter.plot_bars` 与两个后端的柱状图 | 入口校验（含回调与画法不配、柱状图不接滑块）；matplotlib 的并排偏移、缺数据保留位置、堆叠底部、误差棒位置；Plotly 的 `barmode` 与 Kaleido 实际渲染（柱位置、缺误差的系列无端帽、图例纹理）；同名类别不合并；颜色、纹理、回调组合；Y 轴标题、图例；`artist(key)`、失败后的状态 |
 | `test_style.py` | `src/plotlib/style.py` | 样式标准写法（线型、标记、颜色）的校验，以及到 matplotlib / Plotly 的翻译 |
 | `test_plotter.py` | `src/plotlib/plotter.py` | matplotlib 把计划画对（每张计划一张图、位置 → 颜色、样式翻译）；formatter、图例、`linestyle`、`figsize`、负对数刻度、x-y 单线图 / 双 Y 轴 |
 | `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
@@ -186,12 +187,19 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 样品号 0、5、9：色带位置按整个数据集排名；分离模式各样品各自的位置（1/3、2/3），合并模式统一为组首位置 1/3（回归：组首色曾取 `cmap(5/3)` 被截断）
 - 生成计划只读分组：前后 `groups.to_config()` 不变（后端不读 `Group`，所以只在这里测）
 - 图层面的信息（6.4）：三种多线 / 分组计划的图都带 `x_unit`、`y_unit`（`y2_unit` 为 None）、`layout='multiline'`；线默认 `kind='line'`、`axis='left'`，曲线上不再有单位；`kind` 原样传到每条线，`neglog` 记在图上（如 `{'x'}`）
-- xy 计划：每个样品一张图、一条线，key 是样品号，`layout='xy'`；色带位置为 `None`（用后端默认色）；`neglog_y` 时 Y 取绝对值、图上记 `{'y'}`
-- 双 Y 轴计划：每个样品一张图、两条线；左线挂左轴（红）、右线挂右轴（蓝），色带位置为 `None`，两侧 `kind` 可不同；图的单位为左 X、左 Y、右 Y，`layout='dual_y'`；`neglog_x2` 只把右线的 X 取绝对值、图上记 `{'x2'}`；
-  两条线的标签是各自的单位，图例标题是样品名（2026-11-20）
-- 每张图自己的名字 `FigureSpec.name`（6.8）：xy / 双 Y 轴是样品名，分离模式是组名，只有一张图时 `None`
-- 图例标题 `legend_title`：多线、分组、xy 默认 `None`，双 Y 轴默认样品名；`'{name}'` 在 xy / 双 Y 轴换成样品名、分离模式换成组名，前后可加文字；
+- `by='sample'`：每个样品一张图、一条线，key 是样品号，`layout='xy'`；色带位置为 `None`（用后端默认色）；`neglog_y` 时 Y 取绝对值、图上记 `{'y'}`
+- 左右两个图层（双 Y 轴）：每个样品一张图、两条线；左线挂左轴（红）、右线挂右轴（蓝），色带位置为 `None`，两侧 `kind` 可不同；图的单位为左 X、左 Y、右 Y，`layout='dual_y'`；
+  负对数按轴：共用 X 轴的负号只看左侧，右侧图层的 `neglog_x` 只把自己的 X 取绝对值；左右 Y 轴各看本侧；两条线的标签是各自的单位，图例标题是样品名（2026-11-20）
+- 多个图层（4.8）：同一侧「散点 + 折线」每样品一张，曲线按「样品 → 图层」顺序，标签是单位、图例标题自动是样品名、`layout='xy'`
+- 规则推导（4.8）：`all` / `group` / `sample` 单层和 `sample` 左右双层各自的版式、是否按色带取色、`legend_title='auto'` 的结果
+- 入口校验（4.8）：空图层、只有右侧、`merge_groups` 配错 `by`、`by='group'` 没有分组、写错 `by` / `kind` / `side`、图层没写通道、
+  `by='all'` / `'group'` 画多个图层、同一根轴上负对数写法不一致，都报 `ValueError`
+- 每张图自己的名字 `FigureSpec.name`（6.8）：每样品一张时是样品名，分离模式是组名，只有一张图时 `None`
+- 图例标题 `legend_title`：默认 `'auto'`，只有一个样品画多层时是样品名，否则不加；`'{name}'` 在每样品一张时换成样品名、分离模式换成组名，前后可加文字；
   只有一张图（不分组、合并）时自由文字照用，`'{name}'` 不替换也不报错（用户定：不给单图加限制）
+- 柱状图 `plan_bars`（4.7，数据见 conftest 的 `bar_data`）：4 种「类别 × 系列」组合的类别、系列键（原通道号）、高度、配色位置；
+  先截 `plotrange` 行再汇总；Y 轴标题三种情况；缺数据保留位置；分组配置与 `styles` 的优先级、样式在汇总前校验；
+  误差：两种模式的 std / sem、误差通道按原行对齐（first / max / mean）、端帽标记、不可哈希的汇总对象、汇总后误差的校验、分组时每个样品只汇总一次
 
 ### 样式标准写法 — `test_style.py`
 - 合法：线型 `'solid'` / `'dash'` / `'dot'` / `'dashdot'` 与自定义虚线 `(3, 5)`、`[3, 5]`；7 个标记名；
@@ -214,27 +222,30 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 ### 绘图 — `test_plotter.py`
 分组规则不在这里测（见 `test_plot_plan.py`）；这里只测 matplotlib 把计划画对，以及它独有的功能。
 
-**`plot_multiline`**
+绘图只有一个入口 `DataPlotter.plot`（4.8）：`by` 决定分图（`'all'` / `'group'` / `'sample'`），图层 `Layer` 决定画什么，
+回调按轴打包成 `AxesFormatter`。
+
+**`by='all'`**
 - 每个样品一条线，全部在一张图上；X/Y 轴标题是单位，图例是样品名
 - `plotrange` 限制绘制点数
-- `neglog_x` / `neglog_y`：数据取绝对值，刻度文字带负号；两轴同时启用时各保留自己的格式；
-  **渲染后**默认刻度格式也是「一个负号 + 数字」（xy 的 X、双 Y 轴的左 Y；双 Y 轴共用的 X 轴只加一次负号）
-- 折线走 `plot_multiline`、散点走 `plot_scatter`，生成对应类型的对象（`Line2D` / `PathCollection`），且数据正确；
-  `plot_scatter` 与折线共用分组规则（不分组、分离、合并），两个后端一致；双 Y 轴两侧可以分别是折线、散点
+- `Layer(neglog_x=…, neglog_y=…)`：数据取绝对值，刻度文字带负号；两轴同时启用时各保留自己的格式；
+  **渲染后**默认刻度格式也是「一个负号 + 数字」（每样品一张的 X、双 Y 轴的左 Y；双 Y 轴共用的 X 轴只加一次负号）
+- 图层 `kind='line'` / `'scatter'` 生成对应类型的对象（`Line2D` / `PathCollection`），且数据正确；
+  散点与折线共用分组规则（不分组、分离、合并），两个后端一致；双 Y 轴两侧可以分别是折线、散点
 - 线条回调只改折线、散点回调只改散点（`make_lines_formatter` / `make_scatter_formatter`，两个后端都验证）
-- `axes_formatter` / `lines_formatter` / `legend_formatter` 都会被调用，拿到正确的对象
-- `lines_formatter` 改线型后，图例同步更新；**渲染后**图例位置和能否拖动不变（图外右侧、图内右下两种）
-- `figsize`：不传时 `plot_multiline` 为 (10, 8)、`plot_groups` 为 (16, 12)、`plot_xy` / `plot_dual_y` 为 (12, 8)；传了则所有绘图方法都用它（xy、双 Y 轴以前忽略它）
+- `AxesFormatter` 的 `axes` / `lines` / `legend` 都会被调用，拿到正确的对象
+- 线条回调改线型后，图例同步更新；**渲染后**图例位置和能否拖动不变（图外右侧、图内右下两种）
+- `figsize`：不传时按 `by`：`'all'` (10, 8)、`'group'` (16, 12)、`'sample'` (12, 8)；传了都用它
 
-**`plot_groups`**
+**`by='group'`**
 - 计划里每张 `FigureSpec` 画成一张图：分离模式 `figures` 的键是 `'A'`、`'B'`，合并模式是 `'main'`；每张图的线与计划的曲线一一对应
 - 分组样式翻译成 matplotlib 原生值：`'dash'` → `'--'`、`'circle'` → `'o'`、RGB 和色号 → 对应颜色；没写样式时实线、无标记
 - 分组没写线型时用全局的 `lines=LineStyle(linestyle=...)`（经 `rc_context` 生效）；默认实线、线宽 3，只收标准写法；`lines` 不收颜色
-- 优先级：`lines_formatter` 最后执行，能覆盖分组线型
-- 没有分组时退回 `plot_multiline`
+- 优先级：线条回调最后执行，能覆盖分组线型
+- 没有分组时报错（原 `plot_groups` 会退回画全部样品，4.8 起 `by='group'` 是明确的意思）
 
 **结果形状（6.5）**
-- 四种方法的结果都是 `figures = {计划的 key: DrawnFigure}`：`spec`、`fig`、`axes`（单轴 `{'left'}`，双 Y 轴 `{'left', 'right'}`）、`artists`（与 `spec.curves` 一一对应）
+- 各种 `by` 的结果都是 `figures = {计划的 key: DrawnFigure}`：`spec`、`fig`、`axes`（单轴 `{'left'}`，双 Y 轴 `{'left', 'right'}`）、`artists`（与 `spec.curves` 一一对应）
 - 按样品号取线：`figures['B'].artist(1)`；双 Y 轴 `artist(0, 'right')` 是蓝色；取不存在的样品 → `KeyError`
 - 颜色一次赋值：分组写的 `color` 对散点图、柱状图也生效（以前只对折线）
 
@@ -263,10 +274,12 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 **配色**
 - 柱状图也按计划的位置上色：合并模式同组的柱子统一为组首色（步骤 6.2 起；以前 `BarContainer` 没有 `set_color`，各用各的样品色）
 
-**`plot_xy`（原 `subplotter_yy`）/ `plot_dual_y`**（都按计划画）
+**`by='sample'`（原 `plot_xy` / `subplotter_yy`）和左右两个图层（原 `plot_dual_y`）**（都按计划画）
 - 每个样品一张图，以样品号为键
-- xy：X/Y 数据与轴标题对应所选两列（如 Nyquist 图）；线仍是 matplotlib 默认色 `#1f77b4`（不按样品换色）
-- 双 Y 轴：左右两侧各用自己的 X、Y 列；左轴红、右轴蓝，两轴共享 X 轴，`twinx` 不新开图窗；整图回调 `figure_formatter(fig, axes)` 每个样品调用一次
+- 一个图层：X/Y 数据与轴标题对应所选两列（如 Nyquist 图）；线仍是 matplotlib 默认色 `#1f77b4`（不按样品换色）
+- 左右两个图层：两侧各用自己的 X、Y 列；左轴红、右轴蓝，两轴共享 X 轴，`twinx` 不新开图窗；整图回调 `figure_formatter(fig, axes)` 每个样品调用一次
+- 多个图层（`test_backend_parity.py`，两个后端）：每页 `artists` 的顺序与 `layers` 一致，`artist(样品号, 轴)` 是这根轴上的第一层；
+  线条、散点回调只收到对应轴、对应画法的对象；右侧坐标轴回调改 X 也作用在共用的 X 轴上
 
 ### 格式化器 — `test_formatters.py`
 样式对象化（2026-11-20）起参数都是样式对象：`make_axes_formatter(x=AxisStyle, y=AxisStyle, frame=FrameStyle, ticks=TickStyle, custom=)`、
@@ -338,7 +351,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 ### 两个后端对照 — `test_backend_parity.py`
 - 分组参数（两个后端各测一遍）：只接受 `Group` 对象，传字典 → `TypeError`；基于别的数据集的 `Group` → `ValueError`；不传时是建在本数据集上的空 `Group`
 - 计划里的版式、画法写错时，两个后端都明确报错（`ValueError`）
-- 结果同一形状（两个后端 × 四种方法）：`figures` 的键是计划的 key，每张图（页）的线与 `spec.curves` 一一对应，`axes` 单轴 `{left}`、双 Y 轴 `{left, right}`
+- 结果同一形状（两个后端 × 原来的四种写法）：`figures` 的键是计划的 key，每张图（页）的线与 `spec.curves` 一一对应，`axes` 单轴 `{left}`、双 Y 轴 `{left, right}`
 - **同一个入口、同一个 `Group`，换后端**：多线、合并、分离、xy、双 Y 轴五种画法，图的 key 相同，每张图（Plotly 是每页）的曲线条数、顺序、标签、数据相同；
   按页比较，不比 Figure 个数（多张计划时 Plotly 是一个 Figure 多页）
 - 按轴回调只作用在自己那根轴上（第三方审查 E）：只给右轴配范围和线色，左轴范围、左线颜色不变；
@@ -347,7 +360,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 单轴刻度覆盖：右轴回调里的 `ticks` 只改右侧 Y 轴（长 12、关掉次刻度），左轴仍是默认；Plotly 在 `dpi=200` 下按 `fig.layout.meta` 的 dpi 换算
 - `combine_formatters` 合并同一种回调，两个后端都能接进绘图器
 - 分组 `marker` 对散点图也生效（Plotly 散点仍是 `'markers'`）
-- 图例标题：四种方法、六种情况，每张图画出的标题与计划一致（没有就不画）
+- 图例标题：六种情况，每张图画出的标题与计划一致（没有就不画）
 - 数字样品名（真实 CSV 的 `'101'`、`'102'`）：双 Y 轴图例标题、Plotly 两种滑块的档位标签都是原样文本（55576fb 复审 1）
 - `DataPlotter(lines=LineStyle(marker=...))` 全局标记：折线都带标记（Plotly `lines+markers`），分组写的盖过全局，散点仍是圆点（复审 2）
 - 颜色不在这里比：两个库的色带实现不同，各自「位置 → 颜色」分别在 `test_plotter.py`、`test_plotly_backend.py` 里测

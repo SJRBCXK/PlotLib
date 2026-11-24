@@ -1,12 +1,13 @@
 """
-测试对象：src/plotlib/group.py 的 Group.apply()
-数据来自 conftest.py 的 eis_dataset：S1 = S0 × 2，S2 = S0 × 3，频率相同。
+测试对象：src/plotlib/group.py 的 Group.apply()、Group.reduce()
+apply 的数据来自 conftest.py 的 eis_dataset：S1 = S0 × 2，S2 = S0 × 3，频率相同。
 所以每个测试的「正确答案」都能心算出来——这就是手工设计测试数据的意义。
 """
 import numpy as np
 import pytest
 
 from plotlib.group import Group
+from plotlib.processor import Reduction
 
 ZS = ("Zs'(ohm)", "Zs''(ohm)")
 S0_ZS = np.array([[10, -1], [20, -2], [30, -3]], dtype=float)
@@ -129,3 +130,63 @@ def test_callback_may_return_python_scalar(eis_dataset):
     """回调返回 Python 标量（如 1.0）当作 1 × 1。"""
     result = Group(eis_dataset, {'g': {'num': [0, 1]}}).apply(lambda *s: 1.0, select=ZS)
     assert result.data.tolist() == [[1.0]]
+
+
+# ══════════════════════════════════════════════
+# reduce：先样品内汇总，再组内跨样品汇总
+# ══════════════════════════════════════════════
+def test_group_reduce():
+    """
+    样品 A（0）：F [1, 9]，E [10, 30]；B（2）：F [3]，E [50]；C（4）：F [5, NaN]，E 全 NaN。
+    G1 = {A, B}，G2 = {B, C}（B 同属两组，各算一次）。行数不等：within='max' 必须先得到每个样品的一个值
+    （A 的 F 是 9，不是把 1、9、3 三行混在一起统计）。
+    """
+    from plotlib.dataset import DataSet
+
+    nan = np.nan
+    data = DataSet().form_array(np.array([[1, 10], [9, 30]]), ['A', 'A'], ['F(N)', 'E(%)'], 0, repeat_times=2)
+    data.expandata(DataSet().form_array(np.array([[3, 50]]), ['B', 'B'], ['F(N)', 'E(%)'], 2, repeat_times=2))
+    data.expandata(DataSet().form_array(np.array([[5, nan], [nan, nan]]), ['C', 'C'], ['F(N)', 'E(%)'], 4,
+                                        repeat_times=2))
+    groups = Group(data, {'G1': {'num': [0, 2]}, 'G2': {'num': [2, 4]}})
+
+    # 样品汇总值：G1 的 F 是 [9, 3]、E 是 [30, 50]；G2 的 F 是 [3, 5]、E 是 [50]（C 的 E 全 NaN，不计数）
+    cases: list[tuple[Reduction, list]] = [('mean', [6, 40, 4, 50]),
+                                           ('std', [18 ** 0.5, 200 ** 0.5, 2 ** 0.5, nan]),
+                                           ('sem', [3, 10, 1, nan])]
+    for how, expected in cases:
+        result = groups.reduce(how, within='max')
+        np.testing.assert_allclose(result.data, [expected], rtol=1e-12, err_msg=str(how))
+        assert (result.names, result.units, result.sample_idx) == (
+            ['G1', 'G1', 'G2', 'G2'], ['F(N)', 'E(%)'] * 2, [0, 0, 1, 1])
+
+    # channels 定顺序和范围：结果的第 i 个通道对应 channels[i]
+    result = groups.reduce('mean', within='max', channels=[1, 0])
+    np.testing.assert_allclose(result.data, [[40, 6, 50, 4]])
+    assert result.units == ['E(%)', 'F(N)'] * 2
+
+    # within=None：每个样品的每个通道至多一个有效值；A 的 F 有两行，报错并指出样品和单位
+    with pytest.raises(ValueError, match=r"A.*F\(N\).*2 个"):
+        groups.reduce('mean')
+    np.testing.assert_allclose(Group(data, {'g': {'num': [2]}}).reduce('mean').data, [[3, 50]])
+
+    with pytest.raises(ValueError, match='通道 5'):
+        groups.reduce('mean', within='max', channels=[5])
+
+    # 一次算几种：每个样品只汇总一次，均值和误差来自同一批样品汇总值。
+    # 汇总函数每次被调用返回不同的值（1、3，之后 10、30）：分两次算时柱高是 2、标准差却按 10、30 算成 14.14
+    class Drifting:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, values):
+            self.calls += 1
+            return [1, 3, 10, 30][self.calls - 1]
+
+    within = Drifting()
+    mean, std = Group(data, {'G1': {'num': [0, 2]}}).reduce(['mean', 'std'], within=within, channels=[0])
+    assert (mean.data.tolist(), round(float(std.data[0, 0]), 3), within.calls) == ([[2.0]], 1.414, 2)
+
+    # 两步之间检查：某个样品汇总出无穷大就报错（A 得 +inf、B 得 -inf，第二步求均值会悄悄变成 NaN）
+    with pytest.raises(ValueError, match=r"G1.*A.*F\(N\).*无穷"):
+        groups.reduce('mean', within=lambda v: np.inf if v[0] == 1 else -np.inf, channels=[0])

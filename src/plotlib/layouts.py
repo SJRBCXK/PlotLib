@@ -35,7 +35,7 @@ class LayoutPreset:
 
 # 两个后端均通过左轴回调配置整图图例。
 NO_LEGEND_MESSAGE = ("这根轴没有单独的图例：一张图只有一个图例，归左轴；"
-                     "图例格式请交给 legend_formatter（双 Y 轴不要用 right_legend_formatter）")
+                     "图例回调请放在左侧（AxesFormatter(legend=...) 给 'left'，不要给 'right'）")
 
 
 LAYOUTS: dict[Layout, LayoutPreset] = {
@@ -57,6 +57,8 @@ LAYOUTS: dict[Layout, LayoutPreset] = {
         axes={'y': AxisStyle(color='red'), 'y2': AxisStyle(format='{y:.4f}', color='blue')},
         margins={'right': 0.85, 'top': 0.85},
     ),
+    # 柱状图沿用默认图例样式。后端为类别轴设置刻度。
+    'bars': LayoutPreset(),
 }
 
 

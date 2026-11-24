@@ -72,10 +72,24 @@ API 参考
 
    LineStyle
    ScatterStyle
+   BarStyle
    AxisStyle
    FrameStyle
    LegendStyle
    TickStyle
+
+图层与按轴回调
+--------------
+
+``DataPlotter.plot`` 的 *layers* 写每个样品画哪几条（通道、画法、挂哪根 Y 轴），
+*formatters* 按轴打包坐标轴、折线、散点、柱状图（``plot_bars``）、图例回调。
+
+.. autosummary::
+   :toctree: generated
+   :nosignatures:
+
+   Layer
+   AxesFormatter
 
 格式化回调
 ----------
@@ -87,6 +101,7 @@ API 参考
    make_axes_formatter
    make_lines_formatter
    make_scatter_formatter
+   make_bar_formatter
    make_legend_formatter
    combine_formatters
 

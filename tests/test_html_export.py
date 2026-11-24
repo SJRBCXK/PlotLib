@@ -77,6 +77,6 @@ def test_works_with_plotly_backend(eis_dataset):
     """集成：Plotly 后端按 figsize × dpi 定图的尺寸（多线图默认 (10, 8) 英寸、dpi 100 → 1000 × 800），直接决定画框尺寸。"""
     from plotlib.plotter import DataPlotter
 
-    fig = DataPlotter(eis_dataset, backend='plotly').plot_multiline().add_slider()
+    fig = DataPlotter(eis_dataset, backend='plotly').plot().add_slider()
     page = build_fit_html(fig, side_html="<p>x</p>", include_plotlyjs="cdn")
     assert canvas_size(page) == (1000 + 24 + 300, 800)

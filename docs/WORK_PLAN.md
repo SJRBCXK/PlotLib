@@ -4,10 +4,11 @@
 > 用词按 `GLOSSARY.md`：样品（一次测量）、通道（样品内的列）、分组（若干样品的集合）。
 > 新的规划、决定、执行记录都写在这里：规划写进第 4、5 节，做完把记录追加到第 7 节，并更新顶部状态和第 5 节进度表。
 
-**当前状态（2026-11-23）**：plotlib 1.0.0，最新提交 `0098a2f`，591 passed（工作区，未提交），pyright 0 错误，API 文档零警告。
-第三方只读审查的 14 项已修（见第 7 节最后一小节），未提交。
-**进行中**：第 4 节「柱状图、散点图」，按 4.7 的顺序做。第一步（样式对象和 spec 按画法拆开、`plot_scatter`）已完成，未提交；
-**下一步**：第二步柱状图 `plot_bars`；之后是步骤 8「让脚本可复现」。
+**当前状态（2026-11-25）**：plotlib 1.0.0，最新提交 `adca55c`，611 passed（工作区，未提交），pyright 0 错误，API 文档零警告。
+统一绘图入口 `plot`（4.8）、柱状图（4.7 第二步）已完成，均未提交（见第 7 节最后几小节）。
+**进行中**：第 4 节「柱状图、散点图」，按 4.7 的顺序做。第一步、1b（统一入口 `plot`）、第二步（柱状图）已完成，未提交；
+**下一步**：第二步柱状图 `plot_bars` 已完成（计算层、计划层、入口、两个后端、`make_bar_formatter`；图例两种图都改为显式生成，611 passed，未提交），
+待用户看 diff / 第三方检查；之后是第三步散点图（第三通道映射、颜色条）、第四步 README 示例，再步骤 8「让脚本可复现」。
 
 ---
 
@@ -211,7 +212,7 @@ DataPlotter.figures = {FigureSpec.key: DrawnFigure}；取线 figures[key].artist
 ```python
 LineStyle(width, color, linestyle, marker, marker_size)            # 折线，不变
 ScatterStyle(marker, size, color, edge_color, edge_width, filled)  # 散点：filled=False 画空心点
-BarStyle(color, edge_color, edge_width, width, ...)                # 柱状图：width 是柱宽占间距的比例；误差棒线宽、端帽长度
+BarStyle(color, edge_color, edge_width, hatch, ...)                # 柱状图：纹理、误差棒外观；柱宽是 plot_bars 的参数（见 4.7）
 ```
 
 连带：计划里每条线的样式按画法存对应的对象；分组配置按画法检查字段；线条回调按画法分派（11-20 的待办随之完成）。
@@ -250,7 +251,7 @@ DataPlotter(data, groups=groups).plot_bars(
     channels=[0, 1, 2],             # 画哪几个通道（标签）
     x='channel', series='group',    # 两维各取什么：'sample' | 'group' | 'channel'
     errors='std',                   # 'std' / 'sem'（由多行或组内样品算出），或 {值通道: 误差通道}
-    reduce='mean',                  # 一列多行时怎么得到一个值：'mean' | 'first' | 函数
+    reduce='mean',                  # 一列多行时怎么得到一个值（不写时每格只能有一个值，细节见 4.7）
     mode='group',                   # 'group' 并排、'stack' 堆叠（重叠模式不做，用户定可被堆叠取代）
 )
 ```
@@ -288,30 +289,208 @@ Plotly 没有「轴线放在数据值上」的功能（只能在范围写死时�
    用户定：散点走单独的 `plot_scatter` / `plan_scatter_figures`（与折线共用规则）；曲线方法去掉 `plot_kind`，
    双 Y 轴保留 `plot_kinds`（`'line'` / `'scatter'`）；分组配置每种画法只读自己用得上的字段；
    线条回调和散点回调解耦（`make_lines_formatter` / `make_scatter_formatter`）；默认外观等方法跑通后再加；
-2. 柱状图：`plot_bars`、一张表的计划、并排 / 堆叠、误差棒、类别刻度；`BarStyle` 和柱状图回调按第 2 节原则 8～14 设计
+1b. ✅ 统一绘图入口 `plot`（4.8，2026-11-24 用户同意，排在柱状图前，`plot_bars` 一开始就按新规则写；记录见第 7 节最后一小节）；
+2. ✅ 柱状图：`plot_bars`、一张表的计划、并排 / 堆叠、误差棒、类别刻度；`BarStyle` 和柱状图回调按第 2 节原则 8～14 设计
    （回调先读实际状态、三种写法分清、两个后端对齐、尽早报错），测试期望里列出组合场景；
 3. 散点图：`ScatterStyle` 的完整样式、第三通道映射、颜色条；
 4. README 示例（含蝴蝶图回调）、API 文档登记。
 
-**第二步柱状图的细节（2026-11-23 列出，⏳ 待用户确认；括号里是备选）**：
+**第二步柱状图的细节（2026-11-23 列出；11-25 与用户、第三方逐项确认）**：
 
-- 接口：`plot_bars(channels, x='sample', series='channel', reduce='mean', errors=None, mode='group', axes_formatter, bars_formatter, legend_formatter, figure_formatter, legend_title)`。
-  ① `x` / `series` 必须恰好一个是 `'channel'`，另一个是 `'sample'` 或 `'group'`（4.4 表的 4 种），其余报错（或改成单参数 `by=`）；
-  ② 默认 `x='sample', series='channel'`；③ 用到样品维时画全部样品、忽略分组，写 `'group'` 时才用分组，没有分组报错；
-  ④ `plotrange` 生效（汇总只取前几行）；⑤ 不加 `neglog`。
-- 汇总：⑥ `reduce` 默认 `'mean'`，可选 `'median' / 'first' / 'last' / 'max' / 'min'` 或函数（或默认 `'first'`）；⑦ 忽略 NaN（拼接补的 NaN）；
-  ⑧ 分组时两步：样品内多行 → 一个值，组内跨样品 → 平均；样品同属两组时各算一次。
-- 误差：⑨ `'std'`：分组时是组内样品之间，否则是同一列多行之间，`ddof=1`，只有一个值时不画（或 `ddof=0`）；⑩ `'sem'` = std / √n；
-  ⑪ `{值通道: 误差通道}` 按同一 `reduce` 汇总，分组汇总时用它报错（或组内取平均）；⑫ 堆叠时误差画在每段顶端（或不允许）；⑬ 只做对称误差。
-- `BarStyle`：⑭ `color`、`edge_color`、`edge_width`（磅）、`width`（一个类别里全部柱子占间距的比例，默认 0.8）；
-  ⑮ `error_color`（默认黑）、`error_width`（磅）、`capsize`（磅）；⑯ 花纹、透明度以后再加。分组配置只读 `color`；`make_bar_formatter` 对应 `bars_formatter`。
-- 显示：⑰ 颜色：系列是样品 → 样品色；是分组 → 组色，没写用组首样品色；是通道 → 按通道排名取色带（或后端默认配色）；
-  ⑱ 类别刻度文字是样品名 / 组名 / 通道单位，旋转用回调；⑲ Y 轴标题：一个通道时是它的单位，多个通道时不写（或拼接）；
-  ⑳ 堆叠时正负分开叠（Plotly `'relative'`，matplotlib 照规则算底部）；㉑ 新版式 `'bars'`：图例图内右上、无框、Y 轴不预设格式、默认 (10, 8)。
-- 结果：㉒ 一张 `'main'` 图，`figures['main'].artist(key)` 按系列的键取（样品号 / 通道号 / 组名）（或另加 `series(key)`）；㉓ 滑块暂不支持，报错说明。
+```python
+plotter.plot_bars(
+    channels=None,          # int 或列表；None = [构造时的 channel_y]；不能重复
+    x='sample',             # 'sample' | 'group' | 'channel'
+    series='channel',
+    reduce=None,            # None：每格只能有一个有效值；'mean' | 'median' | 'first' | 'last' | 'max' | 'min' | 函数
+    errors=None,            # None | 'std' | 'sem' | {值通道: 误差通道}
+    mode='group',           # 'group' 并排 | 'stack' 堆叠
+    width=0.8,              # 一个类别里全部柱子占间距的比例，(0, 1]；决定偏移和误差棒位置，所以在画之前定，不放进样式
+    styles=None,            # BarStyle（全部系列）或 {系列键: BarStyle}
+    formatters=None,        # AxesFormatter，只认左轴，用 bars 字段
+    figure_formatter=None,
+    legend_title='auto',    # 'auto' 不加标题；也可写字符串或 None
+)
+```
+
+**维度与入口**
+
+- ① `x` / `series` 恰好一个是 `'channel'`，另一个是 `'sample'` 或 `'group'`（4.4 表的 4 种），其余（含两者相同）报错。
+  不改成 `by=`：`by` 在 `plot` 里是「哪些样品进哪张图」，再表示「类别 × 系列」会一词两义；
+- ② 默认 `x='sample', series='channel'`，`channels` 不写取 `channel_y`（同 `Layer` 省略通道），`plot_bars()` 即「每个样品一根柱」；
+- ③ 直接用绘图器的 `dataset` 和 `groups`：用到样品维时画全部样品、不看分组；写 `'group'` 时才用分组，没有分组报错（措辞同 `plot(by='group')`）；
+- ④ `plotrange` 先截行再汇总；⑤ 不加 `neglog`；`channels` 有重复报错（保证 `artist(key)` 唯一）；
+- 只做单 Y 轴（柱状图的惯例）：`formatters` 写 `'right'`、或写 `lines` / `scatter` 报错；反过来 `plot()` 写 `bars` 也报错（复用 `_check_formatters`，
+  没有对象可收的回调不悄悄忽略）。
+
+**计算层（processor）：统计放在数据处理层，计划层只排布**
+
+- `DataTransformer.Reduce(how, indicies=None, column=None, extended=True)`：每个选中的列汇总成一个值，名字、单位、样品号不变；
+- `Group.reduce(how='mean', within=None, channels=None)`：每组一个新样品（样品号按分组顺序从 0 起，名字是组名，单位是通道列标题，同 `Group.apply`）；
+  先在每个样品内用 `within` 把多行汇总成一个值，再组内跨样品用 `how` 汇总；样品同属两组时各算一次；
+- 两者共用一套一维汇总：`how` 可选 `'mean' | 'median' | 'first' | 'last' | 'max' | 'min' | 'std' | 'sem'` 或函数
+  `f(去掉 NaN 的一维数组) -> 标量`（`np.asarray` 检查）。⑦ 忽略 NaN，全 NaN 得 NaN；⑨ `std` 用 `ddof=1`，有效值少于 2 个得 NaN；
+  ⑩ `sem` = std / √n，n 只数非 NaN；按原则 14 先提升到双精度；
+- ⑥ `reduce=None`（用户定：不声明就不画多行数据）：一个有效值直接画，零个留空，超过一个报错，信息写出样品、通道、行数并提示写 `reduce=`；
+  文档字符串写明：柱高是按 `reduce` 汇总的显示值；⑧ 用到分组时组内跨样品取平均；
+- 汇总后**带着原通道号走**：取出原通道 `[3, 1]` 后新 `DataSet` 会编号成 `[0, 1]`（`columns_to_dataset`），所以汇总结果旁边保留原通道顺序和系列键，
+  `styles`、误差字典、`artist(key)` 都用原来的键。
+
+**误差**
+
+| `errors` | 不用分组（样品 × 通道） | 用到分组 |
+|---|---|---|
+| `'std'` / `'sem'` | 同一列多行之间：`Reduce('std')`，要求 `reduce='mean'` | 组内各样品汇总值之间：`Group.reduce('std', within=reduce)` |
+| `{值通道: 误差通道}` | 误差通道与柱高按原行对齐（见下） | 报错：组内合并误差要做误差传递，没有唯一答案 |
+
+- 不用分组时 `'std'` / `'sem'` 必须配 `reduce='mean'`（用户定）；用到分组时跨样品那一步固定是平均，`within` 不限；
+- ⑪ 显式误差通道**按原行对齐**：先由高度列确定有效行；`'first' / 'last' / 'max' / 'min'` 从选中的那一行取误差
+  （高度 `[NaN, 10]`、误差 `[9, 1]`、`reduce='first'` 画 `10 ± 1`）；`'mean' / 'median'` / 函数对有效行的误差用同一个 `reduce` 汇总；
+  对应行没有误差就省略。文档写明这是显示规则，误差传递由调用方负责；
+- 尽早报错：误差通道有负数；字典的键不在 `channels` 里、值不是存在的通道；写了 `errors` 却**没有任何一根**可画的误差棒
+  （全是单行、每组只有一个样品）。个别格子缺误差只跳过那几根；
+- ⑫ 堆叠时画在每段远离 0 的一端；⑬ 只做对称误差；误差棒在柱上层、不进图例；
+- **缺误差的端帽**：Plotly 的 `error_y.array` 里有 `None` / `NaN` 时，有端帽会在缺失点画一条横杠，像零误差（第三方实测）。
+  所以 `capsize` 默认 0；某个系列在有效柱上缺误差时，两个后端对这个系列都不画端帽，保留有效误差的竖线。
+  **实现时调整（11-25）**：matplotlib 在 `capsize=0` 时根本不建端帽线，画完没有公开接口补上，所以端帽长度和柱宽一样
+  「画之前定」，只能写在 `plot_bars(styles=BarStyle(capsize=...))`；`make_bar_formatter` 收到 `capsize` 报错（原则 5），
+  原来「回调设端帽时先读误差数组」的规则随之不需要。
+
+**样式与回调**
+
+- ⑭⑮ `BarStyle(color, edge_color, edge_width, hatch, error_color, error_width, capsize)`：宽度类单位是磅，两个后端用 dpi 换算（原则 10）；
+  `error_color` 默认黑，`capsize` 默认 0；柱宽不在这里（见接口）；
+- ⑯ 纹理现在做，按 `style.py` 的惯例写词名、由后端翻译（用户定）：`'slash'`（`/`）、`'backslash'`（`\`）、`'vertical'`（`|`）、
+  `'horizontal'`（`-`）、`'cross'`（`+`，与标记的 `'cross'` 同名同形）、`'x'`、`'dot'`（`.`），`'none'` 清除，`None` 保持（原则 9）；
+  这 7 种两个后端都能渲染（第三方用 matplotlib 3.10.8、Plotly 7.1.0 实测），其余写法创建时报错；
+  纹理颜色跟随最终的 `edge_color`（matplotlib 3.10 单独设纹理颜色只有私有接口，不碰；Plotly 用 `pattern.fgcolor`，`fillmode='overlay'` 保留填充色）；
+  密度用各后端原生默认，差异写进文档字符串。黑白图写法：`BarStyle(color='white', edge_color='black', hatch=…)`；
+- 每个系列的样式：系列是分组时读分组配置的 `color`、`hatch`（`_STYLE_CHECKS` 加 `hatch`）；其余用 `styles` 逐系列给；
+  优先级：库默认 < 版式预设 < 分组配置 < `styles` < 回调；
+- 回调：`AxesFormatter(bars=…)`，每个系列交一个对象，误差棒随柱一起交：matplotlib 是 `BarContainer`（误差棒在 `.errorbar`），
+  Plotly 是 trace（误差在 `error_y`）；`make_bar_formatter` 按原则 8 先读实际状态、按原则 9 分清三种写法。
+
+**显示**
+
+- ⑰ 颜色：系列是样品 → 样品色；是分组 → 组色，没写用组首样品色；是通道 → 按在 `channels` 里的名次取色带（两个后端默认外观一致）；
+- ⑱ 类别刻度文字是样品名 / 组名 / 通道列标题，旋转用回调。两个后端都用**数字位置 + 刻度文字**（Plotly `tickvals` / `ticktext`）：
+  Plotly 的类别轴会把同名类别合到一格（两个样品同名、两个通道都是 `MPa`），属于静默画错；
+  顺序：样品按样品号排序（与 `plot(by='all')` 一致），分组按分组顺序，通道按 `channels` 的书写顺序；
+- **缺数据保留槽位**：某格全是 NaN 时保留类别和系列的位置，跳过柱子、误差棒和堆叠累加，相邻的柱不挪位；
+- ⑲ Y 轴标题（用户定，按第三方建议）：一个通道用它的列标题；多个通道只在列标题字符串完全相同时沿用，否则留空
+  （`Zs'(ohm)` 和 `Zs''(ohm)` 物理单位相同但字符串不同，比字符串不会误合并）；需要时用坐标轴回调写明，如 `Stress (MPa)`；
+  堆叠、跨通道的单位相容由调用方负责，不解析列标题、不自动换算；
+- **图例**：一个系列一个条目，按系列顺序；文字是样品名 / 组名 / 通道列标题；图例里的色块带这个系列的颜色、描边和纹理。
+  所以「不同单位的通道用不同纹理、图例按纹理对应单位」就是 `series='channel'` 加逐通道的 `styles`，不需要新接口：
+  `plot_bars([1, 2, 3], styles={1: BarStyle(hatch='slash'), 2: BarStyle(hatch='dot'), 3: BarStyle(hatch='x')})`，
+  各系列颜色写成一样（如黑白图）时图例就只靠纹理区分。图例同时表达两维（颜色对样品、纹理对通道）这类更定制的，
+  用 `figure_formatter` 拿整张图、用后端原生对象添加第二套图例（matplotlib 代理 `Patch`、Plotly 第二个图例），库不加功能（原则 4）；
+  `AxesFormatter.legend` 只调整已有的图例；
+  柱状图的每个格子不单独设样式（同一系列外观一致，图例才能对得上）；
+- ⑳ 堆叠时正负分开叠（Plotly `barmode='relative'`，matplotlib 按同样规则算底部）；
+- ㉑ 新版式 `'bars'`：图例图内右上、无框；Y 轴不预设格式；X 是类别轴，不画次刻度；默认尺寸 (10, 8)。
+
+**结果**
+
+- ㉒ 一张 `'main'` 图；`DrawnFigure.artist(key)` 放宽匹配：曲线比样品号，柱比系列键（样品号 / 通道号 / 组名，一张图里只有一种），不另加方法；
+- ㉓ 不支持滑块：画完柱状图后调用两个滑块入口都明确报错（按版式 `'bars'` 识别）；
+- 画失败时沿用 `_render`：关掉这次建的图，`self.figures` 保持上一次的结果（原则 12）。
+
+**测试期望（11-25 用户、第三方确认，12 条；先写计算层 1、2，用户看 diff 后再写计划层和后端）**
+
+1. `test_reduce_statistics`：一列 `[1, NaN, 3, 5]` 手算：mean 3、median 3、first 1、last 5、max 5、min 1、std 2、sem 2/√3；
+   单个有效值的 std 为 NaN、全 NaN 为 NaN；`float32` 输入得双精度；名字、单位、样品号不变；函数返回非标量报错；
+2. `test_group_reduce`：样品同属两组；**行数不等**：A `[1, 9]`、B `[3]`，`within='max'` 先得 9、3，组均值 6、SEM 3
+   （抓「原始行混在一起统计」）；`within=None` 遇多行报错；名字是组名，单位是列标题；
+3. `test_bar_table_layouts`：4 种组合的类别、系列键（`channels=[3, 1]` 保留原通道号）、高度、标签、顺序；
+   `plotrange`：`[1, 3, 100]`、`plotrange=2, reduce='mean'` 柱高 2（先截行再汇总）；
+4. `test_bar_entry_checks`：维度非法、无分组写 `'group'`、通道重复、`width=NaN` 或越界、`reduce=None` 遇多行、
+   非分组 std / sem 不配 mean、分组写误差字典、负误差、字典键不在 `channels`、没有可画的误差棒、`'right'` / `lines` / `scatter`、
+   `plot()` 写 `bars`、柱状图后接滑块；
+5. `test_bar_errors`：两种模式的 std / sem 数值；误差通道按行对齐（`[NaN, 10]` / `[9, 1]` + `first` → `10 ± 1`；`max` 取选中行；对应行缺就省略）；
+   部分缺误差的系列无端帽；
+6. `test_bar_missing_and_stack`：缺数据保留槽位；堆叠正负分开、跳过 NaN；
+7. `test_bar_positions`：matplotlib 并排偏移、堆叠底部（含负值）；Plotly 的 `barmode`、`bargap`、`bargroupgap`；
+8. `test_bar_category_ticks`：同名样品不合并、刻度位置与文字（先 `canvas.draw()`）、X 无次刻度；
+9. `test_bar_styles`：三种系列维度的颜色规则、`styles` 单个 / 字典、分组 `color` / `hatch`、优先级、两个后端纹理跟随 `edge_color`、图例色块带纹理；
+10. `test_bar_formatter_combinations`：原生回调与 `make_bar_formatter` 先后组合、三种写法、磅换像素、缺误差系列设 `capsize` 后仍无端帽；
+    7～10 里**保留一次 Plotly 实际渲染断言**（Kaleido，同一张黑白样图）：实际柱位置（含缺失格、整列缺失时相邻柱不挪位）、
+    缺失误差处没有横杠、回调改完纹理后图例跟着更新；
+11. `test_bar_y_title_and_legend`：Y 轴标题三种情况、`legend_title`、图例条目顺序与文字；
+12. `test_bar_result_and_failure`：`artist(key)` 按原通道号、失败关图并保留上次结果。
+
+另：`BarStyle` 在 style 测试里加一条，查 `edge_width`、`error_width`、`capsize` 和纹理词名（整组 `width` 在第 4 条）。
 
 每一步先写测试（一类行为一条），用户看 diff。用户手头暂时没有柱状图、散点图的真实数据：做的时候用 conftest 的小数据，
 真实数据到手后再按实际格式核对 4.4 的「通道 = 标签」理解。
+
+### 4.8 统一绘图入口 `plot`（2026-11-24，用户同意）
+
+**问题。** 方法名混了两个维度：折线按分图方式拆成 `plot_multiline` / `plot_groups` / `plot_xy`，散点合成一个 `plot_scatter`
+（分图方式由「有没有分组」暗中决定），`plot_dual_y` 又是一种轴结构；只有部分方法能在调用时改通道，回调参数在每个方法里重复。
+
+**用户的思路。** 三件相对独立的事：**成员**（全部 / 分组 / 每个样品）、**轴结构**（单 Y / 双 Y）、**画法**（线 / 散点 / 柱）。
+画法是每条曲线的属性（计划层的 `LineSpec` / `ScatterSpec`、后端按曲线类型分派回调都已如此），所以同一张图可以混画法，
+如「实测点 + 拟合线」。组合起来别扭的先不做（用户：不必死板拆分，目标是逻辑清晰、功能完善）。
+
+**接口。** 曲线类绘图只留一个方法（用户定：统一方法名，旧名删掉，脚本和测试一起改）；柱状图是一张表，另有 `plot_bars`。
+
+```python
+plotter.plot(
+    layers=None,            # Layer 或 Layer 列表；None = [Layer(构造时的 channel_x, channel_y)]
+    by='all',               # 'all' 全部一张 | 'group' 按分组 | 'sample' 每样品一张
+    merge_groups=False,     # by='group' 时：False 每组一张，True 所有组一张（重复样品只画一次）
+    formatters=None,        # AxesFormatter（作用于左轴）或 {'left': AxesFormatter, 'right': AxesFormatter}
+    figure_formatter=None,
+    legend_title='auto',    # 'auto'：一个样品画多层时是 '{name}'，否则不加；也可写字符串或 None
+)
+
+Layer(x, y, kind='line', side='left', neglog_x=False, neglog_y=False)   # 'line' | 'scatter'；'left' | 'right'
+```
+
+实现时补充（2026-11-24）：`Layer` 的 `x`、`y` 可以不写，`plot` 补成构造时的 `channel_x` / `channel_y`
+（`plot(Layer(kind='scatter'))`、`plot(Layer(neglog_y=True))` 不必重复通道；计划层 `plan_figures` 仍要求写明）。
+
+| 原来 | 现在 |
+|---|---|
+| `plot_multiline()` | `plot()` |
+| `plot_groups(merge_groups=True)` | `plot(by='group', merge_groups=True)` |
+| `plot_scatter()` | `plot(Layer(X, Y, kind='scatter'))`（有分组时原来自动按组，现在写 `by='group'`） |
+| `plot_xy(channel_x=1, channel_y=2)` | `plot(Layer(1, 2), by='sample')` |
+| `plot_dual_y(left=(0, 1), right=(2, 3), plot_kinds=('scatter', 'line'))` | `plot([Layer(0, 1, kind='scatter'), Layer(2, 3, side='right')], by='sample')` |
+| 回调散参数 `axes_formatter=…, lines_formatter=…` | `formatters=AxesFormatter(axes=…, lines=…)`；右轴 `{'right': AxesFormatter(...)}` |
+
+**按零件推出的规则**（原来按方法写死的，现在由 `by` 和图层决定，结果与原来各方法一致）：
+
+- 成员：`'all'` 画全部样品、不看分组；`'group'` 没有分组报错，规则同原 `plot_groups`（分离同样品同色，合并时归第一个组、用组首色）；
+  `'sample'` 每样品一张，key 是样品号，不看分组；
+- 颜色：`'sample'` 不按色带取色（版式预设或后端默认色，同原 `plot_xy` / `plot_dual_y`），其余按色带；
+- 图例标签：一层时是样品名；一个样品画多层时是各层 Y 通道的单位（同原双 Y 轴）；
+- 版式预设：有右侧图层 → `'dual_y'`；`by='sample'` → `'xy'`；其余 → `'multiline'`；默认尺寸 `'all'` (10, 8)、`'group'` (16, 12)、`'sample'` (12, 8)；
+- 负对数：每层自己的 `neglog_x` / `neglog_y` 决定数据取绝对值；刻度补负号按轴，规则如下：
+  - 共用的 X 轴：**左侧**各层的 `neglog_x` 必须一致，并决定 X 刻度的负号；右侧图层的 `neglog_x` 只变换自己的数据，
+    可以与左侧不同（同原 `neglog_x2`）；
+  - Y 轴按左右侧分别校验：同一侧各层的 `neglog_y` 必须一致，左右两侧互不影响；
+  - 同一根轴上的数据量纲、单位相容由调用方保证（与原双 Y 轴的约定相同，秒和毫秒混用不报错）；
+- 轴标题：X 取第一个左侧图层的 X 单位，左 / 右 Y 取该侧第一个图层的 Y 单位；
+- 取结果：曲线按「样品 → 图层」的顺序生成，同一样品的各层顺序与输入的 `layers` 一致，`DrawnFigure.artists` 按这个顺序；
+  `artist(样品号, 轴)` 保持现在的行为，返回这根轴上该样品的第一个对象（同轴多层时取全部用 `artists`）。
+
+**入口校验**（明确报错）：
+
+- 空图层列表；只有右侧图层（至少一个左侧图层，共用 X 轴的信息始终从左侧取）；
+- `by` 不是 `'group'` 却写了 `merge_groups=True`；`by='group'` 但没有分组（原 `plot_groups` 无分组时退回画全部样品，
+  现在 `by='group'` 是明确的意思，不再悄悄退回）；
+- `by`、`kind`、`side` 写了不认识的值；同一根轴上负对数写法不一致（见上）；右轴配了图例回调（同现在）。
+
+**先不开放的组合**（明确报错，有实际用途再开放）：`by='all'` / `'group'` 画多个图层（多样品时颜色和图例的规则未定）；
+右侧图层只能配 `by='sample'`。
+
+**回调的作用范围**：线条、散点回调只收到对应轴、对应画法的对象；坐标轴回调按轴分，但 **X 轴两侧共用**，
+任一侧的坐标轴回调改 X 都作用在同一根 X 轴上（与现在双 Y 轴相同）。
+
+**范围。** 后端不动（只认 `FigureSpec` 和曲线）；计划层四个 `plan_*_figures` 合成一个 `plan_figures`；`DataPlotter` 只留 `plot`；
+`AxesFormatter`、`Layer` 从 `plotlib` 导出；`plot_spec` 加 `Layer`；脚本、README、测试、API 文档登记同步改。
 
 ## 5. 路线与进度
 
@@ -325,7 +504,7 @@ Plotly 没有「轴线放在数据值上」的功能（只能在范围写死时�
 | 6 | 绘图计划与后端（6.1 ~ 6.8）：计划 → 两个后端 → 统一入口；之后第三方审查修复、`TickStyle`、样式对象化 | 架构，大 | ✅ 2026-11-20，520（`55576fb`） |
 | 7 | 补接口缺口：`Dataloader`、逐样品遍历、`sort_columns`；之后全面评审、1.0 发布前复审 | 逻辑，小 | ✅ 2026-11-20，564，**plotlib 1.0.0**（`5b14df5`） |
 | 1.0 之后 | 文档字符串 numpydoc + API 文档；Plotly 对数轴格式；API 文档发布与同步；DataSet 列视图校验、列位置索引、使用时自动检查；测试精简 | 逻辑 + 文档 | ✅ 2026-11-23，573（`0098a2f`） |
-| **柱 / 散** | **第 4 节：样式对象与 spec 拆分、柱状图、散点映射** | 架构 + 逻辑 | ⏳ 第一步 ✅（573，未提交）；第二步柱状图未开始 |
+| **柱 / 散** | **第 4 节：样式对象与 spec 拆分、柱状图、散点映射** | 架构 + 逻辑 | ⏳ 第一步 ✅、统一入口 `plot` ✅、第二步柱状图 ✅（609，未提交）；第三步散点映射未开始 |
 | 8 | 让脚本可复现（见下） | 逻辑，小 | 未开始 |
 | 9 | 工具收敛（Tk / Qt）：先由用户决定维护哪一套，再提取共用逻辑层 | 待定 | — |
 | 10 | 桌面程序：把 `learning/gui` 学到的内容做成真正的应用 | 待定 | — |
@@ -1552,6 +1731,118 @@ backends/matplotlib_backend.py      backends/plotly_backend.py
     只写一端时 matplotlib 没有「单侧自动」，写了的一端固定、另一端按当时的数据算。
 - 再补 1 项（低优先级）：`complex64` 的 `3e38+3e38j` 取模在单精度里溢出成 inf（`order=-1` 应得约 2.12e38）→
   取模前用 `np.promote_types` 提升到至少双精度（复数 `complex128`、实数 `float64`，精度更高的不降）。
+
+#### 统一绘图入口 `plot`（4.8，2026-11-24，596 passed）
+
+- 设计经用户和第三方审阅确认（4.8 写明了共用 X 的负号例外、入口校验、同轴多层取结果、空分组改为报错）。
+- `plot_spec`：新增 `Layer(x, y, kind, side, neglog_x, neglog_y)` 和 `Members`；`AxesFormatter`、`Layer` 从 `plotlib` 导出，
+  API 文档新增「图层与按轴回调」一节（放在「样式对象」之后，文档同步脚本仍把新的样式对象放进「样式对象」节）。
+- `plan`：四个 `plan_*_figures` 合成 `plan_figures(dataset, groups, layers, by=, merge_groups=, plotrange=, legend_title='auto')`；
+  分图规则（不分组 / 分离 / 合并）原样复用，`make_curve` 改成按图层返回一个样品的各条曲线；入口校验集中在 `_check_layers`；
+  右侧 `neglog_x` 只取绝对值，图上不再记 `'x2'`（后端本来就跳过它）。
+- `DataPlotter`：五个旧方法换成 `plot(layers, by, merge_groups, formatters, figure_formatter, legend_title)`；默认尺寸按 `by`；
+  没写通道的图层补成构造时的通道。后端没动。
+- 迁移：测试和脚本用 AST 脚本机械转换（旧参数 → `Layer` / `by` / `AxesFormatter`），没写 `merge_groups` 的 6 处散点调用按
+  是否用分组绘图器手工补 `by='group'`；字符串参数化的方法名、空分组回退（改为报错）、`'x2'` 断言（改为断言数据与刻度归属）手改；
+  脚本里丢失的一行注释补回，过长的调用拆成多行。README、tests/README、GLOSSARY、文档字符串示例同步。
+- 新测试：计划层混画法、规则推导（合法组合循环）、入口校验（13 种写错循环）；跨后端的图层顺序、`artist()` 取第一层、
+  回调作用范围（含右侧坐标轴回调改共用 X）；绘图器默认尺寸补 `by='sample'`。
+- 复审 4 项（仍 596 passed）：① 回调配置曾静默忽略（轴名写错、单轴图给 `'right'`）或画到一半才报错（右侧图例回调在左侧回调执行后才报）
+  → `plot()` 在计划之后、渲染之前用 `_check_formatters` 统一检查，报错时没有回调执行、不留图窗（原「右侧图例报错」测试扩成这一条）；
+  ② 左右图层交错时 matplotlib 图例先左后右、Plotly 按绘制顺序 → 后端不动，`FigureSpec.curves` 的说明把绘制顺序和图例顺序分开写；
+  ③ `plan_figures` 在非分组模式也校验分组 → 只在 `by='group'` 时解析、校验；④ `legend_title` 说明改成「按图有没有自己的名字替换」
+  （单样品、单分组只出一张图也替换，`'all'` 和合并模式原样保留）。
+
+#### 第二步柱状图：计算层（2026-11-25，598 passed）
+
+- 设计：4.7 的细节与用户、第三方逐项确认后写定（统计放进 processor，计划层只排布；纹理用词名；Y 轴标题按第三方建议；图例一个系列一个条目）。
+- `processor.py`：共用的一维汇总 `reduce_values` / `check_reduction`（类型 `Reduction`）：先提升到至少双精度、忽略 NaN；
+  `std` 为 `ddof=1`、少于 2 个有效值为 NaN；`None` 表示至多一个有效值，多于一个报错并指出样品和单位；复数报错（先取模）；
+  函数返回非标量报错。新增 `DataTransformer.Reduce(how, indicies, column, extended)`：每列一个值，名字、单位、样品号不变，来源位置照记。
+- `group.py`：新增 `Group.reduce(how='mean', within=None, channels=None)`：先样品内 `within`、再组内跨样品 `how`，
+  每组一个新样品（样品号按分组顺序、名字是组名），第 *i* 个通道对应 `channels[i]`。
+- 测试：`test_reduce_statistics`、`test_group_reduce`（行数不等的 A `[1, 9]`、B `[3]`，`within='max'` 得组均值 6、SEM 3），修复前均失败。
+  写测试时碰到的正是「取出几列后通道号重排」：样品 3 的 E 和样品 5 的 F 取出后都成了通道 0、单位冲突，计划层带原通道号走的必要性得到确认。
+- 第三方检查后补（并进 `test_reduce_statistics`，修复前失败）：① 汇总函数的返回值必须是实数标量（字符串、None、复数报错，NaN 可以），
+  `within` 用了坏函数在第一步就报；② `Reduce` 逐列先算成一个值再组装，来自不同数据集、长度不同的 `Column` 也能汇总；
+  ③ `extended=True` 返回的累计数据集可能有多行，文档写明；④ 数值稳健：`std` 总是除以最大的模再算（`[1e200, 2e200]` 不上溢，
+  `[1e-200, 2e-200]` 不下溢成 0），`mean` / `median` 只在上溢时缩放重算（常规数据结果逐位不变）。
+
+#### 第二步柱状图：计划层（2026-11-25，600 passed）
+
+- `plot_spec.py`：`BarStyle(color, edge_color, edge_width, hatch, error_color, error_width, capsize)`；
+  `BarSpec(CurveBase)`（`key`、`categories`、`heights`、`errors`、`caps`、`series_index`、`series_count`、`mode`、`width`、`style`）；
+  类型 `BarDimension`、`BarMode`，版式加 `'bars'`，`Curve` 加上 `BarSpec`。
+- `style.py`：纹理词表 `HATCHES`（7 种 + `'none'`）、`check_hatch`、`check_bar_style`；`group.py`：分组配置收 `hatch`，加 `Group.hatch()`。
+- `processor.py`：`reduce_with_error`：误差通道按原行对齐（选行类汇总取同一行的误差，其余对有效行的误差用同一个汇总），误差有负数报错。
+- `plan.py`：`plan_bars` 返回一张 `'main'`、版式 `'bars'` 的 `FigureSpec`。入口校验先于取数；`plotrange` 用截过行的副本
+  （分组模式在副本上重建同一套 `Group`）；不用分组时逐格调 `reduce_values` / `reduce_with_error`，用到分组时调两次 `Group.reduce`；
+  表按「成员 × 通道」算好再按 `series` 转置；系列配色、分组样式与 `styles` 合并；Y 轴标题按 ⑲。
+- 测试：`test_bar_table_layouts`（4 种组合、原通道号、`plotrange`、Y 轴标题、缺数据保留位置、样式优先级）、`test_bar_errors`
+  （两种 std / sem、误差通道按原行对齐的 first / max / mean、端帽、字典没写的通道）。这一轮先写了 `plan_bars` 再写测试，
+  两条测试一次通过；期望值都按手算写出，没有照实现的输出抄。
+- `Curve` 加上 `BarSpec` 后，测试里直接读 `curve.x` / `sample_idx` 的地方类型检查报错（34 处）：conftest 加 `xy_curves` / `bar_specs`
+  两个辅助函数（断言画法并收窄类型），各处改用它们。
+- 第三方检查后补（并进现有用例，修复前均失败）：
+  ① 分组时柱高和误差调了两次 `Group.reduce`，`within` 是函数时执行两遍，两批值可能不同 → `Group.reduce` 的 *how* 可写列表，
+  每个样品只汇总一次、各种统计共用（`mean, sem = groups.reduce(['mean', 'sem'], within=...)`），`plan_bars` 调一次；
+  ② 汇总后的误差也校验：NaN 表示没有误差，其余必须有限且非负（原始误差都合法时函数也可能汇总出负数、无穷大）；
+  ③ 误差路径按名字分派前先分清名字和函数，不可哈希的可调用对象（普通 dataclass 实例）不再报错；
+  ④ 系列键由维度直接推出，`styles` 在汇总前校验，写错时汇总函数一次都不执行；
+  ⑤ 数值：`std` 改为常规量级直接算、最大的模超出 1e±150 才缩放（上一轮总是缩放，`[1e15, 1e15 + 1]` 得 0.7109，应为 0.7071）；
+  `mean` / `median` 在结果不有限（含正负无穷相加的 NaN）时缩放重算。
+
+#### 第二步柱状图：入口和两个后端（2026-11-25，609 passed）
+
+- `plot_spec.py`：`AxesFormatter` 加 `bars`；`DrawnFigure.artist(key)` 曲线比样品号、柱比系列键；库默认 `DEFAULT_BARS`
+  （描边色黑、宽 0，纹理跟随它；无纹理；黑色误差棒 2 磅；端帽 0）。`layouts.py`：版式 `'bars'`（库默认图例：图内右上、无框；Y 不预设格式）。
+- `style.py`：`translate_bar_style`（matplotlib 的 bar / 误差棒参数；Plotly 的 marker / pattern / error_y，磅按 dpi 换像素，
+  写了描边色时纹理色一起写）。
+- matplotlib 后端：`_draw_bars` 按系列序号算并排偏移，`stack_bottoms` 算堆叠底部（正负分开、NaN 不累加），误差棒在柱的末端；
+  类别刻度用数字位置 + 文字，X 轴不画次刻度；`bars` 回调收 `BarContainer`，回调后重建图例（图例色块是快照）。
+- Plotly 后端：`go.Bar`，X 是数字位置；`barmode` 'group' / 'relative'、`bargap = 1 - width`、`bargroupgap = 0`；
+  `tickvals` / `ticktext`，X 轴 `minor.ticks=''`；纹理 `fillmode='overlay'`。
+- `formatters.py`：`make_bar_formatter`（填充、描边、纹理、误差棒颜色和线宽；不收 `capsize`；只写纹理时 Plotly 纹理色取当前描边色）。
+- `plotter.py`：`plot_bars`（`channels` 不写取 `channel_y`；回调在汇总前检查；默认尺寸 (10, 8)）；`_check_formatters` 加画法检查
+  （柱状图写 `lines` / `scatter` / `'right'`、曲线图写 `bars` 都报错）；两个滑块入口遇到 `'bars'` 版式报错。
+- 导出 `BarStyle`、`make_bar_formatter`；API 文档自动登记后手动挪到「样式对象」「格式化回调」里合适的位置。
+- 测试：新文件 `tests/test_bars.py`（测试 4、6～12，8 条）先写、确认导入失败后实现，一次通过；为防「一次通过是断言区分不开」，
+  反向验证了两条：去掉「缺误差的系列不画端帽」后 Kaleido 渲染出 8.33 px 的横杠（测试会失败）；Plotly 类别轴确实把同名样品画到同一格。
+  `test_style.py` 加 `test_translate_bar_style`。`bar_data` 挪到 conftest 共用。
+- 第三方完整检查后补（并进现有用例，修复前均失败）：
+  ① Plotly 堆叠时后一段盖住前一段伸进来的误差棒 → 堆叠时前面的系列 `zorder` 更高（实测堆叠顺序不变；并排不设，
+  不同 zorder 的柱不再排成一组）；补 Kaleido 断言（SVG 里前面系列的误差棒在最后一组柱之后）；
+  ② 图例漏项：Plotly 只有一个系列时整块图例不显示（写了标题也看不到）→ 柱状图 `showlegend=True`；matplotlib 自动收集
+  跳过 `'_'` 开头和空的标签 → 柱状图按系列显式给句柄和标签，空标签显示色块、文字为空；
+  ③ 无穷大的柱高通过了校验、两个后端都画不出 → 计划层报错（带样品 / 组和通道），NaN 仍表示缺数据；
+  ④ matplotlib 画的时候端帽线宽是默认 1 磅、竖线是 `error_width` → `capthick` 同取 `error_width`，与回调一致；
+  ⑤ `DrawnFigure.artist(sample_idx=0)` 回归 → 保留 `sample_idx` 关键字（与 `key` 二选一）；
+  ⑥ `sem` 在 `[-1.5e308, 1.5e308]` 上溢（标准差本身超出范围）→ 缩放路径里先除以 √n 再乘回缩放因子。
+- 曲线图的图例也改成显式生成（用户定，611 passed）：matplotlib 的 `_make_legend` 不再用 `get_legend_handles_labels` 自动收集，
+  按计划给句柄和标签（先左轴、后右轴，各侧按绘制顺序），`'_'` 开头和空的样品名不再漏；Plotly 所有版式 `showlegend=True`，
+  只有一条曲线时也显示图例。行为变化：回调里另加的带标签对象不再自动进图例（原来只在线条 / 散点回调触发重建时才进，本来就不一致），
+  要加用图例回调或整图回调；写进 `DataPlotter` 的说明。新测试 `test_legend_lists_every_curve`（两个后端，修复前失败）。
+- 第三方集成审查后补（与 `adca55c` 对拍 16 个曲线迁移场景一致；新断言修复前均失败，611 passed）：
+  ① Plotly 堆叠误差棒：上一轮的 `zorder` 只保住向上伸的误差棒，上段向下伸进下段时又被盖住（Plotly 一个 trace 的柱和误差棒画在一组，
+  调层次只能顾一头）→ 堆叠时误差棒改画在单独的透明散点 trace 上（散点总在柱之上），位置是每段末端；柱的 trace 上记
+  `_plotlib_errors`，`make_bar_formatter` 改误差棒时一起改；并排时仍在柱的 `error_y`。堆叠底部的计算挪到 `backends/bar_layout.py` 两后端共用。
+  Kaleido 断言改成上下两个方向（3 ± 2 向上、上段 1 ± 2 向下），两条误差棒都在最后一组柱之后；
+  ② matplotlib 回调改了名字图例不跟（显式图例用的是计划里的标签）→ 句柄仍显式收集，标签在重建时读对象当前的；
+  空标签加到坐标轴上会被 matplotlib 改成 `'_child1'`，画完把计划的标签写回去。曲线图同样适用，补了线条回调改名的断言；
+  ③ 分组柱状图加 `plotrange` 时复制、重建 `Group`，自定义字段是只读映射就失败 → `Group.reduce` 加 `rows`，直接用原分组；
+  ④ `Reduce` 结果的通道号会重新编号：文档写明并给出串接 `plot_bars` 的示例；`hatch` 成为样式字段后旧配置里的后端写法（`'///'`）建组时报错：
+  报错信息提示改用标准词，`Group` 说明里写明（接口变更）；
+  ⑤ `[inf, -inf]` 求均值先变 NaN、被当成缺数据跳过 → 汇总之前检查要用到的数据（含误差通道）有没有无穷大。
+- 第三方复验后补（新断言修复前均失败，611 passed）：
+  ① Plotly 堆叠 + 误差棒，点图例隐藏一段后 Plotly 重新堆叠，单独画的误差棒留在原处 → 这版只保证静态显示，
+  带误差的堆叠图关掉图例点击显隐（`legend.itemclick` / `itemdoubleclick = False`）；不带误差的堆叠图不受影响。
+  同步显隐要写自定义 JavaScript（第 2 节「暂不做」），有实际需要再议；
+  ② matplotlib 图例与 `adca55c` 对拍有两处回归：坐标轴回调画的参考线不进图例、`'_nolegend_'` 显示成文字。审查建议曲线图退回自动收集，
+  但那样 `'_S0'`、空样品名又会漏（用户 11-25 要求改的原因）→ 统一规则：计划的曲线都列（文字读当前标签）；回调改成 `'_'` 开头的不列
+  （matplotlib 惯例）；回调另加的带标签对象照 matplotlib 规则收集，排在计划曲线之后（进图例的时机与旧版相同：线条 / 散点 / 柱状图回调后重建时）；
+  ③ 自定义 `within` 让两个样品分别得到 +inf、-inf，分组求均值得 NaN、整组被跳过 → `Group.reduce` 在两步之间检查，样品汇总值是无穷大就报错。
+- 复验回归：回调 `set_label(None)`（matplotlib 接受的值）后重建图例对 None 调 `startswith` 报错、整张图画不出 → None 也不列（与旧版一致），
+  空字符串仍显示色块；断言并进 `test_legend_lists_every_curve`（修复前失败）。
 
 ---
 

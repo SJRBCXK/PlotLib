@@ -19,7 +19,7 @@ from plotlib.formatters import (
     make_legend_formatter,
     make_lines_formatter,
 )
-from plotlib.plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle
+from plotlib.plot_spec import AxesFormatter, AxisStyle, FrameStyle, LegendStyle, LineStyle
 from plotlib.plotter import DataPlotter
 
 PX = 100 / 72       # 默认 dpi 100 时 1 磅的像素数（Plotly 的线宽、字号按它换算；不是后端画的图用默认 dpi）
@@ -102,7 +102,7 @@ def test_axes_custom_receives_ax_and_fig(fig_ax):
 def test_axes_formatter_works_with_plotter(eis_dataset):
     """集成：作为 axes_formatter 交给 DataPlotter（eis_bode.py 的用法）。"""
     fmt = make_axes_formatter(x=AxisStyle(scale='log', format='{x:.1e}'))
-    ax = DataPlotter(eis_dataset).plot_multiline(axes_formatter=fmt).figures['main'].axes['left']
+    ax = DataPlotter(eis_dataset).plot(formatters=AxesFormatter(axes=fmt)).figures['main'].axes['left']
     assert ax.get_xscale() == 'log'
 
 
@@ -166,7 +166,7 @@ def test_plotly_lines_style():
 def test_plotly_lines_color_on_markers_only_trace():
     """
     纯散点（mode='markers'）看得见的是点：LineStyle 的 color 同时改点的颜色（与 matplotlib 的 set_color 一样，点跟着线色）。
-    回归（第三方审查 G）：曾只改隐藏的线色，点仍是原来的颜色。
+    散点颜色回调更新可见标记的颜色。
     """
     go = pytest.importorskip("plotly.graph_objects")
     trace = go.Figure(go.Scatter(x=[1, 2], y=[3, 4], mode='markers', marker_color='blue')).data[0]
@@ -378,8 +378,9 @@ def test_plotly_one_side_limit_after_other_side_render(eis_dataset, render):
 
     axes_fmt = combine_formatters(make_axes_formatter(x=AxisStyle(limits=(50, None)), backend="plotly"),
                                   make_axes_formatter(x=AxisStyle(limits=(None, 80)), backend="plotly"))
-    fig = DataPlotter(eis_dataset, channel_x=0, channel_y=1, backend='plotly') \
-        .plot_multiline(axes_formatter=axes_fmt).figures['main'].fig
+    fig = DataPlotter(eis_dataset, channel_x=0, channel_y=1, backend='plotly').plot(
+        formatters=AxesFormatter(axes=axes_fmt),
+    ).figures['main'].fig
     low, high = render(fig).layout.xaxis.range
     assert low <= 1 and high == pytest.approx(80)       # eis_dataset 的频率是 1 ~ 100
 
@@ -404,8 +405,9 @@ def test_plotly_log_limits_in_steps_after_render(eis_dataset, render):
 
     axes_fmt = combine_formatters(make_axes_formatter(x=AxisStyle(scale='log'), backend="plotly"),
                                   make_axes_formatter(x=AxisStyle(limits=(0.5, 500)), backend="plotly"))
-    fig = DataPlotter(eis_dataset, channel_x=0, channel_y=1, backend='plotly') \
-        .plot_multiline(axes_formatter=axes_fmt).figures['main'].fig
+    fig = DataPlotter(eis_dataset, channel_x=0, channel_y=1, backend='plotly').plot(
+        formatters=AxesFormatter(axes=axes_fmt),
+    ).figures['main'].fig
     full_axis = render(fig).layout.xaxis
     assert [10 ** v for v in full_axis.range] == pytest.approx([0.5, 500])
 
@@ -428,8 +430,7 @@ def test_plotly_axis_bounds_after_render(eis_dataset, render, axis, kwargs, expe
     from plotlib.plotter import DataPlotter
 
     plot = DataPlotter(eis_dataset, channel_x=0, channel_y=1, backend='plotly')
-    fig = plot.plot_multiline(
-        axes_formatter=make_axes_formatter(backend="plotly", **kwargs)).figures['main'].fig
+    fig = plot.plot(formatters=AxesFormatter(axes=make_axes_formatter(backend="plotly", **kwargs))).figures['main'].fig
     full_axis = render(fig).layout[axis]
     low, high = (10 ** v if full_axis.type == "log" else v for v in full_axis.range)
 
@@ -456,10 +457,9 @@ def test_combine_formatters_runs_in_order_and_skips_none(fig_ax):
 
 def test_legend_formatter_works_with_plotter(eis_dataset):
     """集成：作为 legend_formatter 交给 DataPlotter——修复前这条路径从没跑通过。"""
-    ax = DataPlotter(eis_dataset).plot_multiline(
-        legend_formatter=make_legend_formatter(
+    ax = DataPlotter(eis_dataset).plot(formatters=AxesFormatter(legend=make_legend_formatter(
             LegendStyle(font_size=7),
-        )).figures['main'].axes['left']
+        ))).figures['main'].axes['left']
     assert all(t.get_fontsize() == 7 for t in ax.get_legend().get_texts())
 
 

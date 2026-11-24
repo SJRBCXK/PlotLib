@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 from plotlib import Dataloader, DataPlotter
 
 data = Dataloader(columns_per_sample=6).load_data("experiment.csv")
-plotter = DataPlotter(data, channel_x=0, channel_y=1).plot_multiline()
+plotter = DataPlotter(data, channel_x=0, channel_y=1).plot()
 plt.show()
 ```
 
@@ -80,14 +80,30 @@ for sample in selected:
 
 ## 绘图
 
-| 方法 | 用途 | 默认尺寸（英寸） |
-| --- | --- | --- |
-| `plot_multiline()` | 在同一坐标系中绘制所有样品 | 10 × 8 |
-| `plot_groups()` | 按组绘制。`merge_groups=True` 时将各组合并到同一张图 | 16 × 12 |
-| `plot_xy()` | 每个样品一张图，显示两个通道之间的关系 | 12 × 8 |
-| `plot_dual_y()` | 每个样品一张双 Y 轴图，左右曲线共用 X 轴 | 12 × 8 |
+曲线类的图都用 `plot()` 绘制，由两样东西组合：
 
-`DataPlotter(figsize=(宽, 高), dpi=100)` 可统一指定图尺寸和绘图分辨率。`plotrange` 可限制每条曲线使用的数据点数。四种绘图方法均返回绘图器自身，绘图结果通过 `plotter.figures` 获取，每项是一个 `DrawnFigure`。例如，`plot_multiline()` 的结果可通过 `plotter.figures["main"].fig` 获取。
+- `by`：哪些样品进哪张图；
+- `layers`：每个样品画哪几条。一个 `Layer(x, y, kind, side)` 写取哪两个通道、画成折线（`'line'`）还是散点（`'scatter'`）、挂左轴（`'left'`）还是右轴（`'right'`）。不写通道时用 `DataPlotter` 构造时的 `channel_x`、`channel_y`。
+
+| `by` | 用途 | 图的键 | 默认尺寸（英寸） |
+| --- | --- | --- | --- |
+| `'all'`（默认） | 在同一坐标系中绘制所有样品 | `'main'` | 10 × 8 |
+| `'group'` | 按组绘制。`merge_groups=True` 时将各组合并到同一张图 | 组名或 `'main'` | 16 × 12 |
+| `'sample'` | 每个样品一张图，如显示两个通道之间的关系 | 样品号 | 12 × 8 |
+
+```python
+from plotlib import DataPlotter, Layer
+
+plotter = DataPlotter(data, channel_x=0, channel_y=1)
+plotter.plot()                                      # 全部样品一张折线图
+plotter.plot(Layer(kind="scatter"))                 # 同样的两个通道画成散点
+plotter.plot(Layer(1, 2), by="sample")              # 每个样品一张：通道 1 对通道 2
+plotter.plot([Layer(0, 1, kind="scatter"), Layer(0, 3)], by="sample")   # 每个样品：实测点 + 拟合线
+```
+
+一个样品画多个图层时，每张图只能有一个样品（`by='sample'`），曲线标签是各层的单位，图例标题是样品名。
+
+`DataPlotter(figsize=(宽, 高), dpi=100)` 可统一指定图尺寸和绘图分辨率。`plotrange` 可限制每条曲线使用的数据点数。`plot()` 返回绘图器自身，绘图结果通过 `plotter.figures` 获取，每项是一个 `DrawnFigure`。例如，`by='all'` 的结果可通过 `plotter.figures["main"].fig` 获取。
 
 ### 分组绘图
 
@@ -102,7 +118,7 @@ groups = Group(data, {
 })
 
 plotter = DataPlotter(data, groups=groups, channel_x=0, channel_y=1)
-plotter.plot_groups(merge_groups=False, legend_title="{name}")
+plotter.plot(by="group", legend_title="{name}")
 ```
 
 分组线型适用于折线，标记适用于折线和散点，颜色适用于所有图形类型。分组颜色会应用到组内所有样品。
@@ -111,15 +127,19 @@ plotter.plot_groups(merge_groups=False, legend_title="{name}")
 ### 双 Y 轴和图例
 
 ```python
-DataPlotter(data).plot_dual_y(
-    left=(0, 2),    # 左侧曲线的 X、Y 通道
-    right=(3, 4),   # 右侧曲线的 X、Y 通道
+from plotlib import AxesFormatter, AxisStyle, DataPlotter, Layer, make_axes_formatter
+
+DataPlotter(data).plot(
+    [Layer(0, 2),                   # 左侧曲线的 X、Y 通道
+     Layer(3, 4, side="right")],    # 右侧曲线的 X、Y 通道
+    by="sample",
+    formatters={"right": AxesFormatter(axes=make_axes_formatter(y=AxisStyle(scale="log")))},
 )
 ```
 
-双 Y 轴图的两条曲线可以取自不同的 X 通道，这些通道的数据应能在同一 X 轴上解释。默认将左、右 Y 轴及其对应曲线分别设为红色和蓝色，整图使用一个图例。可通过 `right_axes_formatter` 或 `right_lines_formatter` 单独设置右侧，图例使用 `legend_formatter`。
+双 Y 轴图的两条曲线可以取自不同的 X 通道，这些通道的数据应能在同一 X 轴上解释。默认将左、右 Y 轴及其对应曲线分别设为红色和蓝色，整图使用一个图例。回调按轴打包成 `AxesFormatter`，用 `{"left": ..., "right": ...}` 分别给两侧；图例回调只能放在左侧。X 轴两侧共用，任一侧改 X 都作用在同一根轴上。
 
-四种绘图方法均支持 `legend_title`。分组独立绘制时，`{name}` 替换为组名。`plot_xy()` 和 `plot_dual_y()` 将它替换为样品名。多线图和合并分组图会原样显示传入的文本。双 Y 轴图默认使用样品名作为图例标题，传入 `legend_title=None` 可隐藏标题。
+`legend_title` 中的 `{name}` 在分组独立绘制时替换为组名，每个样品一张图时替换为样品名；多线图和合并分组图会原样显示传入的文本。默认 `'auto'`：一个样品画多个图层（如双 Y 轴图）时使用样品名，否则不加标题；传入 `None` 可隐藏标题。
 
 ## 样式与格式化
 
@@ -163,7 +183,7 @@ Plotly 仅在对数轴上支持次刻度标签。对数轴同时使用显式 `Ax
 
 ```python
 from plotlib import (
-    AxisStyle, DataPlotter, FrameStyle, LegendStyle, LineStyle, TickStyle,
+    AxesFormatter, AxisStyle, DataPlotter, FrameStyle, LegendStyle, LineStyle, TickStyle,
     make_axes_formatter, make_legend_formatter, make_lines_formatter,
 )
 
@@ -176,16 +196,14 @@ axes_fmt = make_axes_formatter(
 lines_fmt = make_lines_formatter(LineStyle(width=2, linestyle="dash", marker="circle"))
 legend_fmt = make_legend_formatter(LegendStyle(position="upper right", font_size=12))
 
-DataPlotter(data, ticks=TickStyle(length=8)).plot_multiline(
-    axes_formatter=axes_fmt,
-    lines_formatter=lines_fmt,
-    legend_formatter=legend_fmt,
+DataPlotter(data, ticks=TickStyle(length=8)).plot(
+    formatters=AxesFormatter(axes=axes_fmt, lines=lines_fmt, legend=legend_fmt),
 )
 ```
 
 `AxisStyle.limits` 使用数据坐标，`None` 表示该侧边界自动计算。对数轴的显式边界必须为正值。`AxisStyle.scaler` 只缩放 Matplotlib 的刻度显示值。
 
-坐标轴格式化器在 Matplotlib 中接收 `(ax, fig)`，在 Plotly 中接收 `(轴名, fig)`，例如 `('yaxis2', fig)`。曲线和图例格式化器分别接收对象序列。通过工厂的 `custom` 参数传入的曲线或图例回调，会在样式应用后逐个接收原生对象。同类回调可用 `combine_formatters()` 按顺序组合。
+格式化器按轴打包成 `AxesFormatter(axes=..., lines=..., scatter=..., legend=...)`，交给 `plot(formatters=...)`：只给一个时作用于左轴，`{"left": ..., "right": ...}` 分别给两侧。坐标轴格式化器在 Matplotlib 中接收 `(ax, fig)`，在 Plotly 中接收 `(轴名, fig)`，例如 `('yaxis2', fig)`。曲线和图例格式化器分别接收对象序列。通过工厂的 `custom` 参数传入的曲线或图例回调，会在样式应用后逐个接收原生对象。同类回调可用 `combine_formatters()` 按顺序组合。
 
 `figure_formatter(fig, axes)` 在各轴回调之后执行。`axes` 按 `'left'` 和 `'right'` 索引，值为 Matplotlib 的轴对象或 Plotly 的轴名。
 
@@ -194,7 +212,7 @@ DataPlotter(data, ticks=TickStyle(length=8)).plot_multiline(
 安装 `interactive` 后，可使用 `backend='plotly'` 生成交互图。格式化器也应指定相同的后端。
 
 ```python
-from plotlib import AxisStyle, Dataloader, DataPlotter, make_axes_formatter
+from plotlib import AxesFormatter, AxisStyle, Dataloader, DataPlotter, make_axes_formatter
 from plotlib.html_export import write_fit_html
 
 data = Dataloader(columns_per_sample=6).load_data("piezo.csv")
@@ -203,14 +221,14 @@ axes_fmt = make_axes_formatter(
     backend="plotly",
 )
 plotter = DataPlotter(data, channel_x=2, channel_y=4, plotrange=300, backend="plotly")
-fig = plotter.plot_multiline(axes_formatter=axes_fmt).add_slider(mode="cumulative")
+fig = plotter.plot(formatters=AxesFormatter(axes=axes_fmt)).add_slider(mode="cumulative")
 write_fit_html(fig, "plot.html", title="压电极化测试")
 ```
 
 ### 滑块和分页
 
 `add_slider()` 为单页图添加曲线滑块，一个档位对应一条曲线，默认模式为 `'cumulative'`。
-分组独立绘制、`plot_xy()` 和 `plot_dual_y()` 的多页结果可以用 `add_page_slider()` 翻页，默认模式为 `'single'`。多页图共用坐标轴，格式化回调作用于整个 Figure。
+分组独立绘制（`by='group'`）和每个样品一张（`by='sample'`）的多页结果可以用 `add_page_slider()` 翻页，默认模式为 `'single'`。多页图共用坐标轴，格式化回调作用于整个 Figure。
 
 `'single'` 只显示当前曲线或页面，`'cumulative'` 从第一档累加到当前档。滑块方法均返回 `go.Figure`，可用 `slider_formatter` 调整外观。整图回调附加的参考线等保留各自的可见性。
 
@@ -226,12 +244,12 @@ Plotly 支持 `'linear'` 和 `'log'`，刻度格式支持 `.Nf`、`.Ne`、`.Ng` 
 
 ### 电化学阻抗谱
 
-以下示例假设每个样品占 8 列，通道 5 为阻抗实部，通道 6 为阻抗虚部。`neglog_y=True` 会绘制 Y 数据的绝对值，并为刻度标签添加负号。
+以下示例假设每个样品占 8 列，通道 5 为阻抗实部，通道 6 为阻抗虚部。`Layer(neglog_y=True)` 会绘制 Y 数据的绝对值，并为刻度标签添加负号。
 
 ```python
 import matplotlib.pyplot as plt
 
-from plotlib import AxisStyle, Dataloader, DataPlotter, Group, make_axes_formatter
+from plotlib import AxesFormatter, AxisStyle, Dataloader, DataPlotter, Group, Layer, make_axes_formatter
 
 data = Dataloader(columns_per_sample=8).load_data("eis.csv")
 axes_fmt = make_axes_formatter(
@@ -243,8 +261,8 @@ groups = Group(data, {
     "Group B": {"num": [2, 3], "linestyle": "dash"},
 })
 plotter = DataPlotter(data, groups=groups, channel_x=5, channel_y=6)
-plotter.plot_multiline(axes_formatter=axes_fmt, neglog_y=True)
-plotter.plot_groups(axes_formatter=axes_fmt, neglog_y=True)
+plotter.plot(Layer(neglog_y=True), formatters=AxesFormatter(axes=axes_fmt))
+plotter.plot(Layer(neglog_y=True), by="group", formatters=AxesFormatter(axes=axes_fmt))
 plt.show()
 ```
 
@@ -255,7 +273,7 @@ plt.show()
 ```python
 import matplotlib.pyplot as plt
 
-from plotlib import AxisStyle, Dataloader, DataPlotter, make_axes_formatter
+from plotlib import AxesFormatter, AxisStyle, Dataloader, DataPlotter, Layer, make_axes_formatter
 
 data = Dataloader(columns_per_sample=6).load_data("piezo.csv")
 axes_fmt = make_axes_formatter(
@@ -263,8 +281,8 @@ axes_fmt = make_axes_formatter(
     y=AxisStyle(format="{y:.1e}", scaler=10),
 )
 plotter = DataPlotter(data, channel_x=2, channel_y=4, plotrange=299)
-plotter.plot_multiline(axes_formatter=axes_fmt)
-plotter.plot_dual_y(left=(0, 2), right=(3, 4))
+plotter.plot(formatters=AxesFormatter(axes=axes_fmt))
+plotter.plot([Layer(0, 2), Layer(3, 4, side="right")], by="sample")
 plt.show()
 ```
 

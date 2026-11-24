@@ -28,9 +28,10 @@ from matplotlib.colors import to_rgba
 from matplotlib.container import BarContainer
 from matplotlib.lines import Line2D
 from numpy.typing import NDArray
+from conftest import xy_curves
 
 from plotlib.group import Group
-from plotlib.plot_spec import AxisStyle, LegendStyle, LineStyle
+from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer, LegendStyle, LineStyle
 from plotlib.plotter import DataPlotter
 
 FREQ, ZS_RE, ZS_IM = 0, 1, 2      # 通道号
@@ -41,12 +42,11 @@ def legend_texts(ax):
 
 
 # ══════════════════════════════════════════════
-# plot_multiline：所有样品画在同一张图
+# by='all'：所有样品画在同一张图
 # ══════════════════════════════════════════════
-def test_plot_multiline_labels(eis_dataset):
+def test_by_all_labels(eis_dataset):
     """坐标轴标题取单位，图例取样品名。"""
-    ax = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE) \
-        .plot_multiline().figures['main'].axes['left']
+    ax = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE).plot().figures['main'].axes['left']
 
     assert ax.get_xlabel() == 'Frequency(Hz)'
     assert ax.get_ylabel() == "Zs'(ohm)"
@@ -54,7 +54,7 @@ def test_plot_multiline_labels(eis_dataset):
 
 
 def test_plotrange_limits_points(eis_dataset):
-    plotter = DataPlotter(eis_dataset, plotrange=2).plot_multiline()
+    plotter = DataPlotter(eis_dataset, plotrange=2).plot()
     for line in plotter.figures['main'].artists:
         assert len(line.get_xdata()) == 2
 
@@ -62,7 +62,7 @@ def test_plotrange_limits_points(eis_dataset):
 def test_neglog_y(eis_dataset):
     """负对数：数据取绝对值后画，刻度文字再补回负号。Zs'' 全为负数，正好用来测。"""
     plotter = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_IM)
-    plotter.plot_multiline(neglog_y=True)
+    plotter.plot(Layer(neglog_y=True))
     m = plotter.figures['main']
 
     np.testing.assert_array_equal(m.artists[0].get_ydata(), [1, 2, 3])
@@ -91,13 +91,13 @@ def artist_xy(
     raise TypeError(type(artist))
 
 
-@pytest.mark.parametrize("method, artist_type", [
-    ('plot_multiline', Line2D),
-    ('plot_scatter',   PathCollection),
+@pytest.mark.parametrize("kind, artist_type", [
+    ('line',    Line2D),
+    ('scatter', PathCollection),
 ])
-def test_plot_kind(eis_dataset, method, artist_type):
-    """折线、散点各走自己的方法：对象类型对，且画的数据也对（只查类型的话，数据全画成 0 也能通过）。"""
-    plotter = getattr(DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE), method)()
+def test_plot_kind(eis_dataset, kind, artist_type):
+    """图层的画法决定画出的对象：类型对，且画的数据也对（只查类型的话，数据全画成 0 也能通过）。"""
+    plotter = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE).plot(Layer(kind=kind))
 
     for k, artist in enumerate(plotter.figures['main'].artists):
         assert isinstance(artist, artist_type)
@@ -106,15 +106,16 @@ def test_plot_kind(eis_dataset, method, artist_type):
         np.testing.assert_allclose(y, np.array([10, 20, 30]) * (k + 1))
 
 
-@pytest.mark.parametrize("figsize, expected_objects, expected_groups", [
-    (None,   (10, 8), (16, 12)),     # 不传：各方法用自己的默认尺寸（与以前相同）
-    ((6, 4), (6, 4),  (6, 4)),       # 传了：所有绘图方法都用它
+@pytest.mark.parametrize("figsize, expected", [
+    (None,   {'all': (10, 8), 'group': (16, 12), 'sample': (12, 8)}),     # 不传：按 by 取默认尺寸（与原各方法相同）
+    ((6, 4), {'all': (6, 4),  'group': (6, 4),   'sample': (6, 4)}),      # 传了：都用它
 ], ids=['default', 'override'])
-def test_figsize(eis_dataset, figsize, expected_objects, expected_groups):
-    """figsize 是构造参数（步骤 6.2 用户新增），None 时保持各方法原来的尺寸。"""
+def test_figsize(eis_dataset, figsize, expected):
+    """构造时指定的 figsize 优先。为 None 时按分图方式使用默认尺寸。"""
     plotter = DataPlotter(eis_dataset, groups=Group(eis_dataset, {'A': {'num': [0, 1]}}), figsize=figsize)
-    assert tuple(plotter.plot_multiline().figures['main'].fig.get_size_inches()) == expected_objects
-    assert tuple(plotter.plot_groups().figures['A'].fig.get_size_inches()) == expected_groups
+    for by, size in expected.items():
+        drawn = next(iter(plotter.plot(by=by).figures.values()))
+        assert tuple(drawn.fig.get_size_inches()) == size, by
 
 
 # ──────────────────────────────────────────────
@@ -133,10 +134,8 @@ def test_formatters_are_called(eis_dataset):
     def legend_formatter(legends):
         received['legends'] = legends
 
-    m = DataPlotter(eis_dataset).plot_multiline(
-        axes_formatter=axes_formatter,
-        lines_formatter=lines_formatter,
-        legend_formatter=legend_formatter,
+    m = DataPlotter(eis_dataset).plot(
+        formatters=AxesFormatter(axes=axes_formatter, lines=lines_formatter, legend=legend_formatter),
     ).figures['main']
 
     assert received['axes'] == (m.axes['left'], m.fig)
@@ -153,30 +152,30 @@ def test_legend_follows_lines_formatter(eis_dataset):
         for line in lines:
             line.set_linestyle('--')
 
-    ax = DataPlotter(eis_dataset).plot_multiline(lines_formatter=dashed).figures['main'].axes['left']
+    ax = DataPlotter(eis_dataset).plot(formatters=AxesFormatter(lines=dashed)).figures['main'].axes['left']
     assert [h.get_linestyle() for h in ax.get_legend().legend_handles] == ['--'] * 3
 
 
-@pytest.mark.parametrize("method", ['plot_multiline', 'plot_xy'])
-def test_legend_stays_in_place_after_lines_formatter(eis_dataset, method):
+@pytest.mark.parametrize("by", ['all', 'sample'])
+def test_legend_stays_in_place_after_lines_formatter(eis_dataset, by):
     """
-    回归（第三方审查 D）：lines_formatter 之后重建的图例留在原位、能否拖动不变（两种图例位置：图外右侧、图内右下）。
+    线条回调触发图例重建时，图例的位置和拖动设置保持不变。
     曾把已是像素坐标的锚点再按坐标轴换算一次，图例被移到画布外几十万像素处。渲染后才看得出来。
     """
     def legend_after_draw(**kwargs):
-        drawn = next(iter(getattr(DataPlotter(eis_dataset), method)(**kwargs).figures.values()))
+        drawn = next(iter(DataPlotter(eis_dataset).plot(by=by, **kwargs).figures.values()))
         drawn.fig.canvas.draw()
         legend = drawn.axes['left'].get_legend()
         return legend.get_window_extent().p0, legend.get_draggable()
 
     before, draggable_before = legend_after_draw()
-    after, draggable_after = legend_after_draw(lines_formatter=lambda lines: None)
+    after, draggable_after = legend_after_draw(formatters=AxesFormatter(lines=lambda lines: None))
     np.testing.assert_allclose(after, before)
     assert draggable_after == draggable_before
 
 
 # ══════════════════════════════════════════════
-# plot_groups：把计划画对（分组规则本身在 test_plot_plan.py；
+# by='group'：把计划画对（分组规则本身在 test_plot_plan.py；
 # 分组参数的约定在 test_backend_parity.py 里对两个绘图器一起测）
 # ══════════════════════════════════════════════
 def make_groups(dataset):
@@ -193,9 +192,9 @@ def make_groups(dataset):
 ], ids=['separate', 'merge'])
 def test_one_figure_per_spec(eis_dataset, merge, expected):
     """计划里每张 FigureSpec 画成一张 matplotlib 图：figures 的键是 FigureSpec.key，每张图的线与计划的曲线一一对应。"""
-    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).plot_groups(merge_groups=merge)
+    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).plot(by='group', merge_groups=merge)
 
-    assert {key: [c.sample_idx for c in drawn.spec.curves] for key, drawn in plotter.figures.items()} == expected
+    assert {key: [c.sample_idx for c in xy_curves(drawn)] for key, drawn in plotter.figures.items()} == expected
     assert len(plt.get_fignums()) == len(expected)
 
 
@@ -213,7 +212,7 @@ def test_group_style_translated(eis_dataset, style, expected):
     自定义虚线的翻译见 test_style.py（matplotlib 的 get_linestyle 对任何虚线都返回 '--'，看不出段长）。
     """
     groups = Group(eis_dataset, {'A': {'num': [0, 1], **style}})
-    lines = DataPlotter(eis_dataset, groups=groups).plot_groups().figures['A'].artists
+    lines = DataPlotter(eis_dataset, groups=groups).plot(by='group').figures['A'].artists
     getters = {
         'linestyle': lambda line: line.get_linestyle(),
         'marker':    lambda line: line.get_marker(),
@@ -231,7 +230,7 @@ def test_group_style_translated(eis_dataset, style, expected):
 def test_group_without_linestyle_uses_default_linestyle(eis_dataset, linestyle, expected):
     """分组没写线型时用绘图器的全局线型 lines=LineStyle(linestyle=...)（经 rc_context 生效）。"""
     groups = Group(eis_dataset, {'A': {'num': [0, 1]}})
-    plotter = DataPlotter(eis_dataset, groups=groups, lines=LineStyle(linestyle=linestyle)).plot_groups()
+    plotter = DataPlotter(eis_dataset, groups=groups, lines=LineStyle(linestyle=linestyle)).plot(by='group')
     assert all(a.get_linestyle() == expected for a in plotter.figures['A'].artists)
 
 
@@ -240,10 +239,10 @@ def test_global_lines_and_standard_words(eis_dataset):
     全局的线 lines=LineStyle(...)（原 line_width / linestyle 参数）：默认实线、线宽 3；只写要改的，其余沿用默认；
     只收标准写法（后端写法 '-' 报错）；不收颜色（颜色按样品配色）。
     """
-    lines = DataPlotter(eis_dataset).plot_multiline().figures['main'].artists
+    lines = DataPlotter(eis_dataset).plot().figures['main'].artists
     assert all((line.get_linestyle(), line.get_linewidth()) == ('-', 3) for line in lines)
 
-    lines = DataPlotter(eis_dataset, lines=LineStyle(linestyle='dash')).plot_multiline().figures['main'].artists
+    lines = DataPlotter(eis_dataset, lines=LineStyle(linestyle='dash')).plot().figures['main'].artists
     assert all((line.get_linestyle(), line.get_linewidth()) == ('--', 3) for line in lines)
 
     with pytest.raises(ValueError):
@@ -255,24 +254,27 @@ def test_global_lines_and_standard_words(eis_dataset):
 def test_lines_formatter_overrides_group_style(eis_dataset):
     """优先级：默认样式 < 分组样式 < 用户 formatter（formatter 最后执行）。"""
     from plotlib.formatters import make_lines_formatter
-    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).plot_groups(
-        lines_formatter=make_lines_formatter(LineStyle(linestyle='dashdot')))
+    plotter = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).plot(
+        by='group',
+        formatters=AxesFormatter(lines=make_lines_formatter(LineStyle(linestyle='dashdot'))),
+    )
     for drawn in plotter.figures.values():
         assert all(a.get_linestyle() == '-.' for a in drawn.artists)
 
 
-def test_group_without_config_falls_back_to_plot_multiline(eis_dataset):
-    plotter = DataPlotter(eis_dataset).plot_groups()
-    assert list(plotter.figures) == ['main']
-    assert len(plotter.figures['main'].artists) == 3
+def test_by_group_without_groups_raises(eis_dataset):
+    """
+    按组绘图要求至少一个分组。
+    """
+    with pytest.raises(ValueError, match='分组'):
+        DataPlotter(eis_dataset).plot(by='group')
 
 
 # ══════════════════════════════════════════════
-# plot_xy（原 subplotter_yy）：每个样品一张 x-y 单线图（如 Nyquist：Zs' vs Zs''）
+# 按样品分图时，每个样品对应一张图。
 # ══════════════════════════════════════════════
-def test_plot_xy(eis_dataset):
-    plotter = DataPlotter(eis_dataset).plot_xy(
-        channel_x=ZS_RE, channel_y=ZS_IM)
+def test_by_sample_xy(eis_dataset):
+    plotter = DataPlotter(eis_dataset).plot(Layer(ZS_RE, ZS_IM), by='sample')
 
     assert list(plotter.figures) == [0, 1, 2]           # 以样品号为键
     s1 = plotter.figures[1]
@@ -282,9 +284,9 @@ def test_plot_xy(eis_dataset):
     assert s1.axes['left'].get_ylabel() == "Zs''(ohm)"
 
 
-def test_plot_xy_keeps_default_color(eis_dataset):
+def test_by_sample_keeps_default_color(eis_dataset):
     """一张图只有一条线，不按样品换色：仍是 matplotlib 默认颜色序列的第一个色（计划里色带位置为 None）。"""
-    plotter = DataPlotter(eis_dataset).plot_xy(channel_x=ZS_RE, channel_y=ZS_IM)
+    plotter = DataPlotter(eis_dataset).plot(Layer(ZS_RE, ZS_IM), by='sample')
     for drawn in plotter.figures.values():
         [line] = drawn.artists
         assert to_rgba(line.get_color()) == to_rgba('#1f77b4')
@@ -296,19 +298,18 @@ def test_plot_xy_keeps_default_color(eis_dataset):
 ], ids=['default', 'override'])
 def test_figsize_xy_and_dual_y(eis_dataset, figsize, expected):
     plotter = DataPlotter(eis_dataset, figsize=figsize)
-    xy = plotter.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM).figures[0].fig
+    xy = plotter.plot(Layer(ZS_RE, ZS_IM), by='sample').figures[0].fig
     assert tuple(xy.get_size_inches()) == expected
-    dual = plotter.plot_dual_y(right=(FREQ, ZS_IM)).figures[0].fig
+    dual = plotter.plot([Layer(0, 1), Layer(FREQ, ZS_IM, side='right')], by='sample').figures[0].fig
     assert tuple(dual.get_size_inches()) == expected
 
 
 # ══════════════════════════════════════════════
-# plot_dual_y：每个样品一张双 Y 轴图
+# 每个样品一张双 Y 轴图
 # ══════════════════════════════════════════════
-def test_plot_dual_y(eis_dataset):
+def test_dual_y(eis_dataset):
     # 两侧故意用不同的 X 列：用同一列的话，右轴错用左轴的 X 也看不出来
-    plotter = DataPlotter(eis_dataset).plot_dual_y(
-        left=(FREQ, ZS_RE), right=(ZS_RE, ZS_IM))
+    plotter = DataPlotter(eis_dataset).plot([Layer(FREQ, ZS_RE), Layer(ZS_RE, ZS_IM, side='right')], by='sample')
 
     assert list(plotter.figures) == [0, 1, 2]
     s0 = plotter.figures[0]
@@ -322,11 +323,14 @@ def test_plot_dual_y(eis_dataset):
     assert len(plt.get_fignums()) == 3                                  # twinx 不新建图窗
 
 
-def test_plot_dual_y_figure_formatter(eis_dataset):
+def test_dual_y_figure_formatter(eis_dataset):
     """整图回调 (fig, axes)：每个样品调用一次，拿到这张图和左右两根轴（原 custom_formatter(ax1, ax2, fig)）。"""
     received = []
-    plotter = DataPlotter(eis_dataset).plot_dual_y(
-        right=(FREQ, ZS_IM), figure_formatter=lambda fig, axes: received.append((fig, axes)))
+    plotter = DataPlotter(eis_dataset).plot(
+        [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+        figure_formatter=lambda fig, axes: received.append((fig, axes)),
+    )
     assert len(received) == 3
     first = plotter.figures[0]
     assert received[0] == (first.fig, first.axes) and set(first.axes) == {'left', 'right'}
@@ -340,10 +344,10 @@ def test_artist_lookup_by_sample(eis_dataset):
     按样品号（和轴）取线：分组图里同一样品可在多张图；双 Y 轴图里同一样品有左右两条线，靠 axis 区分。
     找不到 → KeyError。
     """
-    group = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).plot_groups()
+    group = DataPlotter(eis_dataset, groups=make_groups(eis_dataset)).plot(by='group')
     np.testing.assert_array_equal(group.figures['B'].artist(1).get_ydata(), [20, 40, 60])
 
-    dual = DataPlotter(eis_dataset).plot_dual_y(right=(FREQ, ZS_IM)).figures[0]
+    dual = DataPlotter(eis_dataset).plot([Layer(0, 1), Layer(FREQ, ZS_IM, side='right')], by='sample').figures[0]
     assert dual.artist(0).get_color() == 'red'
     assert dual.artist(0, 'right').get_color() == 'blue'
 
@@ -353,11 +357,11 @@ def test_artist_lookup_by_sample(eis_dataset):
 
 def test_group_color_applies_to_scatter(eis_dataset):
     """
-    颜色一次赋值（6.5，用户定的方案 B）：分组写的 color 在画的时候就给出，散点也生效。
+    分组颜色在绘制时应用于折线和散点。
     以前只对折线生效（先用色带色画，再只给折线覆盖样式）。柱状图的颜色在 plot_bars（第 4 节第二步）测。
     """
     groups = Group(eis_dataset, {'A': {'num': [0, 1], 'color': (255, 0, 0)}})
-    artist = DataPlotter(eis_dataset, groups=groups).plot_scatter().figures['A'].artist(0)
+    artist = DataPlotter(eis_dataset, groups=groups).plot(Layer(kind='scatter'), by='group').figures['A'].artist(0)
     np.testing.assert_allclose(artist.get_facecolor()[0][:3], (1.0, 0.0, 0.0))
 
 
@@ -382,7 +386,7 @@ def test_neglog_x(eis_dataset):
     它要渲染时收到刻度位置才写得出数字，所以先渲染再看刻度文字。
     """
     plotter = DataPlotter(eis_dataset, channel_x=ZS_IM, channel_y=ZS_RE)
-    m = plotter.plot_multiline(neglog_x=True).figures['main']
+    m = plotter.plot(Layer(neglog_x=True)).figures['main']
 
     np.testing.assert_array_equal(m.artists[0].get_xdata(), [1, 2, 3])
     m.fig.canvas.draw()
@@ -398,22 +402,29 @@ def test_neglog_both_axes_keep_their_own_format(eis_dataset):
     from plotlib.formatters import make_axes_formatter
 
     fmt = make_axes_formatter(x=AxisStyle(format='{x:.1f}'), y=AxisStyle(format='{y:.3f}'))
-    ax = DataPlotter(eis_dataset, channel_x=ZS_IM, channel_y=ZS_IM).plot_multiline(
-        axes_formatter=fmt, neglog_x=True, neglog_y=True).figures['main'].axes['left']
+    ax = DataPlotter(eis_dataset, channel_x=ZS_IM, channel_y=ZS_IM).plot(
+        Layer(neglog_x=True, neglog_y=True),
+        formatters=AxesFormatter(axes=fmt),
+    ).figures['main'].axes['left']
 
     assert ax.xaxis.get_major_formatter()(2.0, 0) == '-2.0'
     assert ax.yaxis.get_major_formatter()(2.0, 0) == '-2.000'
 
 
 @pytest.mark.parametrize("draw, axis", [
-    (lambda ds: DataPlotter(ds).plot_xy(channel_x=ZS_IM, channel_y=ZS_RE, neglog_x=True), 'x'),
-    (lambda ds: DataPlotter(ds).plot_dual_y(left=(FREQ, ZS_IM), right=(FREQ, ZS_RE), neglog_y=True), 'y'),
-    (lambda ds: DataPlotter(ds).plot_dual_y(left=(ZS_IM, ZS_RE), right=(ZS_IM, ZS_RE),
-                                            neglog_x=True, neglog_x2=True), 'x'),
+    (lambda ds: DataPlotter(ds).plot(Layer(ZS_IM, ZS_RE, neglog_x=True), by='sample'), 'x'),
+    (lambda ds: DataPlotter(ds).plot(
+        [Layer(FREQ, ZS_IM, neglog_y=True), Layer(FREQ, ZS_RE, side='right')],
+        by='sample',
+    ), 'y'),
+    (lambda ds: DataPlotter(ds).plot(
+        [Layer(ZS_IM, ZS_RE, neglog_x=True), Layer(ZS_IM, ZS_RE, side='right', neglog_x=True)],
+        by='sample',
+    ), 'x'),
 ], ids=['xy_x', 'dual_y_left_y', 'dual_y_shared_x'])
 def test_neglog_ticks_render_numbers(eis_dataset, draw, axis):
     """
-    回归（第三方审查 C）：渲染后每个刻度都是「一个负号 + 数字」。这几根轴用的是 matplotlib 默认刻度格式（版式没设）。
+    使用 Matplotlib 的默认刻度格式时，负对数主刻度只显示一个负号。
     曾只包装了默认格式器的调用，它收不到本轮的刻度位置，渲染出来只剩 '-'。
     双 Y 轴左右共用 X 轴：只加一次负号（'x2' 在约定里是上轴，不作用在共用的 X 轴上，与 Plotly 一致）。
     """
@@ -453,7 +464,7 @@ def test_backend_draws_only_from_plan():
 
 
 def test_backend_choice(eis_dataset):
-    """backend 参数：默认 matplotlib；'plotly' 用 Plotly 后端（6.7 起）；写错名字列出可选值。"""
+    """默认使用 Matplotlib，支持选择 Plotly，并报告无效的后端名。"""
     assert DataPlotter(eis_dataset).backend.name == 'matplotlib'
     assert DataPlotter(eis_dataset, backend='plotly').backend.name == 'plotly'
     with pytest.raises(ValueError, match='matplotlib'):
@@ -484,9 +495,9 @@ def draw_layout(dataset, layout):
     """按版式各画一张图，返回 (DrawnFigure, 左轴, 右轴或 None)。"""
     plotter = DataPlotter(dataset, channel_x=FREQ, channel_y=ZS_RE)
     drawn = {
-        'multiline': lambda: plotter.plot_multiline().figures['main'],
-        'xy':        lambda: plotter.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM).figures[0],
-        'dual_y':    lambda: plotter.plot_dual_y(right=(FREQ, ZS_IM)).figures[0],
+        'multiline': lambda: plotter.plot().figures['main'],
+        'xy':        lambda: plotter.plot(Layer(ZS_RE, ZS_IM), by='sample').figures[0],
+        'dual_y':    lambda: plotter.plot([Layer(0, 1), Layer(FREQ, ZS_IM, side='right')], by='sample').figures[0],
     }[layout]()
     return drawn, drawn.axes['left'], drawn.axes.get('right')
 
@@ -545,9 +556,9 @@ def test_layout_dual_y_axis_colors(eis_dataset):
 
 
 @pytest.mark.parametrize("layout, top, right", [
-    ('multiline', False, False),      # 默认无框（用户定）
+    ('multiline', False, False),      # 默认隐藏上、右边框
     ('xy',        False, False),
-    ('dual_y',    True,  True),       # 双 Y 轴：左右各有一根轴，画完整的框（用户定）
+    ('dual_y',    True,  True),       # 双 Y 轴显示完整边框
 ])
 def test_layout_frame(eis_dataset, layout, top, right):
     """边框（FrameStyle）：多线、xy 只有左边和下边；双 Y 轴画完整的框，右边是右轴自己的（蓝色）轴线。"""
@@ -568,8 +579,7 @@ def test_global_styles_override_preset(eis_dataset):
     """
     from plotlib.plot_spec import FrameStyle
 
-    ax = DataPlotter(eis_dataset, frame=FrameStyle(top=True), legend=LegendStyle(position='upper left')) \
-        .plot_multiline().figures['main'].axes['left']
+    ax = DataPlotter(eis_dataset, frame=FrameStyle(top=True), legend=LegendStyle(position='upper left')).plot().figures['main'].axes['left']
     assert ax.spines['top'].get_visible() and not ax.spines['right'].get_visible()
     legend = ax.get_legend()
     assert legend._loc == 2 and legend.get_draggable()        # 2 = 'upper left'；拖动来自预设
@@ -585,8 +595,9 @@ def test_axes_formatter_keeps_preset_tick_format(eis_dataset):
 
     from plotlib.formatters import make_axes_formatter
 
-    ax = DataPlotter(eis_dataset).plot_multiline(
-        axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'))).figures['main'].axes['left']
+    ax = DataPlotter(eis_dataset).plot(
+        formatters=AxesFormatter(axes=make_axes_formatter(x=AxisStyle(scale='log'))),
+    ).figures['main'].axes['left']
     assert ax.get_xscale() == 'log'
     assert isinstance(ax.xaxis.get_major_formatter(), LogFormatterSciNotation)
     assert ax.yaxis.get_major_formatter()(1.234, 0) == '1.23'
@@ -594,7 +605,7 @@ def test_axes_formatter_keeps_preset_tick_format(eis_dataset):
 
 def test_layout_dual_y_legend(eis_dataset):
     """
-    双 Y 轴图例（2026-11-20，参照用户的 Origin 图）：左右两条线都进图例（红、蓝），每条写自己的单位，
+    双 Y 轴图例：左右两条线都进图例（红、蓝），每条写自己的单位，
     图例标题是样品名；放在绘图区上方、右边与绘图区对齐，整个在画布内。渲染后才知道位置，先 draw。
     """
     drawn, left, right = draw_layout(eis_dataset, 'dual_y')
@@ -619,10 +630,14 @@ def test_dual_y_legend_follows_right_lines_and_keeps_legend_formatter(eis_datase
     """
     from plotlib.formatters import make_legend_formatter, make_lines_formatter
 
-    drawn = DataPlotter(eis_dataset).plot_dual_y(
-        right=(FREQ, ZS_IM),
-        right_lines_formatter=make_lines_formatter(LineStyle(color='green')),
-        legend_formatter=make_legend_formatter(LegendStyle(font_size=7))).figures[0]
+    drawn = DataPlotter(eis_dataset).plot(
+        [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+        formatters={
+            'left': AxesFormatter(legend=make_legend_formatter(LegendStyle(font_size=7))),
+            'right': AxesFormatter(lines=make_lines_formatter(LineStyle(color='green'))),
+        },
+    ).figures[0]
     legend = drawn.axes['left'].get_legend()
 
     assert [h.get_color() for h in legend.legend_handles] == ['red', 'green']
@@ -643,7 +658,7 @@ def drawn_ticks(drawn, side='left', axis='x'):
 
 def test_ticks_default(eis_dataset):
     """默认：主刻度 6 × 3 磅、朝外；线性轴也显示次刻度（3 磅长），次刻度不写文字。"""
-    major, minor_locs, minor_labels = drawn_ticks(DataPlotter(eis_dataset).plot_multiline().figures['main'])
+    major, minor_locs, minor_labels = drawn_ticks(DataPlotter(eis_dataset).plot().figures['main'])
     assert {(t.tick1line.get_markersize(), t.tick1line.get_markeredgewidth()) for t in major} == {(6, 3)}
     assert minor_locs
     assert minor_labels == []
@@ -653,8 +668,7 @@ def test_ticks_global_settings(eis_dataset):
     """DataPlotter(ticks=...) 只写要改的，其余沿用默认：主刻度长 10（宽仍 3），刻度文字 12 磅 serif。"""
     from plotlib.plot_spec import TickStyle
 
-    drawn = DataPlotter(eis_dataset, ticks=TickStyle(length=10, label_size=12, label_font='serif')) \
-        .plot_multiline().figures['main']
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(length=10, label_size=12, label_font='serif')).plot().figures['main']
     major, _, _ = drawn_ticks(drawn)
     assert {(t.tick1line.get_markersize(), t.tick1line.get_markeredgewidth()) for t in major} == {(10, 3)}
     label = drawn.axes['left'].xaxis.get_ticklabels()[0]
@@ -669,8 +683,9 @@ def test_ticks_local_minor_on_log_axis_overrides_global(eis_dataset):
     from plotlib.formatters import make_axes_formatter
     from plotlib.plot_spec import TickStyle
 
-    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor=False)).plot_multiline(
-        axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'), ticks=TickStyle(minor=True))).figures['main']
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor=False)).plot(
+        formatters=AxesFormatter(axes=make_axes_formatter(x=AxisStyle(scale='log'), ticks=TickStyle(minor=True))),
+    ).figures['main']
     assert drawn_ticks(drawn, axis='x')[1] != []          # 对数轴
     assert drawn_ticks(drawn, axis='y')[1] != []          # 轴工厂的 ticks 管这根轴的 X、Y 两个方向（线性轴本来就没问题）
 
@@ -683,8 +698,9 @@ def test_ticks_minor_switch_survives_scale_change(eis_dataset):
     from plotlib.formatters import make_axes_formatter
     from plotlib.plot_spec import TickStyle
 
-    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor=False)).plot_multiline(
-        axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'))).figures['main']
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor=False)).plot(
+        formatters=AxesFormatter(axes=make_axes_formatter(x=AxisStyle(scale='log'))),
+    ).figures['main']
     assert drawn_ticks(drawn, axis='x')[1] == []
     assert drawn_ticks(drawn, axis='y')[1] == []
 
@@ -699,8 +715,9 @@ def test_minor_labels_on_log_axis(eis_dataset, minor_labels, check):
     from plotlib.formatters import make_axes_formatter
     from plotlib.plot_spec import TickStyle
 
-    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels=minor_labels)).plot_multiline(
-        axes_formatter=make_axes_formatter(x=AxisStyle(scale='log'))).figures['main']
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels=minor_labels)).plot(
+        formatters=AxesFormatter(axes=make_axes_formatter(x=AxisStyle(scale='log'))),
+    ).figures['main']
     labels = drawn_ticks(drawn, axis='x')[2]
     assert check(labels), labels
 
@@ -712,14 +729,13 @@ def test_minor_labels_style_matplotlib_only(eis_dataset):
     """
     from plotlib.plot_spec import TickStyle
 
-    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels='full', minor_label_size=8)) \
-        .plot_multiline().figures['main']
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels='full', minor_label_size=8)).plot().figures['main']
     _, _, labels = drawn_ticks(drawn, axis='y')
     assert labels
     sizes = {t.get_fontsize() for t in drawn.axes['left'].yaxis.get_minorticklabels() if t.get_text()}
     assert sizes == {8}
 
-    short = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels='short')).plot_multiline().figures['main']
+    short = DataPlotter(eis_dataset, ticks=TickStyle(minor_labels='short')).plot().figures['main']
     assert drawn_ticks(short, axis='y')[2] == []
 
 
@@ -730,7 +746,7 @@ def test_appearance_dpi(eis_dataset):
 
     assert Appearance().dpi == 100
     assert MatplotlibBackend(Appearance(dpi=150), cmap=None).rc_params['figure.dpi'] == 150
-    fig = DataPlotter(eis_dataset, dpi=150).plot_multiline().figures['main'].fig
+    fig = DataPlotter(eis_dataset, dpi=150).plot().figures['main'].fig
     assert fig.dpi == 150
 
 
@@ -746,8 +762,12 @@ def test_failed_plot_closes_its_figure(eis_dataset):
 
     grouped = DataPlotter(eis_dataset, groups=Group(eis_dataset, {'A': {'num': [0]}, 'B': {'num': [1]}}))
     before = plt.get_fignums()
-    for plot in (lambda: DataPlotter(eis_dataset).plot_scatter(scatter_formatter=boom),
-                 lambda: grouped.plot_scatter(scatter_formatter=boom_on_second)):
+    for plot in (lambda: DataPlotter(eis_dataset).plot(Layer(kind='scatter'), formatters=AxesFormatter(scatter=boom)),
+                 lambda: grouped.plot(
+                     Layer(kind='scatter'),
+                     by='group',
+                     formatters=AxesFormatter(scatter=boom_on_second),
+                 )):
         with pytest.raises(RuntimeError, match='boom'):
             plot()
         assert plt.get_fignums() == before

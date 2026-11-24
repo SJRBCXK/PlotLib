@@ -1,20 +1,27 @@
 """
 根据样品、通道和分组生成绘图计划。
 
-`plan_multiline_figures`、`plan_scatter_figures`、`plan_xy_figures` 和 `plan_dual_y_figures` 返回
-`~plotlib.plot_spec.FigureSpec` 列表。计划记录每张图的轴信息，以及曲线数据、顺序和样式；
-画法由曲线的类型决定（`~plotlib.plot_spec.LineSpec`、`~plotlib.plot_spec.ScatterSpec`）。
+`plan_figures` 返回 `~plotlib.plot_spec.FigureSpec` 列表：*by* 决定哪些样品进哪张图，
+图层（`~plotlib.plot_spec.Layer`）决定每个样品画哪几条、画成什么、挂哪根 Y 轴。
+计划记录每张图的轴信息，以及曲线数据、顺序和样式；画法由曲线的类型决定
+（`~plotlib.plot_spec.LineSpec`、`~plotlib.plot_spec.ScatterSpec`）。
 Matplotlib 和 Plotly 共用取数、去重和配色规则，渲染时再应用版式预设和格式化回调。
+
+`plan_bars` 生成柱状图的计划：一张「类别 × 系列」的表，每格的值由数据处理层汇总，这里只负责排列和配色。
 """
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from functools import partial
+from numbers import Integral, Real
 from typing import Literal
 
 import numpy as np
 
 from .dataset import DataSet
 from .group import Group
-from .plot_spec import Axis, Curve, CurveKind, FigureSpec, LineSpec, LineStyle, ScatterSpec, ScatterStyle
+from .plot_spec import (Axis, BarDimension, BarMode, BarSpec, BarStyle, Curve, CurveKind, FigureSpec, Layer, Layout,
+                        LineSpec, LineStyle, Members, ScatterSpec, ScatterStyle)
+from .processor import Reduction, check_reduction, reduce_values, reduce_with_error
+from .style import check_bar_style
 
 
 def color_positions(sample_idx):
@@ -194,205 +201,144 @@ def channel_unit(dataset: DataSet, channel_idx: int) -> str:
 # 绘图计划
 # ============================================================================
 
-# make_curve 的类型：给出「样品号、分组名、色带位置」，返回一条线（样式由它按画法从分组读取）
-type MakeCurve = Callable[[int, str | None, float | None], Curve]
+# make_curves 的类型：给出「样品号、分组名、色带位置」，按图层顺序返回这个样品的各条曲线（样式按画法从分组读取）
+type MakeCurves = Callable[[int, str | None, float | None], list[Curve]]
 # make_figure 接收图键、曲线和名称。单位、负刻度及版式已绑定。
 type MakeFigure = Callable[[str | int, list[Curve], str | None], FigureSpec]
 
+_BY: tuple[Members, ...] = ('all', 'group', 'sample')
+_SIDES: tuple[Axis, ...] = ('left', 'right')
 
-def plan_multiline_figures(dataset: DataSet, groups: Group | None, channel_x: int, channel_y: int, *,
-                 merge_groups: bool = False, plotrange: int | None = None,
-                 neglog_x: bool = False, neglog_y: bool = False,
-                 legend_title: str | None = None) -> list[FigureSpec]:
+
+def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer], *,
+                 by: Members = 'all', merge_groups: bool = False, plotrange: int | None = None,
+                 legend_title: str | None = 'auto') -> list[FigureSpec]:
     """
-    生成多线图和分组绘图的计划（``DataPlotter.plot_multiline``、``plot_groups``），每条线是 `LineSpec`。
+    生成绘图计划（``DataPlotter.plot``）：*by* 决定哪些样品进哪张图，*layers* 决定每个样品画哪几条。
 
     Parameters
     ----------
     dataset : DataSet
         数据集。
     groups : Group or None
-        分组；None 或空 `Group` 表示不分组（检查规则见 `resolve_groups`）。
-    channel_x, channel_y : int
-        X、Y 的通道号。
+        分组，只在 ``by='group'`` 时使用（检查规则见 `resolve_groups`）。
+    layers : sequence of Layer
+        图层，每个都要写明通道（``DataPlotter.plot`` 会把没写的补成构造时的通道）。
+    by : {'all', 'group', 'sample'}, default: 'all'
+        ``'all'``：全部样品一张 ``'main'`` 图，不看分组；``'group'``：按分组画；
+        ``'sample'``：每个样品一张，key 是样品号，不看分组。
     merge_groups : bool, default: False
-        分组时是否把所有分组合并到一张图。
+        ``by='group'`` 时把所有分组合并到一张 ``'main'`` 图。
     plotrange : int, optional
         每条线只取前几行；None 取全部。
-    neglog_x, neglog_y : bool, default: False
-        负对数：数据取绝对值，刻度文字补负号。
-    legend_title : str, optional
-        图例标题。``'{name}'`` 在分离模式换成组名；只有一张图时没有名字可换，原样保留。
+    legend_title : str or None, default: 'auto'
+        图例标题，``'{name}'`` 换成每张图自己的名字：``'sample'`` 是样品名，分离模式是组名
+        （只有一个样品或一个分组、只画出一张图时也替换）；``'all'`` 和合并模式的图没有自己的名字，原样保留。
+        ``'auto'``：一个样品画多层时是 ``'{name}'`` （样品名），否则不加；None 表示不加。
 
     Returns
     -------
     list of FigureSpec
-        不分组、合并模式：一张 key 为 ``'main'`` 的图；分离模式：每个分组一张，key 是分组名。
+        ``'all'`` 和合并模式一张 key 为 ``'main'`` 的图；分离模式每个分组一张，key 是分组名；
+        ``'sample'`` 每个样品一张，key 是样品号，按样品号排序。曲线按「样品 → 图层」的顺序，
+        同一样品各层的顺序与 *layers* 一致。
 
     Raises
     ------
-    RuntimeError
-        数据集为空。
-
-    Notes
-    -----
-    - **不分组**：全部样品按样品号排序，颜色按样品在整个数据集里的排名取。
-    - **分离模式**：同一样品可以出现在多张图里，颜色仍按样品取，所以同一样品在各张图里同色。
-    - **合并模式**：同一样品绘制一次，归入配置中第一个包含它的分组。
-      同组的线统一用组首色，即该组写在第一位的样品的颜色，只看本组配置。
-    - 分组样式只读折线用得上的 ``linestyle``、``marker``、``color``。
-    """
-    return _plan_samples('line', dataset, groups, channel_x, channel_y, merge_groups=merge_groups,
-                         plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, legend_title=legend_title)
-
-
-def plan_scatter_figures(dataset: DataSet, groups: Group | None, channel_x: int, channel_y: int, *,
-                         merge_groups: bool = False, plotrange: int | None = None,
-                         neglog_x: bool = False, neglog_y: bool = False,
-                         legend_title: str | None = None) -> list[FigureSpec]:
-    """
-    生成散点图的计划（``DataPlotter.plot_scatter``），每组散点是 `ScatterSpec`。
-
-    与 `plan_multiline_figures` 共用同一套规则（不分组、分离、合并三种模式，配色、去重、归属都相同），
-    只是画法不同；参数含义也相同。分组样式只读散点用得上的 ``marker``、``color``，其余字段不解析。
-
-    Returns
-    -------
-    list of FigureSpec
-        同 `plan_multiline_figures`。
-
-    Raises
-    ------
-    RuntimeError
-        数据集为空。
-    """
-    return _plan_samples('scatter', dataset, groups, channel_x, channel_y, merge_groups=merge_groups,
-                         plotrange=plotrange, neglog_x=neglog_x, neglog_y=neglog_y, legend_title=legend_title)
-
-
-def _plan_samples(kind: CurveKind, dataset: DataSet, groups: Group | None, channel_x: int, channel_y: int, *,
-                  merge_groups: bool, plotrange: int | None, neglog_x: bool, neglog_y: bool,
-                  legend_title: str | None) -> list[FigureSpec]:
-    """
-    多线图、散点图共用的规则：按分组情况选不分组、分离或合并三种模式。*kind* 只决定每条线画成什么
-    （交给 `_make_curve`），规则本身只写这一份。
-    """
-    column_index = dataset.column_positions
-    _check_not_empty(dataset)
-    groups = resolve_groups(groups, dataset)
-    positions = color_positions(dataset.sample_idx)   # 按整个数据集排名一次
-
-    # 预先绑定同一计划共用的数据选择参数，以及画法和读样式用的分组。
-    make_curve = partial(_make_curve, kind=kind, groups=groups, dataset=dataset, positions=column_index,
-                         channel_x=channel_x, channel_y=channel_y, plotrange=plotrange,
-                         neglog_x=neglog_x, neglog_y=neglog_y)
-    make_figure = partial(_make_figure, legend_title=legend_title,
-                          x_unit=channel_unit(dataset, channel_x), y_unit=channel_unit(dataset, channel_y),
-                          neglog=_neglog_axes(x=neglog_x, y=neglog_y), layout='multiline')
-
-    if not groups.names:
-        return [_plan_all_samples(dataset, positions, make_curve, make_figure)]
-    if merge_groups:
-        return [_plan_merged(groups, positions, make_curve, make_figure)]
-    return _plan_separate(groups, positions, make_curve, make_figure)
-
-
-def plan_xy_figures(dataset: DataSet, channel_x: int, channel_y: int, *,
-                    plotrange: int | None = None, neglog_x: bool = False, neglog_y: bool = False,
-                    legend_title: str | None = None) -> list[FigureSpec]:
-    """
-    生成 x-y 单线图的计划（``DataPlotter.plot_xy``）：每个样品一张图、一条折线（`LineSpec`）。
-
-    参数含义同 `plan_multiline_figures`；*legend_title* 里的 ``'{name}'`` 换成每张图的样品名。
-
-    Returns
-    -------
-    list of FigureSpec
-        每个样品一张，key 是样品号，按样品号排序。一张图只有一条线，不靠颜色区分样品，
-        所以色带位置为 None，用后端默认色。
-
-    Raises
-    ------
-    RuntimeError
-        数据集为空。
-    """
-    column_index = dataset.column_positions
-    _check_not_empty(dataset)
-    make_curve = partial(_make_curve, kind='line', groups=None, dataset=dataset, positions=column_index,
-                         channel_x=channel_x, channel_y=channel_y, plotrange=plotrange,
-                         neglog_x=neglog_x, neglog_y=neglog_y)
-    make_figure = partial(_make_figure, legend_title=legend_title,
-                          x_unit=channel_unit(dataset, channel_x), y_unit=channel_unit(dataset, channel_y),
-                          neglog=_neglog_axes(x=neglog_x, y=neglog_y), layout='xy')
-    return [make_figure(sample, [make_curve(sample, None, None)],
-                        sample_name(dataset, sample, positions=column_index))
-            for sample in sorted(set(dataset.sample_idx))]
-
-
-def plan_dual_y_figures(dataset: DataSet, left: tuple[int, int], right: tuple[int, int], *,
-                        plotrange: int | None = None,
-                        neglog_x: bool = False, neglog_y: bool = False,
-                        neglog_x2: bool = False, neglog_y2: bool = False,
-                        kinds: tuple[CurveKind, CurveKind] = ('line', 'line'),
-                        legend_title: str | None = '{name}') -> list[FigureSpec]:
-    """
-    生成双 Y 轴图的计划（``DataPlotter.plot_dual_y``）：每个样品一张图、左右两条线。
-
-    Parameters
-    ----------
-    dataset : DataSet
-        数据集。
-    left, right : tuple of (int, int)
-        左线、右线的 ``(X 通道, Y 通道)``。左线挂左轴、右线挂右轴，两侧共用 X 轴，
-        X 轴标题取左侧 X 通道的单位。
-    plotrange : int, optional
-        每条线只取前几行；None 取全部。
-    neglog_x, neglog_y, neglog_x2, neglog_y2 : bool, default: False
-        左线的 X、Y 和右线的 X、Y 是否按负对数画。
-    kinds : tuple of ({'line', 'scatter'}, {'line', 'scatter'}), default: ('line', 'line')
-        左线、右线的画法：折线（`LineSpec`）或散点（`ScatterSpec`）。
-    legend_title : str or None, default: '{name}'
-        图例标题，``'{name}'`` 换成样品名；None 表示不加。
-
-    Returns
-    -------
-    list of FigureSpec
-        每个样品一张，key 是样品号，按样品号排序。
-
-    Raises
-    ------
-    RuntimeError
-        数据集为空。
     ValueError
-        *kinds* 里有不认识的画法。
+        *by*、画法、轴写错；图层没写通道；没有图层或没有左侧图层；``by`` 不是 ``'group'`` 却写了 *merge_groups*；
+        ``by='group'`` 但没有分组；``by='all'`` / ``'group'`` 画多个图层（暂不支持）；同一根轴上的负对数写法不一致。
+    RuntimeError
+        数据集为空。
 
     Notes
     -----
-    两条线是同一个样品的两个变量，所以线的标签是各自的单位，样品名放在图例标题里。
-    两条线不带颜色（样式为空、色带位置为 None）：左红右蓝属于呈现，由版式预设
-    ``LAYOUTS['dual_y']`` 决定。
+    - **分组**：分离模式中同一样品可以出现在多张图里，颜色仍按样品取，所以同一样品在各张图里同色。
+      合并模式中同一样品绘制一次，归入配置中第一个包含它的分组；同组的线统一用组首色，即该组写在第一位的样品的颜色。
+      分组样式按画法只读用得上的字段：折线读 ``linestyle``、``marker``、``color``，散点读 ``marker``、``color``。
+    - **颜色**：``'sample'`` 每张图只有一个样品，不按色带取色（版式预设的轴颜色或后端默认色），其余按样品在整个数据集里的排名取。
+    - **标签**：一层时是样品名；一个样品画多层时是各层 Y 通道的单位（样品名在图例标题里）。
+    - **版式**：有右侧图层用 ``'dual_y'``，``'sample'`` 用 ``'xy'``，其余用 ``'multiline'``。
+    - **负对数**：每层的数据各自取绝对值；刻度补负号按轴：共用的 X 轴看左侧图层，左右 Y 轴各看本侧图层。
+      右侧图层的 ``neglog_x`` 只把自己的 X 数据取绝对值。
+    - **轴标题**：X 取第一个左侧图层的 X 单位，左 / 右 Y 取该侧第一个图层的 Y 单位。
     """
-    if len(kinds) != 2:
-        raise ValueError(f"kinds 要写两个画法（左线, 右线），实际是 {kinds!r}")
-    for kind in kinds:
-        if kind not in _KINDS:
-            raise ValueError(f"不支持的画法 {kind!r}，双 Y 轴每一侧可选 'line'、'scatter'")
+    layers = list(layers)
+    _check_layers(layers, by, merge_groups)
     column_index = dataset.column_positions
     _check_not_empty(dataset)
-    left_curve = partial(_make_curve, kind=kinds[0], groups=None, dataset=dataset, positions=column_index,
-                         channel_x=left[0], channel_y=left[1], plotrange=plotrange,
-                         neglog_x=neglog_x, neglog_y=neglog_y, axis='left', label_from='unit')
-    right_curve = partial(_make_curve, kind=kinds[1], groups=None, dataset=dataset, positions=column_index,
-                          channel_x=right[0], channel_y=right[1], plotrange=plotrange,
-                          neglog_x=neglog_x2, neglog_y=neglog_y2, axis='right', label_from='unit')
-    make_figure = partial(_make_figure, legend_title=legend_title,
-                          x_unit=channel_unit(dataset, left[0]), y_unit=channel_unit(dataset, left[1]),
-                          y2_unit=channel_unit(dataset, right[1]),
-                          neglog=_neglog_axes(x=neglog_x, y=neglog_y, x2=neglog_x2, y2=neglog_y2),
-                          layout='dual_y')
-    return [make_figure(sample, [left_curve(sample, None, None), right_curve(sample, None, None)],
-                        sample_name(dataset, sample, positions=column_index))
-            for sample in sorted(set(dataset.sample_idx))]
+    # 分组只在 by='group' 时使用，也只在那时检查（其他模式传进来的分组不看）
+    resolved = resolve_groups(groups, dataset) if by == 'group' else None
+    if resolved is not None and not resolved.names:
+        raise ValueError("by='group' 要有分组：请在 DataPlotter(groups=...) 里给出；画全部样品写 by='all'")
+
+    left = [layer for layer in layers if layer.side == 'left']
+    right = [layer for layer in layers if layer.side == 'right']
+    makers = [partial(_make_curve, kind=layer.kind, groups=resolved, dataset=dataset,
+                      positions=column_index, channel_x=_channels(layer)[0], channel_y=_channels(layer)[1],
+                      plotrange=plotrange,
+                      neglog_x=layer.neglog_x, neglog_y=layer.neglog_y, axis=layer.side,
+                      label_from='unit' if len(layers) > 1 else 'name')
+              for layer in layers]
+
+    def make_curves(sample: int, group_name: str | None, color_position: float | None) -> list[Curve]:
+        return [make(sample, group_name, color_position) for make in makers]
+
+    layout: Layout = 'dual_y' if right else ('xy' if by == 'sample' else 'multiline')
+    if legend_title == 'auto':
+        legend_title = '{name}' if len(layers) > 1 else None
+    make_figure = partial(_make_figure, legend_title=legend_title, layout=layout,
+                          x_unit=channel_unit(dataset, _channels(left[0])[0]),
+                          y_unit=channel_unit(dataset, _channels(left[0])[1]),
+                          y2_unit=channel_unit(dataset, _channels(right[0])[1]) if right else None,
+                          neglog=_neglog_axes(x=left[0].neglog_x, y=left[0].neglog_y,
+                                              y2=bool(right) and right[0].neglog_y))
+
+    if by == 'sample':
+        return [make_figure(sample, make_curves(sample, None, None),
+                            sample_name(dataset, sample, positions=column_index))
+                for sample in sorted(set(dataset.sample_idx))]
+    positions = color_positions(dataset.sample_idx)   # 按整个数据集排名一次
+    if resolved is None:                                # by='all'
+        return [_plan_all_samples(dataset, positions, make_curves, make_figure)]
+    if merge_groups:
+        return [_plan_merged(resolved, positions, make_curves, make_figure)]
+    return _plan_separate(resolved, positions, make_curves, make_figure)
+
+
+def _channels(layer: Layer) -> tuple[int, int]:
+    """图层的 (X 通道, Y 通道)；没写时报错（``DataPlotter.plot`` 会先补成构造时的通道）。"""
+    if layer.x is None or layer.y is None:
+        raise ValueError(f"图层要写明通道（x、y），实际是 {layer!r}")
+    return layer.x, layer.y
+
+
+def _check_layers(layers: list[Layer], by: str, merge_groups: bool) -> None:
+    """
+    在取数前校验分图方式、图层组合及各坐标轴的负对数设置。
+    """
+    if not layers:
+        raise ValueError("至少要一个图层，如 [Layer(0, 1)]")
+    if by not in _BY:
+        raise ValueError(f"by 只能是 'all'、'group'、'sample'，实际是 {by!r}")
+    if merge_groups and by != 'group':
+        raise ValueError(f"merge_groups 只用于 by='group'，当前 by={by!r}")
+    for layer in layers:
+        _channels(layer)
+        if layer.kind not in _KINDS:
+            raise ValueError(f"不支持的画法 {layer.kind!r}，图层可选 'line'、'scatter'")
+        if layer.side not in _SIDES:
+            raise ValueError(f"图层的 side 只能是 'left'、'right'，实际是 {layer.side!r}")
+    if not any(layer.side == 'left' for layer in layers):
+        raise ValueError("至少要有一个左侧图层：两侧共用的 X 轴按左侧图层定（单位、负号）")
+    if len(layers) > 1 and by != 'sample':
+        raise ValueError(f"by={by!r} 暂不支持多个图层（一张图多个样品时，各层的颜色和图例规则未定）；"
+                         f"每样品一张（by='sample'）时可以画多层")
+    if len({layer.neglog_x for layer in layers if layer.side == 'left'}) > 1:
+        raise ValueError("左侧图层的 neglog_x 要写得一致：它们共用的 X 轴只能有一种刻度符号")
+    for side in _SIDES:
+        if len({layer.neglog_y for layer in layers if layer.side == side}) > 1:
+            raise ValueError(f"{side} 侧图层的 neglog_y 要写得一致：它们共用一根 Y 轴")
 
 
 def _check_not_empty(dataset: DataSet) -> None:
@@ -464,26 +410,26 @@ def _make_figure(key: str | int, curves: list[Curve], name: str | None, *,
     return FigureSpec(key=key, curves=curves, legend_title=legend_title, name=name, **figure_info)
 
 
-def _plan_all_samples(dataset: DataSet, positions: dict, make_curve: MakeCurve,
+def _plan_all_samples(dataset: DataSet, positions: dict, make_curves: MakeCurves,
                       make_figure: MakeFigure) -> FigureSpec:
     """不分组：一张 'main' 图，全部样品按样品号排序，没有分组名和样式。"""
-    curves = [make_curve(sample, None, positions[sample])
-              for sample in sorted(set(dataset.sample_idx))]
+    curves = [curve for sample in sorted(set(dataset.sample_idx))
+              for curve in make_curves(sample, None, positions[sample])]
     return make_figure('main', curves, None)
 
 
-def _plan_separate(groups: Group, positions: dict, make_curve: MakeCurve,
+def _plan_separate(groups: Group, positions: dict, make_curves: MakeCurves,
                    make_figure: MakeFigure) -> list[FigureSpec]:
     """分离模式：每个分组一张图，颜色按样品。"""
     figures = []
     for name in groups:
-        curves = [make_curve(sample, name, positions[sample])
-                  for sample in groups.sample_ids(name)]
+        curves = [curve for sample in groups.sample_ids(name)
+                  for curve in make_curves(sample, name, positions[sample])]
         figures.append(make_figure(name, curves, name))
     return figures
 
 
-def _plan_merged(groups: Group, positions: dict, make_curve: MakeCurve,
+def _plan_merged(groups: Group, positions: dict, make_curves: MakeCurves,
                  make_figure: MakeFigure) -> FigureSpec:
     """合并模式：一张 'main' 图；先算归属，再按归属生成线。"""
     # 以首次出现为准确定分组，字典的插入顺序即绘制顺序。
@@ -496,5 +442,289 @@ def _plan_merged(groups: Group, positions: dict, make_curve: MakeCurve,
     curves = []
     for sample, name in owner.items():
         head = groups.sample_ids(name)[0]
-        curves.append(make_curve(sample, name, positions[head]))
+        curves.extend(make_curves(sample, name, positions[head]))
     return make_figure('main', curves, None)
+
+
+# ============================================================================
+# 柱状图计划
+# ============================================================================
+_BAR_DIMENSIONS: tuple[BarDimension, ...] = ('sample', 'group', 'channel')
+_BAR_MODES: tuple[BarMode, ...] = ('group', 'stack')
+type BarErrors = Literal['std', 'sem'] | Mapping[int, int] | None
+
+
+def plan_bars(dataset: DataSet, groups: Group | None, channels: int | Sequence[int], *,
+              x: BarDimension = 'sample', series: BarDimension = 'channel',
+              reduce: Reduction | None = None, errors: BarErrors = None,
+              mode: BarMode = 'group', width: float = 0.8,
+              styles: BarStyle | Mapping[int, BarStyle] | Mapping[str, BarStyle] | None = None,
+              plotrange: int | None = None, legend_title: str | None = 'auto') -> FigureSpec:
+    """
+    生成柱状图计划，在 X 轴上排列类别，在每个类别内并排或堆叠各系列。
+
+    数据处理层计算柱高和误差。本函数确定类别、系列顺序和样式。
+
+    Parameters
+    ----------
+    dataset : DataSet
+        数据集。
+    groups : Group or None
+        分组，只在 *x* 或 *series* 是 ``'group'`` 时使用（检查规则见 `resolve_groups`）。
+    channels : int or sequence of int
+        画哪几个通道（原数据集里的通道号），按书写顺序排列，不能重复。
+    x, series : {'sample', 'group', 'channel'}
+        类别（X 轴）和系列（图例）各取哪一维：恰好一个是 ``'channel'``，另一个是 ``'sample'`` 或 ``'group'``。
+        样品维画全部样品（按样品号排序），不看分组；``'group'`` 按分组的顺序。
+    reduce : str, callable or None, default: None
+        每一格多行数据怎么汇总成柱高，写法见 `~plotlib.processor.DataTransformer.Reduce`。
+        None 表示每格至多一个有效值，多于一个时报错。用到分组时，先按 *reduce* 汇总每个样品，再组内取平均。
+    errors : {'std', 'sem'}, dict or None, default: None
+        误差棒。``'std'`` / ``'sem'``：用到分组时是组内各样品汇总值之间的，否则是同一列多行之间的（要配
+        ``reduce='mean'``）。``{值通道: 误差通道}``：误差来自另一个通道，按原行与柱高对齐
+        （见 `~plotlib.processor.reduce_with_error`），用到分组时不能用。
+    mode : {'group', 'stack'}, default: 'group'
+        并排或堆叠（正负值分开叠）。
+    width : float, default: 0.8
+        一个类别里全部柱子占间距的比例，在 (0, 1] 之间。
+    styles : BarStyle or dict, optional
+        一个 `BarStyle` 用于全部系列；``{系列键: BarStyle}`` 逐个系列指定。优先于分组配置。
+    plotrange : int, optional
+        每列只取前几行再汇总；None 取全部。
+    legend_title : str or None, default: 'auto'
+        图例标题；``'auto'`` 和 None 都不加。
+
+    Returns
+    -------
+    FigureSpec
+        一张 key 为 ``'main'``、版式为 ``'bars'`` 的图，每个系列一个 `~plotlib.plot_spec.BarSpec`。
+
+    Raises
+    ------
+    ValueError
+        维度、模式、柱宽、汇总方式、误差写错或组合不支持；通道重复或不存在；用到 ``'group'`` 却没有分组；
+        *styles* 的键不是系列的键；写了 *errors* 却没有一根柱算得出误差；某一格有多个值却没写 *reduce*。
+    TypeError
+        通道号、柱宽、样式的类型不对。
+    RuntimeError
+        数据集为空。
+
+    Notes
+    -----
+    - **系列的键**：样品号、通道号（原数据集里的）或组名。
+    - **颜色**：系列是样品 → 按样品在整个数据集里的排名取色带；是分组 → 分组写的 ``color``，没写用组首样品的位置；
+      是通道 → 按在 *channels* 里的名次取色带。分组写的 ``color``、``hatch`` 只在系列是分组时生效。
+    - **Y 轴标题**：一个通道是它的列标题；多个通道只在列标题完全相同时沿用，否则留空。
+    - **缺数据**：某格全是 NaN 时保留位置、不画。
+    """
+    channels = _bar_channels(channels)
+    by_group = 'group' in (x, series)
+    _check_bar_options(x, series, reduce, errors, mode, width, by_group)
+    index = dataset.column_positions
+    _check_not_empty(dataset)
+    resolved = resolve_groups(groups, dataset) if by_group else None
+    if resolved is not None and not resolved.names:
+        raise ValueError("x 或 series 用到 'group' 要有分组：请在 DataPlotter(groups=...) 里给出；"
+                         "画全部样品写 'sample'")
+    available = set(dataset.channel_idx)
+    error_map = dict(errors) if isinstance(errors, Mapping) else None
+    for channel in channels + list((error_map or {}).values()):
+        if channel not in available:
+            raise ValueError(f"数据集里没有通道 {channel}，已有通道 {sorted(available)}")
+    if error_map is not None and not set(error_map) <= set(channels):
+        raise ValueError(f"误差字典的键 {sorted(set(error_map) - set(channels))} 不在 channels={channels} 里")
+
+    # 成员（样品或分组）和系列的键不用汇总就能定下，样式在汇总之前校验
+    samples = sorted(set(dataset.sample_idx))
+    members: list[int] | list[str] = samples if resolved is None else resolved.names
+    keys: list = list(channels) if series == 'channel' else list(members)
+    _check_bar_styles(styles, keys)
+
+    used_samples = samples if resolved is None else sorted({s for name in resolved for s in resolved.sample_ids(name)})
+    _check_finite(dataset, index, used_samples, channels, error_map, plotrange)
+    units = [channel_unit(dataset, channel) for channel in channels]
+    # 汇总成一张表：行是成员，列是通道（按 channels 的顺序，保留原通道号）
+    if resolved is None:
+        member_names = [sample_name(dataset, sample, positions=index) for sample in samples]
+        table, table_errors = _sample_table(dataset, index, samples, member_names, channels, reduce, errors,
+                                            error_map, plotrange)
+    else:
+        member_names = list(resolved.names)
+        table, table_errors = _group_table(resolved, plotrange, channels, reduce, errors)
+
+    if np.isinf(table).any():
+        i, j = np.argwhere(np.isinf(table))[0]
+        raise ValueError(f"{member_names[i]} 的 {units[j]} 汇总出的柱高是 {table[i, j]}：柱高要是有限的数"
+                         "（无穷大画不出来；NaN 表示缺数据、保留位置不画）")
+    if table_errors is not None:
+        _check_bar_errors(table, table_errors, errors, member_names, units)
+
+    if series == 'channel':
+        labels, categories = units, member_names
+        heights, series_errors = table.T, None if table_errors is None else table_errors.T
+    else:
+        labels, categories = member_names, units
+        heights, series_errors = table, table_errors
+
+    bars = []
+    for i, key in enumerate(keys):
+        errors_i = None if series_errors is None else series_errors[i]
+        if series == 'channel' and error_map is not None and key not in error_map:
+            errors_i = None                         # 没写误差通道的系列不画误差棒
+        color_position, group_name, style = _bar_series_style(key, i, len(keys), series, dataset, resolved)
+        if isinstance(styles, BarStyle):
+            style = style.updated(styles)
+        elif styles is not None:
+            style = style.updated(styles.get(key))
+        bars.append(BarSpec(
+            key=key, label=labels[i], group_name=group_name, color_position=color_position,
+            categories=list(categories), heights=heights[i], errors=errors_i,
+            caps=errors_i is None or not np.any(~np.isnan(heights[i]) & np.isnan(errors_i)),
+            series_index=i, series_count=len(keys), mode=mode, width=width, style=style,
+        ))
+    return FigureSpec(key='main', curves=list(bars), x_unit='', y_unit=units[0] if len(set(units)) == 1 else '',
+                      layout='bars', legend_title=None if legend_title == 'auto' else legend_title)
+
+
+def _bar_channels(channels) -> list[int]:
+    """规范 *channels*：单个通道号写成列表；不能为空、不能重复，只收整数。"""
+    written = [channels] if isinstance(channels, Integral) else list(channels)
+    if not written:
+        raise ValueError("channels 至少要一个通道")
+    for channel in written:
+        if isinstance(channel, bool) or not isinstance(channel, Integral):
+            raise TypeError(f"通道号要写整数，实际是 {channel!r}")
+    result = [int(channel) for channel in written]
+    duplicates = sorted({c for c in result if result.count(c) > 1})
+    if duplicates:
+        raise ValueError(f"channels 里有重复的通道 {duplicates}：每个通道只能是一个系列或类别")
+    return result
+
+
+def _check_bar_options(x, series, reduce, errors, mode, width, by_group: bool) -> None:
+    """入口校验：维度、模式、柱宽、汇总方式和误差的写法与组合，在取数之前报错。"""
+    for name, value in (('x', x), ('series', series)):
+        if value not in _BAR_DIMENSIONS:
+            raise ValueError(f"{name} 只能是 'sample'、'group'、'channel'，实际是 {value!r}")
+    if (x == 'channel') == (series == 'channel'):
+        raise ValueError(f"x 和 series 要恰好一个是 'channel'、另一个是 'sample' 或 'group'，"
+                         f"实际是 x={x!r}、series={series!r}")
+    if mode not in _BAR_MODES:
+        raise ValueError(f"mode 只能是 'group'（并排）、'stack'（堆叠），实际是 {mode!r}")
+    if isinstance(width, bool) or not isinstance(width, Real):
+        raise TypeError(f"width 要写 (0, 1] 之间的数，实际是 {width!r}")
+    if not 0 < float(width) <= 1:                   # NaN 也不满足
+        raise ValueError(f"width 要在 (0, 1] 之间，实际是 {width!r}")
+    check_reduction(reduce)
+    if isinstance(errors, Mapping):
+        if by_group:
+            raise ValueError("用到分组时不能写误差字典：组内合并各样品的误差要做误差传递，没有唯一的算法；"
+                             "请用 errors='std' 或 'sem'（组内各样品之间）")
+        for value_channel, error_channel in errors.items():
+            for channel in (value_channel, error_channel):
+                if isinstance(channel, bool) or not isinstance(channel, Integral):
+                    raise TypeError(f"误差字典要写 {{值通道: 误差通道}}，通道号是整数，实际是 {channel!r}")
+    elif errors is not None and errors not in ('std', 'sem'):
+        raise ValueError(f"errors 只能是 'std'、'sem'、{{值通道: 误差通道}} 或 None，实际是 {errors!r}")
+    elif errors is not None and not by_group and reduce != 'mean':
+        raise ValueError(f"不用分组时，errors={errors!r} 是同一列多行之间的离散程度，柱高要是均值：请写 reduce='mean'")
+
+
+def _check_bar_errors(table: np.ndarray, table_errors: np.ndarray, errors, member_names: list[str],
+                      units: list[str]) -> None:
+    """
+    校验汇总后的误差：NaN 表示这根柱没有误差，其余必须有限且非负（原始误差都合法时，函数汇总也可能得到负数或无穷大）；
+    指定误差时，至少一根有效柱须有可绘制的误差棒。
+    """
+    bad = ~np.isnan(table_errors) & ~(np.isfinite(table_errors) & (table_errors >= 0))
+    if bad.any():
+        i, j = np.argwhere(bad)[0]
+        raise ValueError(f"{member_names[i]} 的 {units[j]} 汇总出的误差是 {table_errors[i, j]}："
+                         "误差要是有限的非负数（NaN 表示这根柱没有误差）")
+    if not np.any(~np.isnan(table) & ~np.isnan(table_errors)):
+        raise ValueError(f"写了 errors={errors!r}，但没有一根柱算得出误差（如每格只有一个值、每组只有一个样品），"
+                         "图上不会有误差棒")
+
+
+def _check_finite(dataset: DataSet, index: Mapping[tuple[int, int], int], samples: list[int], channels: list[int],
+                  error_map: dict[int, int] | None, plotrange: int | None) -> None:
+    """
+    在汇总前校验选定样品和通道的前 *plotrange* 行。
+    相反符号的无穷大求均值会产生 NaN，须在计算前区分无穷大与缺失值。
+    """
+    error_channels = set((error_map or {}).values())
+    for sample in samples:
+        for channel in [*channels, *sorted(error_channels - set(channels))]:
+            position = index.get((sample, channel))
+            if position is None or not np.isinf(dataset.data[:plotrange, position]).any():
+                continue
+            kind = '误差通道 ' if channel in error_channels else ''
+            raise ValueError(f"样品 {dataset.names[position]}（样品号 {sample}）的{kind} {dataset.units[position]} 有无穷大："
+                             "柱状图只用 NaN 表示缺数据，无穷大画不出来")
+
+
+def _sample_table(dataset: DataSet, index: Mapping[tuple[int, int], int], samples: list, names: list[str],
+                  channels: list[int], reduce, errors, error_map: dict[int, int] | None, plotrange: int | None):
+    """不用分组：每个样品、每个通道汇总成一格（只取前 *plotrange* 行）；误差是同一列多行之间的，或来自误差通道（按原行对齐）。"""
+    table = np.full((len(samples), len(channels)), np.nan)
+    table_errors = None if errors is None else np.full_like(table, np.nan)
+    for i, (sample, name) in enumerate(zip(samples, names)):
+        for j, channel in enumerate(channels):
+            if (sample, channel) not in index:
+                raise ValueError(f"样品 {name}（样品号 {sample}）没有通道 {channel}")
+            column = dataset.data[:plotrange, index[(sample, channel)]]
+            where = f"样品 {name}（样品号 {sample}）的 {dataset.units[index[(sample, channel)]]} "
+            if error_map is not None and channel in error_map:
+                if (sample, error_map[channel]) not in index:
+                    raise ValueError(f"样品 {name}（样品号 {sample}）没有误差通道 {error_map[channel]}")
+                table[i, j], table_errors[i, j] = reduce_with_error(       # type: ignore[index]
+                    column, dataset.data[:plotrange, index[(sample, error_map[channel])]], reduce, where)
+                continue
+            table[i, j] = reduce_values(column, reduce, where)
+            if error_map is None and table_errors is not None:
+                table_errors[i, j] = reduce_values(column, errors, where)
+    return table, table_errors
+
+
+def _group_table(groups: Group, plotrange: int | None, channels: list[int], reduce, errors):
+    """
+    按组计算柱高和误差，使用各样品的汇总值作为组内统计的输入。
+    ``Group.reduce(rows=...)`` 在读取原分组的数据时截取行。
+    """
+    shape = (len(groups.names), len(channels))      # Group.reduce 的结果按「分组 → 通道」排列
+    if errors is None:
+        return groups.reduce('mean', within=reduce, channels=channels, rows=plotrange).data[0].reshape(shape), None
+    # 一次算：柱高和误差用同一批样品汇总值（reduce 是函数时只对每个样品调用一次）
+    means, spreads = groups.reduce(['mean', errors], within=reduce, channels=channels, rows=plotrange)
+    return means.data[0].reshape(shape), spreads.data[0].reshape(shape)
+
+
+def _bar_series_style(key, index: int, count: int, series: BarDimension, dataset: DataSet,
+                      groups: Group | None) -> tuple[float | None, str | None, BarStyle]:
+    """一个系列的默认配色位置、分组名和分组样式（只有系列是分组时读分组的 ``color``、``hatch``）。"""
+    if series == 'sample':
+        return color_positions(dataset.sample_idx)[key], None, BarStyle()
+    if series == 'group':
+        assert groups is not None
+        head = groups.sample_ids(key)[0]
+        return (color_positions(dataset.sample_idx)[head], key,
+                BarStyle(color=groups.color(key), hatch=groups.hatch(key)))
+    return index / count, None, BarStyle()
+
+
+def _check_bar_styles(styles, keys: list) -> None:
+    """*styles* 是一个 `BarStyle`、``{系列键: BarStyle}`` 或 None；键必须是系列的键，样式逐个校验。"""
+    if styles is None:
+        return
+    if isinstance(styles, BarStyle):
+        check_bar_style(styles)
+        return
+    if not isinstance(styles, Mapping):
+        raise TypeError(f"styles 要写 BarStyle 或 {{系列键: BarStyle}}，实际是 {type(styles).__name__}")
+    unknown = [key for key in styles if key not in keys]
+    if unknown:
+        raise ValueError(f"styles 的键 {unknown} 不是系列的键，可用 {keys}")
+    for key, style in styles.items():
+        if not isinstance(style, BarStyle):
+            raise TypeError(f"styles[{key!r}] 要写 BarStyle，实际是 {type(style).__name__}")
+        check_bar_style(style)

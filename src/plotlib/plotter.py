@@ -4,15 +4,18 @@
 `DataPlotter` 将数据选择和分组转换为绘图计划，由所选后端渲染。
 绘图结果保存在 ``DataPlotter.figures``。
 """
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from .backends import get_backend
 from .dataset import DataSet
 from .group import Group
-from .plan import plan_dual_y_figures, plan_multiline_figures, plan_scatter_figures, plan_xy_figures, resolve_groups
-from .plot_spec import (Appearance, AxesFormatter, CurveKind, DrawnFigure, FigureSpec, FrameStyle, LegendStyle,
-                        LineStyle, TickStyle)
+from .layouts import NO_LEGEND_MESSAGE
+from .plan import BarErrors, plan_bars, plan_figures, resolve_groups
+from .plot_spec import (Appearance, AxesFormatter, BarDimension, BarMode, BarStyle, DrawnFigure, FigureSpec,
+                        FrameStyle, Layer, LegendStyle, LineStyle, Members, TickStyle)
+from .processor import Reduction
 
 # 整图回调在各轴回调之后接收图形和坐标轴映射。
 type FigureFormatter = Callable[[Any, dict[str, Any]], Any]
@@ -22,10 +25,10 @@ class DataPlotter:
     """
     使用 Matplotlib 或 Plotly 绘制多样品科学数据。
 
-    - `plot_multiline`：所有样品画在同一坐标系，每个样品一条线；
-    - `plot_groups`：按分组画，分离模式每组一张图，合并模式所有分组一张图；
-    - `plot_xy`：每个样品一张图，画两个通道的关系（如 Nyquist 图）；
-    - `plot_dual_y`：每个样品一张图，左右两根 Y 轴共用 X 轴。
+    曲线类的图都用 `plot`，由两样东西组合：
+
+    - *by*：哪些样品进哪张图。``'all'`` 全部样品一张，``'group'`` 按分组（分开或合并），``'sample'`` 每个样品一张；
+    - *layers*：每个样品画哪几条。一个 `~plotlib.plot_spec.Layer` 写取哪两个通道、画成折线还是散点、挂左轴还是右轴。
 
     每次绘图会更新 ``figures``。绘图方法返回 ``self``，支持链式调用。
 
@@ -43,20 +46,25 @@ class DataPlotter:
 
     Notes
     -----
-    坐标轴、曲线和图例回调均按轴调用。可用整图回调访问图形及其全部坐标轴。
+    坐标轴、曲线和图例回调按轴打包成 `~plotlib.plot_spec.AxesFormatter`，可用整图回调访问图形及其全部坐标轴。
 
-    - ``axes_formatter``：matplotlib 以 ``(ax, fig)`` 调用，Plotly 以 ``(轴名, fig)`` 调用，如 ``('yaxis2', fig)``；
-    - ``lines_formatter``：这根轴上的折线组成的列表（matplotlib 是 ``Line2D``，Plotly 是 trace）；
-    - ``scatter_formatter``：这根轴上的散点组成的列表（matplotlib 是 ``PathCollection``，Plotly 是 trace）；
-    - ``legend_formatter``：matplotlib 收 ``[Legend]``，Plotly 收 ``[fig.layout.legend]``；
+    - ``axes`` 在 Matplotlib 中接收 ``(ax, fig)``，在 Plotly 中接收 ``(轴名, fig)``，例如 ``('yaxis2', fig)``。
+    - ``lines`` 接收当前轴上的折线列表（Matplotlib 的 ``Line2D`` 或 Plotly 的 trace）。
+    - ``scatter`` 接收当前轴上的散点列表（Matplotlib 的 ``PathCollection`` 或 Plotly 的 trace）。
+    - ``bars`` 接收各个柱状图系列（Matplotlib 的 ``BarContainer`` 或 Plotly 的柱状 trace）。
+    - ``legend`` 在 Matplotlib 中接收 ``[Legend]``，在 Plotly 中接收 ``[fig.layout.legend]``。
     - ``figure_formatter``：``(fig, axes)``，``axes`` 在 matplotlib 是 ``{'left': ax, ...}``，
       在 Plotly 是 ``{'left': 'yaxis', ...}``。
 
-    图例回调配置整张图的图例，在双 Y 轴图中通过左侧处理。
+    图例回调配置整张图的图例，只能放在左侧。
+    图例按绘图计划生成，每条曲线或每个柱状图系列对应一个条目。只有一个条目时也显示图例。
+    空样品名和以 ``'_'`` 开头的样品名均保留。Matplotlib 的双 Y 轴图先列左轴，再列右轴。
+    回调将标签设为 ``None``，或将标签改为以 ``'_'`` 开头的名称（如 ``'_nolegend_'``）时，Matplotlib 略去该条目。
+    线条、散点或柱状图回调触发图例重建时，参考线等由回调添加的带标签对象排在计划条目之后。
     后端先应用默认版式，再运行各轴回调和整图回调，最后处理负对数刻度。
 
-    构造时指定的 ``lines``、``frame``、``legend`` 和 ``ticks`` 应用于所有绘图方法。
-    ``plotlib.formatters`` 提供坐标轴、折线、散点和图例的回调工厂。
+    ``frame``、``legend`` 和 ``ticks`` 设置各绘图方法的全局外观，``lines`` 设置折线外观。
+    `plotlib.formatters` 提供坐标轴、折线、散点、柱状图和图例的回调工厂。
 
     See Also
     --------
@@ -66,13 +74,13 @@ class DataPlotter:
     Examples
     --------
     >>> plotter = DataPlotter(dataset, channel_x=0, channel_y=1)
-    >>> plotter.plot_multiline(neglog_y=True)
+    >>> plotter.plot(Layer(neglog_y=True))
     >>> import matplotlib.pyplot as plt
     >>> plt.show()
 
     换成 Plotly 交互图，只改 ``backend``：
 
-    >>> fig = DataPlotter(dataset, backend='plotly').plot_multiline().add_slider()
+    >>> fig = DataPlotter(dataset, backend='plotly').plot().add_slider()
     """
 
     def __init__(
@@ -124,10 +132,10 @@ class DataPlotter:
         plotrange : int, optional
             每条线只画前 *plotrange* 个数据点；None 画全部。
         channel_x, channel_y : int, default: 0, 1
-            X、Y 数据的通道号（样品内的列序号）。`plot_xy` 不传通道时也用它们。
+            X、Y 数据的通道号（样品内的列序号）。`plot` 的图层没写通道时用它们。
         figsize : tuple of (float, float), optional
-            图尺寸 ``(宽, 高)``，单位为英寸。默认值由绘图方法决定。
-            `plot_multiline` 为 (10, 8)，`plot_groups` 为 (16, 12)，`plot_xy` 和 `plot_dual_y` 为 (12, 8)。
+            图尺寸 ``(宽, 高)``，单位为英寸。默认值按 `plot` 的 *by*：
+            ``'all'`` 为 (10, 8)，``'group'`` 为 (16, 12)，``'sample'`` 为 (12, 8)。
         dpi : float, default: 100
             渲染分辨率（每英寸像素数）。后端按它把字号、线宽（磅）和 *figsize* （英寸）换成实际大小，
             所以两个后端画出的比例一致。
@@ -232,7 +240,7 @@ class DataPlotter:
 
         Examples
         --------
-        >>> fig = DataPlotter(data, backend='plotly').plot_multiline().add_slider(mode='single')
+        >>> fig = DataPlotter(data, backend='plotly').plot().add_slider(mode='single')
         """
         add_slider = self._slider_method('add_slider')
         if len(self.figures) != 1:
@@ -270,7 +278,7 @@ class DataPlotter:
 
         Examples
         --------
-        >>> fig = DataPlotter(data, backend='plotly').plot_xy().add_page_slider()
+        >>> fig = DataPlotter(data, backend='plotly').plot(by='sample').add_page_slider()
         """
         add_page_slider = self._slider_method('add_page_slider')
         if len(self.figures) == 1:
@@ -285,279 +293,217 @@ class DataPlotter:
                                       f"请用 DataPlotter(..., backend='plotly')")
         if not self.figures:
             raise RuntimeError("请先调用绘图方法，再添加滑块")
+        if any(drawn.spec.layout == 'bars' for drawn in self.figures.values()):
+            raise RuntimeError("柱状图不支持滑块：滑块按样品切换曲线，柱状图的系列不一定是样品")
         return method
 
     # ========================================================================
     # 绘图方法：计划 → 打包回调 → _render
     # ========================================================================
 
-    def plot_multiline(self,
-                       axes_formatter=None,
-                       lines_formatter=None,
-                       legend_formatter=None,
-                       neglog_x: bool = False,
-                       neglog_y: bool = False,
-                       figure_formatter: FigureFormatter | None = None,
-                       legend_title: str | None = None,
-                       ) -> DataPlotter:
+    _DEFAULT_FIGSIZE = {'all': (10, 8), 'group': (16, 12), 'sample': (12, 8)}
+
+    def plot(self,
+             layers: Layer | Sequence[Layer] | None = None,
+             by: Members = 'all',
+             merge_groups: bool = False,
+             formatters: AxesFormatter | dict[str, AxesFormatter] | None = None,
+             figure_formatter: FigureFormatter | None = None,
+             legend_title: str | None = 'auto',
+             ) -> DataPlotter:
         """
-        多线图：所有样品画在同一坐标系，每个样品一条折线，颜色按样品在色带上取。散点用 `plot_scatter`。
+        绘制折线和散点图。*by* 指定样品的分图方式，*layers* 指定每个图层的通道、画法和 Y 轴。
 
         Parameters
         ----------
-        axes_formatter, lines_formatter, legend_formatter : callable, optional
-            坐标轴、线条、图例的回调，调用形状见类说明的 Notes。
-            一般用 `~plotlib.formatters.make_axes_formatter` 等工厂生成。
-        neglog_x, neglog_y : bool, default: False
-            负对数：数据取绝对值后画，刻度文字补回负号。适合全为负数、又想用对数轴的数据。
-        figure_formatter : callable, optional
-            整图回调 ``figure_formatter(fig, axes)``，在各轴回调之后调用一次。
-        legend_title : str, optional
-            图例标题，默认不加。多线图只有一张图，标题原样使用（``'{name}'`` 不替换）。
-
-        Returns
-        -------
-        DataPlotter
-            ``self``，可以链式调用。结果在 ``figures = {'main': DrawnFigure}``。
-
-        Examples
-        --------
-        >>> plotter = DataPlotter(data, channel_x=0, channel_y=1)
-        >>> plotter.plot_multiline(axes_formatter=make_axes_formatter(x=AxisStyle(scale='log')))
-        >>> line = plotter.figures['main'].artist(0)      # 样品 0 的线
-        """
-        # 不分组（groups=None）：一张 'main' 图，全部样品；不看 self.groups
-        specs = plan_multiline_figures(self.dataset, None, self.channel_x, self.channel_y,
-                                       plotrange=self.plotrange, neglog_x=neglog_x, neglog_y=neglog_y,
-                                       legend_title=legend_title)
-        formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
-        return self._render(specs, self.figsize or (10, 8), formatters, figure_formatter)
-
-    def plot_groups(self,
-                    neglog_x: bool = False,
-                    neglog_y: bool = False,
-                    axes_formatter=None,
-                    lines_formatter=None,
-                    legend_formatter=None,
-                    merge_groups: bool = False,
-                    figure_formatter: FigureFormatter | None = None,
-                    legend_title: str | None = None,
-                    ) -> DataPlotter:
-        """
-        按 ``self.groups`` 分组画多线图。
-
-        没有分组时等同于 `plot_multiline`。分组画散点用 `plot_scatter`。
-
-        Parameters
-        ----------
+        layers : Layer or list of Layer, optional
+            图层及其顺序。省略的通道取构造时的 *channel_x*、*channel_y*。
+            默认使用 ``Layer()``，在左轴绘制折线。
+        by : {'all', 'group', 'sample'}, default: 'all'
+            ``'all'``：全部样品一张图，不看分组；``'group'``：按 ``self.groups`` 画（没有分组时报错）；
+            ``'sample'``：每个样品一张图，不看分组。
         merge_groups : bool, default: False
-            False：每个分组单独一张图；True：所有分组合并到一张图。
-        neglog_x, neglog_y, axes_formatter, lines_formatter, legend_formatter, figure_formatter
-            同 `plot_multiline`。
-        legend_title : str, optional
-            图例标题，默认不加。分离模式下 ``'{name}'`` 换成组名，如 ``'Group {name}'``。
-
-        Returns
-        -------
-        DataPlotter
-            ``self``，可以链式调用。分离模式 ``figures = {组名: DrawnFigure}``；
-            合并模式 ``figures = {'main': DrawnFigure}``。
-
-        Notes
-        -----
-        分组样式读取 ``linestyle``、``marker``、``color``，覆盖全局样式；``lines_formatter`` 可进一步覆盖分组样式。
-
-        未指定分组颜色时，分离模式按样品配色，合并模式采用各组第一个样品的颜色。
-        合并时，属于多个分组的样品只绘制一次，采用配置中第一个包含该样品的分组样式。
-
-        Examples
-        --------
-        >>> groups = Group(data, {'A': {'num': [0, 1], 'linestyle': 'dash'}, 'B': {'num': [2, 3]}})
-        >>> DataPlotter(data, groups=groups).plot_groups(merge_groups=True)
-        """
-        if not self.groups.names:
-            return self.plot_multiline(
-                neglog_x=neglog_x, neglog_y=neglog_y,
-                axes_formatter=axes_formatter, lines_formatter=lines_formatter,
-                legend_formatter=legend_formatter, figure_formatter=figure_formatter,
-                legend_title=legend_title,
-            )
-
-        specs = plan_multiline_figures(self.dataset, self.groups, self.channel_x, self.channel_y,
-                                       merge_groups=merge_groups, plotrange=self.plotrange,
-                                       neglog_x=neglog_x, neglog_y=neglog_y, legend_title=legend_title)
-        formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
-        return self._render(specs, self.figsize or (16, 12), formatters, figure_formatter)
-
-    def plot_scatter(self,
-                     neglog_x: bool = False,
-                     neglog_y: bool = False,
-                     axes_formatter=None,
-                     scatter_formatter=None,
-                     legend_formatter=None,
-                     merge_groups: bool = False,
-                     figure_formatter: FigureFormatter | None = None,
-                     legend_title: str | None = None,
-                     ) -> DataPlotter:
-        """
-        为每个样品绘制一组散点。
-
-        配置分组时，按 `plot_groups` 的规则选择样品、配色和分图。未配置分组时，在一张图中绘制全部样品。
-
-        Parameters
-        ----------
-        scatter_formatter : callable, optional
-            接收该轴上各组散点对象的列表。可用 `~plotlib.formatters.make_scatter_formatter` 创建。
-        merge_groups : bool, default: False
-            为真时将各分组合并到同一张图，为假时为每个分组分别绘图。
-        neglog_x, neglog_y, axes_formatter, legend_formatter, figure_formatter
-            同 `plot_multiline`。
-        legend_title : str, optional
-            图例标题，默认不加。分离模式下 ``'{name}'`` 换成组名。
-
-        Returns
-        -------
-        DataPlotter
-            ``self``，可以链式调用。不分组、合并模式 ``figures = {'main': DrawnFigure}``；
-            分离模式 ``figures = {组名: DrawnFigure}``。取散点用 ``figures[key].artist(样品号)``。
-
-        Notes
-        -----
-        散点的分组样式由 ``marker`` 和 ``color`` 指定，可通过 ``scatter_formatter`` 覆盖。
-
-        Examples
-        --------
-        >>> groups = Group(data, {'A': {'num': [0, 1], 'marker': 'square'}, 'B': {'num': [2, 3]}})
-        >>> DataPlotter(data, groups=groups).plot_scatter(merge_groups=True)
-        """
-        specs = plan_scatter_figures(self.dataset, self.groups, self.channel_x, self.channel_y,
-                                     merge_groups=merge_groups, plotrange=self.plotrange,
-                                     neglog_x=neglog_x, neglog_y=neglog_y, legend_title=legend_title)
-        formatters = {'left': AxesFormatter(axes_formatter, legend=legend_formatter, scatter=scatter_formatter)}
-        default_size = (16, 12) if self.groups.names else (10, 8)      # 与 plot_groups / plot_multiline 一致
-        return self._render(specs, self.figsize or default_size, formatters, figure_formatter)
-
-    def plot_xy(self,
-                axes_formatter=None,
-                lines_formatter=None,
-                legend_formatter=None,
-                neglog_x: bool = False,
-                neglog_y: bool = False,
-                channel_x: int | None = None,
-                channel_y: int | None = None,
-                figure_formatter: FigureFormatter | None = None,
-                legend_title: str | None = None,
-                ) -> DataPlotter:
-        """
-        x-y 单线图：每个样品一张图、一条线，画两个通道之间的关系（如 Nyquist 图：Zs' 对 Zs''）。
-
-        一张图只有一条线，不按样品换色，用后端默认色。
-
-        Parameters
-        ----------
-        channel_x, channel_y : int, optional
-            横轴、纵轴的通道号；不传时用构造时的 *channel_x*、*channel_y*。
-        legend_title : str, optional
-            图例标题，默认不加。``'{name}'`` 换成每张图的样品名。
-        axes_formatter, lines_formatter, legend_formatter, neglog_x, neglog_y, figure_formatter
-            同 `plot_multiline`。
-
-        Returns
-        -------
-        DataPlotter
-            ``self``，可以链式调用。``figures = {样品号: DrawnFigure}``，
-            取线用 ``figures[样品号].artist(样品号)``。Plotly 把各样品画成一个 Figure 的多页，
-            用 `add_page_slider` 翻页。
-
-        Examples
-        --------
-        >>> DataPlotter(data).plot_xy(channel_x=1, channel_y=2, neglog_y=True)
-        """
-        specs = plan_xy_figures(self.dataset,
-                                self.channel_x if channel_x is None else channel_x,
-                                self.channel_y if channel_y is None else channel_y,
-                                plotrange=self.plotrange, neglog_x=neglog_x, neglog_y=neglog_y,
-                                legend_title=legend_title)
-        formatters = {'left': AxesFormatter(axes_formatter, lines_formatter, legend_formatter)}
-        return self._render(specs, self.figsize or (12, 8), formatters, figure_formatter)
-
-    def plot_dual_y(self,
-                    left: tuple[int, int] = (0, 1),
-                    right: tuple[int, int] = (2, 3),
-                    axes_formatter=None,
-                    lines_formatter=None,
-                    legend_formatter=None,
-                    right_axes_formatter=None,
-                    right_lines_formatter=None,
-                    right_legend_formatter=None,
-                    neglog_x: bool = False,
-                    neglog_y: bool = False,
-                    neglog_x2: bool = False,
-                    neglog_y2: bool = False,
-                    plot_kinds: tuple[CurveKind, CurveKind] = ('line', 'line'),
-                    figure_formatter: FigureFormatter | None = None,
-                    legend_title: str | None = '{name}',
-                    scatter_formatter=None,
-                    right_scatter_formatter=None,
-                    ) -> DataPlotter:
-        """
-        双 Y 轴图：每个样品一张图，左线挂左轴、右线挂右轴，共用 X 轴。
-
-        默认左红右蓝、画完整的框；图例在图外上方，两条线都进图例、各写自己的单位，
-        图例标题是样品名。
-
-        Parameters
-        ----------
-        left, right : (int, int)
-            左线、右线的 (X 通道, Y 通道)。两条线共用一根 X 轴：X 通道可以不同（如位移、电压各有自己的时间列，
-            采样点可以不一样），但必须是同一个物理量、同一个单位（秒和毫秒混用不报错，会按数值直接叠在一起），
-            X 轴标题取左侧 X 通道的单位。
-        axes_formatter, lines_formatter, legend_formatter : callable, optional
-            左侧的坐标轴和曲线回调，以及整张图的图例回调。
-        right_axes_formatter, right_lines_formatter : callable, optional
-            右侧的坐标轴和曲线回调。X 轴设置应用于共用的 X 轴。
-        right_legend_formatter : callable, optional
-            不能用：右轴没有单独的图例，给了会报 `ValueError`。
-        neglog_x, neglog_y, neglog_x2, neglog_y2 : bool, default: False
-            左线的 X、Y 与右线的 X、Y 是否按负对数画。X 轴左右共用，刻度负号只按 *neglog_x* 加一次，
-            *neglog_x2* 只对右线的 X 数据取绝对值。
-        plot_kinds : tuple of ({'line', 'scatter'}, {'line', 'scatter'}), default: ('line', 'line')
-            左线、右线的画法，如 ``('scatter', 'line')`` 画「数据点 + 拟合线」。
+            ``by='group'`` 时：False 每个分组一张图，True 所有分组合并到一张图（重复样品只画一次）。
+        formatters : AxesFormatter or dict, optional
+            按轴的回调。一个 `~plotlib.plot_spec.AxesFormatter` 作用于左轴；
+            ``{'left': AxesFormatter(...), 'right': AxesFormatter(...)}`` 分别给两侧。
+            回调签名见类说明。左右两侧共享 X 轴，任一侧的坐标轴回调都可调整该轴。
+            画图前检查：轴名只能是 ``'left'``、``'right'``，没有右侧图层时不能给 ``'right'``，图例回调只能放在左侧。
         figure_formatter : callable, optional
-            整图回调 ``figure_formatter(fig, axes)``，``axes = {'left': 左轴, 'right': 右轴}``，
-            可以同时调整两根轴。
-        legend_title : str or None, default: '{name}'
-            图例标题，``'{name}'`` 换成样品名；None 表示不加。
-        scatter_formatter, right_scatter_formatter : callable, optional
-            左侧、右侧的散点回调，只作用于画成散点的那一侧（线条回调只作用于折线）。
+            整图回调 ``figure_formatter(fig, axes)``，在各轴回调之后调用一次，可以同时调整两根轴。
+        legend_title : str or None, default: 'auto'
+            图例标题，``'{name}'`` 换成每张图自己的名字：``by='sample'`` 是样品名，分组分离时是组名
+            （只有一个样品或一个分组、只画出一张图时也替换）；``'all'`` 和合并模式的图没有自己的名字，原样保留。
+            ``'auto'``：一个样品画多层时是样品名，否则不加；None 表示不加。
 
         Returns
         -------
         DataPlotter
-            ``self``，可以链式调用。``figures = {样品号: DrawnFigure}``；左线用
-            ``figures[样品号].artist(样品号)``，右线用 ``.artist(样品号, 'right')``，
-            坐标轴在 ``.axes['left']`` / ``.axes['right']``。
+            ``self``，可以链式调用。``figures`` 的键：``'all'`` 和合并模式是 ``'main'``，分离模式是组名，
+            ``'sample'`` 是样品号。``figures[key].artist(样品号, 轴)`` 取这根轴上该样品的第一个图层，
+            同一轴多层时用 ``figures[key].artists``，同一样品各层的顺序与 *layers* 一致。
 
         Raises
         ------
         ValueError
-            给了 *right_legend_formatter*；或 *plot_kinds* 里有不认识的画法。
+            分图方式、图层配置或负对数设置无效，具体规则见 `~plotlib.plan.plan_figures`。
+            回调的轴名无效、右轴回调没有对应图层，或图例回调配置在右侧时也会报错。
+            校验在渲染前进行。
+
+        Notes
+        -----
+        默认尺寸按 *by*：``'all'`` (10, 8)，``'group'`` (16, 12)，``'sample'`` (12, 8)；构造时给了 *figsize* 就都用它。
+        版式按图层和 *by*：有右侧图层用双 Y 轴版式（左红右蓝），``'sample'`` 用单图版式，其余用多线版式。
 
         Examples
         --------
-        压电数据：左轴画位移-时间，右轴画电压-时间：
+        全部样品一张图，Y 轴对数：
 
-        >>> DataPlotter(data).plot_dual_y(left=(0, 1), right=(2, 3))
+        >>> plotter = DataPlotter(data, channel_x=0, channel_y=1)
+        >>> plotter.plot(formatters=AxesFormatter(axes=make_axes_formatter(y=AxisStyle(scale='log'))))
+
+        按分组画散点，每组一张：
+
+        >>> DataPlotter(data, groups=groups).plot(Layer(kind='scatter'), by='group')
+
+        每个样品一张 Nyquist 图（Zs' 对 Zs''，Zs'' 为负）：
+
+        >>> plotter.plot(Layer(1, 2, neglog_y=True), by='sample')
+
+        每个样品一张双 Y 轴图，左轴实测点、右轴另一个量：
+
+        >>> plotter.plot([Layer(0, 1, kind='scatter'), Layer(0, 2, side='right')], by='sample')
         """
-        specs = plan_dual_y_figures(
-            self.dataset, left=left, right=right, plotrange=self.plotrange,
-            neglog_x=neglog_x, neglog_y=neglog_y, neglog_x2=neglog_x2, neglog_y2=neglog_y2,
-            kinds=plot_kinds, legend_title=legend_title,
-        )
-        # 每根轴一组回调
-        formatters = {
-            'left':  AxesFormatter(axes_formatter, lines_formatter, legend_formatter, scatter_formatter),
-            'right': AxesFormatter(right_axes_formatter, right_lines_formatter, right_legend_formatter,
-                                   right_scatter_formatter),
-        }
-        return self._render(specs, self.figsize or (12, 8), formatters, figure_formatter)
+        if layers is None:
+            layers = [Layer()]
+        elif isinstance(layers, Layer):
+            layers = [layers]
+        # 没写通道的图层补成构造时的通道
+        layers = [replace(layer, x=self.channel_x if layer.x is None else layer.x,
+                          y=self.channel_y if layer.y is None else layer.y) for layer in layers]
+        specs = plan_figures(self.dataset, self.groups if by == 'group' else None, layers, by=by,
+                             merge_groups=merge_groups, plotrange=self.plotrange, legend_title=legend_title)
+        if formatters is None:
+            formatters = {}
+        elif isinstance(formatters, AxesFormatter):
+            formatters = {'left': formatters}
+        _check_formatters(formatters, has_right=any(layer.side == 'right' for layer in layers))
+        figsize = self.figsize or self._DEFAULT_FIGSIZE[by]
+        return self._render(specs, figsize, formatters, figure_formatter)
+
+    def plot_bars(self,
+                  channels: int | Sequence[int] | None = None,
+                  x: BarDimension = 'sample',
+                  series: BarDimension = 'channel',
+                  reduce: Reduction | None = None,
+                  errors: BarErrors = None,
+                  mode: BarMode = 'group',
+                  width: float = 0.8,
+                  styles: BarStyle | Mapping[int, BarStyle] | Mapping[str, BarStyle] | None = None,
+                  formatters: AxesFormatter | dict[str, AxesFormatter] | None = None,
+                  figure_formatter: FigureFormatter | None = None,
+                  legend_title: str | None = 'auto',
+                  ) -> DataPlotter:
+        """
+        在 X 轴上排列类别，在每个类别内并排或堆叠各系列。
+
+        类别和系列中，恰有一维为通道（``'channel'``），另一维为样品或分组。
+        *reduce* 将每个类别与系列组合对应的数据汇总成一个柱高。省略时，每个组合至多允许一个有效值。
+
+        Parameters
+        ----------
+        channels : int or list of int, optional
+            按指定顺序绘制的通道号，须互不重复。省略时使用构造时的 *channel_y*。
+        x, series : {'sample', 'group', 'channel'}, default: 'sample', 'channel'
+            类别（X 轴）和系列（图例）各取哪一维。``'sample'`` 画全部样品（按样品号排序），不看分组；
+            ``'group'`` 按 ``self.groups`` 的分组（没有分组时报错）。
+        reduce : str, callable or None, default: None
+            每列跨行汇总为柱高的方法，取值见 `~plotlib.processor.DataTransformer.Reduce`。
+            ``None`` 要求每格至多有一个有效值。分组时先汇总各样品，再对组内结果取均值。
+            构造参数 *plotrange* 指定纳入计算的前若干行。
+        errors : {'std', 'sem'}, dict or None, default: None
+            对称误差棒。``'std'`` 和 ``'sem'`` 分别表示标准差和标准误差。
+            分组时以组内各样品的汇总值为输入，按样品绘制时以同一列的多行数据为输入，且要求 ``reduce='mean'``。
+            按样品绘制还可用 ``{值通道: 误差通道}`` 指定误差来源。误差按原始行与柱高对齐，误差传递由调用方负责。
+        mode : {'group', 'stack'}, default: 'group'
+            并排或堆叠。堆叠时正负值分别累加，误差棒以每段远离零的一端为中心。
+            调用方须确保叠加的通道单位相同，且数值可相加。Plotly 的堆叠图带误差棒时禁用图例的单击和双击显隐操作，
+            因为误差棒的位置在渲染前已确定。
+        width : float, default: 0.8
+            单个类别的总柱宽占类别间距的比例，取值范围为 ``(0, 1]``。
+        styles : BarStyle or dict, optional
+            一个 `~plotlib.plot_spec.BarStyle` 用于全部系列；``{系列键: BarStyle}`` 逐个系列指定，优先于分组配置的
+            ``color``、``hatch``。请通过此参数配置误差棒端帽半长 ``capsize``，Matplotlib 在绘制时创建端帽。
+        formatters : AxesFormatter or dict, optional
+            回调，只有左轴：``AxesFormatter(axes=..., bars=..., legend=...)``；``bars`` 收各个系列
+            （matplotlib 是 ``BarContainer``，Plotly 是 trace）。写了 ``lines``、``scatter`` 或 ``'right'`` 时报错。
+        figure_formatter : callable, optional
+            整图回调 ``figure_formatter(fig, axes)``，在各轴回调之后调用一次（如添加第二套图例）。
+        legend_title : str or None, default: 'auto'
+            图例标题；``'auto'`` 和 None 都不加。
+
+        Returns
+        -------
+        DataPlotter
+            ``self``。结果是一张 ``figures['main']``；``figures['main'].artist(key)`` 按系列的键取：
+            样品号、原数据集里的通道号或组名。
+
+        Raises
+        ------
+        ValueError
+            维度、通道、柱宽、汇总、误差、样式或回调配置无效，或数据不符合汇总要求。
+            具体规则见 `~plotlib.plan.plan_bars`。校验参数和汇总结果后才开始渲染。
+
+        Notes
+        -----
+        - **颜色**：系列是样品 → 样品色；是分组 → 分组写的颜色，没写用组首样品色；是通道 → 按在 *channels* 里的名次取色带。
+        - **Y 轴标题**：一个通道是它的列标题；多个通道只在列标题完全相同时沿用，否则留空，需要时用坐标轴回调写明。
+        - **缺数据**：某格全是 NaN 时保留位置、不画。
+        - 默认尺寸 (10, 8)；不支持滑块。
+
+        Examples
+        --------
+        每个样品一组柱，比较它的几项指标（每格取均值，误差棒是多行之间的标准差）：
+
+        >>> plotter.plot_bars([1, 2, 3], reduce='mean', errors='std')
+
+        每个单位一组柱，比较各组（组内跨样品取平均，误差棒是组内的标准误差）：
+
+        >>> DataPlotter(data, groups=groups).plot_bars([1, 2], x='channel', series='group', reduce='max', errors='sem')
+
+        黑白图，用纹理区分通道：
+
+        >>> plotter.plot_bars([1, 2], styles={1: BarStyle(color='white', edge_color='black', edge_width=1, hatch='slash'),
+        ...                                   2: BarStyle(color='white', edge_color='black', edge_width=1, hatch='dot')})
+        """
+        if formatters is None:
+            formatters = {}
+        elif isinstance(formatters, AxesFormatter):
+            formatters = {'left': formatters}
+        _check_formatters(formatters, has_right=False, bars=True)      # 先校验回调配置，再汇总数据。
+        spec = plan_bars(self.dataset, self.groups if 'group' in (x, series) else None,
+                         self.channel_y if channels is None else channels, x=x, series=series, reduce=reduce,
+                         errors=errors, mode=mode, width=width, styles=styles, plotrange=self.plotrange,
+                         legend_title=legend_title)
+        return self._render([spec], self.figsize or (10, 8), formatters, figure_formatter)
+
+
+def _check_formatters(formatters: dict[str, AxesFormatter], has_right: bool, bars: bool = False) -> None:
+    """在渲染前校验回调配置的轴名、轴是否存在、图例归属及画法。"""
+    if unknown := sorted(set(formatters) - {'left', 'right'}):
+        raise ValueError(f"formatters 的轴名只能是 'left'、'right'，实际有 {unknown}")
+    if 'right' in formatters and bars:
+        raise ValueError("柱状图只有左轴：formatters 不能给 'right'")
+    if 'right' in formatters and not has_right:
+        raise ValueError("formatters 给了 'right'，但没有右侧图层（Layer(..., side='right')），右侧回调不会执行")
+    if 'right' in formatters and formatters['right'].legend is not None:
+        raise ValueError(NO_LEGEND_MESSAGE)
+    for side, fm in formatters.items():
+        if bars:
+            wrong = [name for name in ('lines', 'scatter') if getattr(fm, name) is not None]
+            hint = "柱状图没有折线、散点，请用 AxesFormatter(bars=...)"
+        else:
+            wrong = ['bars'] if fm.bars is not None else []
+            hint = "bars 回调只用于 plot_bars"
+        if wrong:
+            raise ValueError(f"formatters['{side}'] 写了 {', '.join(wrong)} 回调，这张图里没有对应的对象：{hint}")

@@ -17,7 +17,7 @@ from plotlib.dataset import DataSet
 from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
 from plotlib.formatters import make_axes_formatter, make_scatter_formatter
-from plotlib.plot_spec import AxisStyle, ScatterStyle
+from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer, ScatterStyle
 from plotlib.group import Group
 
 plt.close('all')
@@ -27,7 +27,7 @@ plt.close('all')
 # ============================================================
 COLUMNS_PER_SAMPLE = 10  # 每个样品的列数（含 1 列标识）
 
-# 数据列索引定义（从0开始）
+# 通道编号从 0 开始。
 dataRowNum_unit1 = 0  # Frequency
 dataRowNum_unit2 = 1  # Permittivity'
 dataRowNum_unit3 = 2  # Permittivity''
@@ -38,7 +38,7 @@ dataRowNum_unit7 = 6  # Zp''
 dataRowNum_unit8 = 7  # Tan Delta
 dataRowNum_unit9 = 8  # Tan Phi
 
-# 数据分组配置（用于 plot_groups）
+# 分组配置，供 plot(by='group') 使用。
 # 样式用标准写法（style.py）：线型 'solid' / 'dash' / 'dot' / 'dashdot'，或自定义虚线 (实线长, 空白长)
 data_groups = {
     '1st': {'num': [0, 1], 'linestyle': 'solid'},
@@ -106,22 +106,20 @@ Bode_Plotter_TanDelta = DataPlotter(
     dataset=data,
     channel_x=dataRowNum_unit1,
     channel_y=dataRowNum_unit8
-).plot_multiline(axes_formatter=Bode_Delta_formatter)
+).plot(formatters=AxesFormatter(axes=Bode_Delta_formatter))
 
 Bode_Plotter_TanDelta_group = DataPlotter(
     dataset=data,
     channel_x=dataRowNum_unit1,
     channel_y=dataRowNum_unit8,
     groups=groups
-).plot_groups(    
-    axes_formatter=Bode_Delta_formatter,
-    lines_formatter=Group_lines_formatter)
+).plot(by='group', formatters=AxesFormatter(axes=Bode_Delta_formatter, lines=Group_lines_formatter))
 
 
 
 
 # ============================================================
-# 使用 Group.apply() 重构的分组计算
+# 使用 Group.apply() 按组计算
 # ============================================================
 
 
@@ -142,9 +140,7 @@ RevCampdata_v2_pltsubsyy = DataPlotter(
     dataset=RevCampdata_v2,
     channel_x=2,
     channel_y=1,
-).plot_multiline(
-    axes_formatter=NegLog_formatter
-)
+).plot(formatters=AxesFormatter(axes=NegLog_formatter))
 
 
 
@@ -158,9 +154,7 @@ Conductivity_pltliner1 = DataPlotter(
     dataset=data,
     channel_x = 0,
     channel_y = 9
-).plot_multiline(
-    axes_formatter=NegLog_formatter,
-)
+).plot(formatters=AxesFormatter(axes=NegLog_formatter))
 
 
 
@@ -199,13 +193,14 @@ def format_peak_summary(fig, axes):
     fig.tight_layout()
 
 
-peak_plotter = DataPlotter(peak_summary).plot_dual_y(
-    left=(0, 1),
-    right=(0, 2),
-    plot_kinds=('scatter', 'scatter'),
-    scatter_formatter=make_scatter_formatter(ScatterStyle(marker='circle', size=10)),
-    right_scatter_formatter=make_scatter_formatter(ScatterStyle(marker='x', size=10)),
-    right_axes_formatter=make_axes_formatter(y=AxisStyle(scale='log')),
+peak_plotter = DataPlotter(peak_summary).plot(
+    [Layer(0, 1, kind='scatter'), Layer(0, 2, kind='scatter', side='right')],
+    by='sample',
+    formatters={
+        'left': AxesFormatter(scatter=make_scatter_formatter(ScatterStyle(marker='circle', size=10))),
+        'right': AxesFormatter(axes=make_axes_formatter(y=AxisStyle(scale='log')),
+                               scatter=make_scatter_formatter(ScatterStyle(marker='x', size=10))),
+    },
     figure_formatter=format_peak_summary,
     legend_title=None,
 )

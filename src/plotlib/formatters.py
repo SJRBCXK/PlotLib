@@ -4,11 +4,12 @@
 - `make_axes_formatter`：坐标轴（刻度类型、范围、刻度格式、着色、边框、刻度）；
 - `make_lines_formatter`：折线（线宽、颜色、线型、标记）；
 - `make_scatter_formatter`：散点（颜色、标记、大小）；
+- `make_bar_formatter`：柱状图（填充、描边、纹理、误差棒）；
 - `make_legend_formatter`：图例（位置、字号、边框、拖动）；
 - `combine_formatters`：按顺序组合相同类型的回调。
 
-生成的回调交给 `~plotlib.plotter.DataPlotter` 绘图方法的 ``axes_formatter``、``lines_formatter``、
-``scatter_formatter``、``legend_formatter`` 参数，由后端逐轴调用。线条回调只收折线，散点回调只收散点。
+生成的回调放进 `~plotlib.plot_spec.AxesFormatter` 的 ``axes``、``lines``、``scatter``、``bars``、``legend`` 字段，
+交给绘图方法的 *formatters*，由后端逐轴调用。线条回调只收折线，散点回调只收散点，柱状图回调只收柱状图的系列。
 
 Notes
 -----
@@ -33,7 +34,7 @@ Examples
 ... )
 >>> lines_fmt = make_lines_formatter(LineStyle(width=2, linestyle='dash'))
 >>> legend_fmt = make_legend_formatter(LegendStyle(font_size=12, position='upper left'))
->>> plotter.plot_multiline(axes_formatter=axes_fmt, lines_formatter=lines_fmt, legend_formatter=legend_fmt)
+>>> plotter.plot(formatters=AxesFormatter(axes=axes_fmt, lines=lines_fmt, legend=legend_fmt))
 
 Plotly 写法相同，只加 ``backend='plotly'``。
 """
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     import plotly.graph_objects as go
     from matplotlib.axes import Axes
     from matplotlib.collections import PathCollection
+    from matplotlib.container import BarContainer
     from matplotlib.figure import Figure
     from matplotlib.legend import Legend
 
@@ -56,11 +58,11 @@ from .backends.plotly_styles import apply_axis as apply_plotly_axis
 from .backends.plotly_styles import apply_frame as apply_plotly_frame
 from .backends.plotly_styles import apply_ticks as apply_plotly_ticks
 from .backends.plotly_styles import figure_dpi
-from .plot_spec import AxisStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
-from .style import (HOLLOW_FILL, Backend, check_axis_style, check_backend, check_frame, check_legend_style, check_line_style,
-                    check_scatter_style, check_ticks, remember_fill, remembered_fill, translate_axis_style,
-                    translate_color, translate_frame, translate_legend_style, translate_line_style,
-                    translate_scatter_style, translate_ticks)
+from .plot_spec import AxisStyle, BarStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
+from .style import (HOLLOW_FILL, Backend, check_axis_style, check_backend, check_bar_style, check_frame,
+                    check_legend_style, check_line_style, check_scatter_style, check_ticks, remember_fill,
+                    remembered_fill, translate_axis_style, translate_bar_style, translate_color, translate_frame,
+                    translate_legend_style, translate_line_style, translate_scatter_style, translate_ticks)
 
 # 各 backend 返回的回调类型；入口函数用 overload 按 backend 选择其一。
 type MplAxesFormatter = Callable[[Axes, Figure], None]
@@ -71,6 +73,8 @@ type PlotlyAxesFormatter = Callable[[str, go.Figure], None]            # (轴名
 type PlotlyLinesFormatter = Callable[[Iterable[Any]], None]            # 这根轴的折线 trace 列表
 type PlotlyScatterFormatter = Callable[[Iterable[Any]], None]          # 这根轴的散点 trace 列表
 type PlotlyLegendFormatter = Callable[[Iterable[go.layout.Legend]], None]
+type MplBarsFormatter = Callable[[Iterable[BarContainer]], None]
+type PlotlyBarsFormatter = Callable[[Iterable[Any]], None]            # 各系列的 trace 列表
 
 
 # ══════════════════════════════════════════════
@@ -134,12 +138,13 @@ def make_axes_formatter(x: AxisStyle | None = None, y: AxisStyle | None = None, 
     >>> fmt = make_axes_formatter(x=AxisStyle(scale='log', limits=(1, 1e5)),
     ...                           y=AxisStyle(format='{y:.1e}'),
     ...                           ticks=TickStyle(minor_labels='short'))
-    >>> DataPlotter(data).plot_multiline(axes_formatter=fmt)
+    >>> DataPlotter(data).plot(formatters=AxesFormatter(axes=fmt))
 
     双 Y 轴只改右轴：
 
     >>> right = make_axes_formatter(y=AxisStyle(limits=(0, 10)))
-    >>> DataPlotter(data).plot_dual_y(right_axes_formatter=right)
+    >>> DataPlotter(data).plot([Layer(0, 1), Layer(2, 3, side='right')], by='sample',
+    ...                        formatters={'right': AxesFormatter(axes=right)})
     """
     check_backend(backend)
     for style in (x, y):
@@ -239,7 +244,7 @@ def make_lines_formatter(style: LineStyle | None = None, custom: Iterable[Callab
     Examples
     --------
     >>> fmt = make_lines_formatter(LineStyle(width=1.5, linestyle='dash', marker='circle'))
-    >>> DataPlotter(data).plot_xy(lines_formatter=fmt)
+    >>> DataPlotter(data).plot(by='sample', formatters=AxesFormatter(lines=fmt))
     """
     check_backend(backend)
     style = style or LineStyle()
@@ -313,7 +318,7 @@ def make_scatter_formatter(style: ScatterStyle | None = None, custom: Iterable[C
     Examples
     --------
     >>> fmt = make_scatter_formatter(ScatterStyle(color='black', marker='square', size=8))
-    >>> DataPlotter(data).plot_scatter(scatter_formatter=fmt)
+    >>> DataPlotter(data).plot(Layer(kind='scatter'), formatters=AxesFormatter(scatter=fmt))
     """
     check_backend(backend)
     style = style or ScatterStyle()
@@ -375,6 +380,108 @@ def make_scatter_formatter(style: ScatterStyle | None = None, custom: Iterable[C
 
 
 # ══════════════════════════════════════════════
+# 柱状图（BarStyle）
+# ══════════════════════════════════════════════
+@overload
+def make_bar_formatter(style: BarStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                       backend: Literal["matplotlib"] = ...) -> MplBarsFormatter: ...
+@overload
+def make_bar_formatter(style: BarStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                       backend: Literal["plotly"]) -> PlotlyBarsFormatter: ...
+@overload
+def make_bar_formatter(style: BarStyle | None = ..., custom: Iterable[Callable] | None = ..., *,
+                       backend: Backend) -> MplBarsFormatter | PlotlyBarsFormatter: ...
+def make_bar_formatter(style: BarStyle | None = None, custom: Iterable[Callable] | None = None, *,
+                       backend: Backend = "matplotlib") -> MplBarsFormatter | PlotlyBarsFormatter:
+    """
+    创建将 `BarStyle` 应用于各柱状图系列的回调。
+
+    Parameters
+    ----------
+    style : BarStyle, optional
+        柱状图样式。省略时仅执行 *custom*。端帽半长 ``capsize`` 须在绘制前通过 ``plot_bars(styles=...)`` 设置。
+    custom : iterable of callable, optional
+        应用样式后，对每个系列依次调用：matplotlib 收 ``BarContainer``，Plotly 收 trace。
+    backend : {'matplotlib', 'plotly'}, default: 'matplotlib'
+        回调作用的后端。
+
+    Returns
+    -------
+    callable
+        ``formatter(bars)``，*bars* 是各个系列（matplotlib 是 ``BarContainer``，Plotly 是 trace）组成的列表。
+
+    Raises
+    ------
+    TypeError, ValueError
+        *style* 含无效字段值，或指定了 ``capsize``。
+
+    Notes
+    -----
+    只更新显式指定的字段。纹理颜色随描边色更新，单独设置 ``hatch`` 时沿用当前描边色。
+    ``hatch='none'`` 清除纹理。Matplotlib 在回调后重建图例，Plotly 的图例随 trace 自动更新。
+    在 Plotly 堆叠图中，回调会将误差棒样式应用到用于绘制误差棒的散点 trace。
+
+    Examples
+    --------
+    黑白图：
+
+    >>> fmt = make_bar_formatter(BarStyle(color='white', edge_color='black', edge_width=1, hatch='slash'))
+    >>> DataPlotter(data).plot_bars([1, 2], formatters=AxesFormatter(bars=fmt))
+    """
+    check_backend(backend)
+    style = style or BarStyle()
+    check_bar_style(style)
+    if style.capsize is not None:
+        raise ValueError("make_bar_formatter 不收 capsize：端帽长度在画之前定，请写在 plot_bars(styles=BarStyle(capsize=...))；"
+                         "matplotlib 画好的误差棒没有端帽时不能再补上")
+    custom = list(custom or ())
+
+    if backend == "matplotlib":
+        native = translate_bar_style(style, backend)
+        patch_keys = {'color': 'facecolor', 'edgecolor': 'edgecolor', 'linewidth': 'linewidth', 'hatch': 'hatch'}
+        patch_style = {patch_keys[key]: value for key, value in native.items() if key in patch_keys}
+
+        def formatter(containers, *_args, **_kwargs):
+            _ = _args, _kwargs
+            for container in containers:
+                for patch in container.patches:
+                    patch.set(**patch_style)
+                errorbar = container.errorbar
+                if errorbar is not None:
+                    _, caplines, barlines = errorbar.lines
+                    for line in barlines:           # 误差棒的竖线（LineCollection）
+                        if 'ecolor' in native:
+                            line.set_color(native['ecolor'])
+                        if 'elinewidth' in native:
+                            line.set_linewidth(native['elinewidth'])
+                    for cap in caplines:            # 端帽（标记 '_' 的 Line2D）
+                        if 'ecolor' in native:
+                            cap.set(color=native['ecolor'], markeredgecolor=native['ecolor'])
+                        if 'elinewidth' in native:
+                            cap.set_markeredgewidth(native['elinewidth'])
+                for func in custom:
+                    func(container)
+
+        return formatter
+
+    def plotly_formatter(traces):
+        for trace in traces:
+            # 使用所属 Figure 的 DPI 将磅换算为像素。
+            native = translate_bar_style(style, 'plotly', figure_dpi(trace.figure))
+            if style.hatch is not None and style.edge_color is None:
+                native['marker_pattern_fgcolor'] = trace.marker.line.color     # 纹理跟随当前的描边色
+            # 堆叠时误差棒在单独的散点 trace 上（画在所有柱之上），误差棒样式改到它那里
+            errors_trace = getattr(trace, '_plotlib_errors', None)
+            if errors_trace is not None:
+                errors_trace.update(**{key: native.pop(key) for key in list(native) if key.startswith('error_y_')})
+            trace.update(**native)
+            for func in custom:
+                func(trace)
+
+    return plotly_formatter
+
+
+# ══════════════════════════════════════════════
 # 图例（LegendStyle）
 # ══════════════════════════════════════════════
 @overload
@@ -416,7 +523,7 @@ def make_legend_formatter(style: LegendStyle | None = None, custom: Iterable[Cal
     Examples
     --------
     >>> fmt = make_legend_formatter(LegendStyle(position='upper left', font_size=12, frame=True))
-    >>> DataPlotter(data).plot_multiline(legend_formatter=fmt)
+    >>> DataPlotter(data).plot(formatters=AxesFormatter(legend=fmt))
     """
     check_backend(backend)
     style = style or LegendStyle()
@@ -465,7 +572,7 @@ def combine_formatters(*formatters: Callable[..., Any] | None) -> Callable[..., 
     Examples
     --------
     >>> fmt = combine_formatters(make_axes_formatter(x=AxisStyle(scale='log')), my_axes_tweak)
-    >>> DataPlotter(data).plot_multiline(axes_formatter=fmt)
+    >>> DataPlotter(data).plot(formatters=AxesFormatter(axes=fmt))
     """
     active = [f for f in formatters if f is not None]
 

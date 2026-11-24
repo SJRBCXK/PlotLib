@@ -8,6 +8,7 @@ DataSet 的核心约定（各测试围绕它们展开）：
 """
 import numpy as np
 import pytest
+from conftest import xy_curves
 
 from plotlib.dataset import DataSet
 
@@ -126,7 +127,7 @@ def zero_rows(sample_idx):
 
 def test_expandata_zero_row_sample_first():
     """
-    回归（第三方审查 B）：零行样品也有列，拼接时补 NaN，不能当成「空容器」。
+    拼接时保留零行样品的列，并用 NaN 补齐。
     曾用 data.size == 0 判断空：(0, 2) 的 size 也是 0，第二次拼接时整块矩阵被替换，报维度不匹配。
     """
     ds = DataSet().expandata(zero_rows(0)).expandata(make([[1, 2]], ['b', 'b'], ['x', 'y'], 1))
@@ -167,7 +168,7 @@ def test_expandata_failure_keeps_status():
 
 def test_expandata_failure_leaves_dataset_unchanged():
     """
-    回归（第三方审查 B）：拼接失败（单位冲突）后原对象不变，之后还能继续正确拼接。
+    单位冲突导致拼接失败时，数据集保留原状态，后续仍可拼接。
     曾先改数据和元数据、后校验，报错时原对象已经多了这次的列。
     """
     ds = make([[1, 2]], ['a', 'a'], ['x', 'y'], 0)
@@ -304,7 +305,7 @@ def test_iter_unknown_method_raises(eis_dataset):
         next(eis_dataset.iter('colors'))
 
 
-# 逐样品（步骤 7.2，用户定：仿照 Group 的 __iter__，for 直接遍历 DataSet）
+# 按样品遍历 DataSet
 def test_for_loop_iterates_samples(sparse_dataset):
     """
     for sample in dataset：每次一个样品的子 DataSet，按样品在数据集里出现的顺序，与 iter('samples') 相同；
@@ -430,9 +431,9 @@ def test_direct_edit_is_checked_on_use(eis_dataset):
     saved = eis_dataset.column_positions
     eis_dataset.sample_idx[0:3] = [7, 7, 7]
     eis_dataset.sample_idx[6:9] = [0, 0, 0]                  # 将原样品 2 分配为样品 0。
-    spec = DataPlotter(eis_dataset).plot_multiline().figures['main'].spec
-    assert [curve.sample_idx for curve in spec.curves] == [0, 1, 7]
-    assert spec.curves[0].y.tolist() == [30, 60, 90]         # 新的样品 0 是原来的 S2
+    curves = xy_curves(DataPlotter(eis_dataset).plot().figures['main'])
+    assert [curve.sample_idx for curve in curves] == [0, 1, 7]
+    assert curves[0].y.tolist() == [30, 60, 90]              # 新的样品 0 是原来的 S2
     assert saved[(0, 1)] == 7
     assert eis_dataset.status == 'written'
 
@@ -451,7 +452,7 @@ def test_conflict_raises_at_every_entry_and_rollback(eis_dataset):
     from plotlib.processor import DataProcessLayer, DataTransformer
 
     entries = [lambda ds: ds.column_positions, lambda ds: ds.column[1].channel_idx,
-               lambda ds: DataPlotter(ds).plot_multiline(), lambda ds: Group(ds, {'A': {'num': [0]}}),
+               lambda ds: DataPlotter(ds).plot(), lambda ds: Group(ds, {'A': {'num': [0]}}),
                lambda ds: DataProcessLayer(ds).select('samples', [0]),
                lambda ds: DataProcessLayer(ds).getdata(varlist_idx=[1], father_dataset=ds),
                DataTransformer, list, lambda ds: list(ds.iter('units'))]
@@ -481,7 +482,7 @@ def test_unchanged_dataset_is_not_rechecked(eis_dataset, monkeypatch):
     original = DataSet.update_attributes
     monkeypatch.setattr(DataSet, 'update_attributes', lambda self: calls.append(self) or original(self))
 
-    DataPlotter(eis_dataset).plot_multiline()
+    DataPlotter(eis_dataset).plot()
     eis_dataset.units[0] = 'x'
     eis_dataset.units[0] = 'Frequency(Hz)'
     eis_dataset.column_positions

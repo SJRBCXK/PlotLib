@@ -1,7 +1,8 @@
 """
 绘图计划、样式配置和渲染结果的数据类型。
 
-`LineSpec`、`ScatterSpec` 描述一条折线、一组散点及其所属坐标轴，画法由类型决定（共同的基类 `CurveBase`）。
+`LineSpec`、`ScatterSpec`、`BarSpec` 描述一条折线、一组散点、柱状图的一个系列及其所属坐标轴，
+画法由类型决定（共同的基类 `CurveBase`）。
 `FigureSpec` 描述整张图的版式、曲线和轴信息。
 后端接收绘图计划、外观配置和格式化回调，返回 `DrawnFigure`。
 """
@@ -11,9 +12,12 @@ from typing import Any, Literal, Self
 
 import numpy as np
 
-type CurveKind = Literal['line', 'scatter']      # 双 Y 轴每一侧的画法
+type CurveKind = Literal['line', 'scatter']      # 一个图层的画法
 type Axis = Literal['left', 'right']
-type Layout = Literal['multiline', 'xy', 'dual_y']
+type Members = Literal['all', 'group', 'sample']     # DataPlotter.plot 的 by：哪些样品进哪张图
+type BarDimension = Literal['sample', 'group', 'channel']  # 柱状图的类别（x）和系列各取哪一维
+type BarMode = Literal['group', 'stack']        # 并排、堆叠
+type Layout = Literal['multiline', 'xy', 'dual_y', 'bars']
 
 
 # ══════════════════════════════════════════════
@@ -141,6 +145,53 @@ class ScatterStyle(StyleLayer):
     edge_color: str | tuple | None = None   # 默认沿用 color 作为描边色
     edge_width: float | None = None     # 描边宽度（磅），可以为 0
     alpha: float | None = None          # 不透明度 0 ~ 1
+
+
+@dataclass(frozen=True)
+class BarStyle(StyleLayer):
+    """
+    控制柱状图系列的填充、描边、纹理和误差棒外观。
+
+    通过 ``DataPlotter.plot_bars(styles=...)`` 为全部系列或指定系列设置样式。
+    描边和误差棒的线宽以磅为单位。柱宽由 ``plot_bars`` 的 *width* 参数指定。
+
+    Parameters
+    ----------
+    color : str or tuple of int, optional
+        填充色，写法同 `LineStyle` 的 ``color``。不写时按系列配色。
+    edge_color : str or tuple of int, optional
+        描边色；纹理也用这个颜色。
+    edge_width : float, optional
+        描边宽度（磅），可以为 0。
+    hatch : str, optional
+        纹理：``'slash'``、``'backslash'``、``'vertical'``、``'horizontal'``、``'cross'``、``'x'``、``'dot'``，
+        ``'none'`` 表示清除纹理。纹理密度采用各后端的原生默认值。
+    error_color : str or tuple of int, optional
+        误差棒颜色。
+    error_width : float, optional
+        误差棒线宽（磅）。
+    capsize : float, optional
+        误差棒端帽半长（磅），可以为 0。当一个系列中有可见柱缺少误差时，整个系列省略端帽，
+        避免 Plotly 将缺失值画成零误差的横线。
+
+    Notes
+    -----
+    分组配置里，柱状图读取 ``color``、``hatch`` 两个字段。
+
+    Examples
+    --------
+    黑白图：白色填充、黑色描边，用纹理区分系列：
+
+    >>> plotter.plot_bars([1, 2], styles={1: BarStyle(color='white', edge_color='black', hatch='slash'),
+    ...                                   2: BarStyle(color='white', edge_color='black', hatch='dot')})
+    """
+    color: str | tuple | None = None        # 填充色
+    edge_color: str | tuple | None = None   # 描边色，纹理也用它
+    edge_width: float | None = None         # 描边宽度（磅），可以为 0
+    hatch: str | None = None                # 纹理词；'none' 清除
+    error_color: str | tuple | None = None  # 误差棒颜色
+    error_width: float | None = None        # 误差棒线宽（磅）
+    capsize: float | None = None            # 端帽长度（磅），可以为 0
 
 
 type AxisScale = Literal['linear', 'log', 'symlog', 'logit']    # 'symlog'、'logit' 只有 matplotlib
@@ -301,6 +352,9 @@ class TickStyle(StyleLayer):
 DEFAULT_LINES = LineStyle(width=3, linestyle='solid', marker_size=6)
 # 散点的库默认：大小、描边都明确写出，画的时候总是带上，所以不受全局折线样式（matplotlib 的 rc、Plotly 模板）影响
 DEFAULT_SCATTER = ScatterStyle(marker='circle', size=6, filled=True, edge_width=1)
+# 柱状图的库默认：没有描边（描边色仍写黑，纹理跟随它，两个后端一致）、没有纹理、黑色误差棒、不画端帽
+DEFAULT_BARS = BarStyle(edge_color='black', edge_width=0, hatch='none',
+                        error_color='black', error_width=2, capsize=0)
 DEFAULT_FRAME = FrameStyle(width=3, top=False, right=False)
 DEFAULT_LEGEND = LegendStyle(position='upper right', font_size=10, frame=False, draggable=False)
 # 默认显示主刻度和次刻度线，并隐藏次刻度标签。
@@ -377,8 +431,81 @@ class ScatterSpec(CurveBase):
     style: ScatterStyle = field(default_factory=ScatterStyle)
 
 
+@dataclass(kw_only=True)
+class BarSpec(CurveBase):
+    """
+    描述一个柱状图系列，每个类别对应一个柱高。公共字段见 `CurveBase`。
+
+    后端根据系列顺序和绘制模式确定柱子位置。Plotly 使用原生 ``barmode``，Matplotlib 计算并排偏移和堆叠基线。
+
+    Parameters
+    ----------
+    key : int or str
+        系列的键：样品号、通道号（原数据集里的）或组名。``DrawnFigure.artist(key)`` 按它取。
+    categories : list of str
+        各类别的刻度文字（样品名、组名或通道列标题），同一张图的各系列相同。
+    heights : numpy.ndarray
+        每个类别的柱高（汇总后的显示值）；NaN 表示缺数据，保留位置不画。
+    errors : numpy.ndarray or None, default: None
+        每根柱的对称误差；NaN 表示这根柱没有误差棒。None 表示这个系列不画误差棒。
+    caps : bool, default: True
+        False 表示这个系列有柱子缺误差，不画端帽。
+    series_index, series_count : int
+        系列序号和系列总数，用来算并排时的偏移。
+    mode : {'group', 'stack'}
+        并排或堆叠。
+    width : float
+        一个类别里全部柱子占间距的比例。
+    style : BarStyle, default: BarStyle()
+        由分组配置和 ``styles`` 合并得到的系列样式。未指定的字段为 ``None``。
+    """
+    key: int | str
+    categories: list[str]
+    heights: np.ndarray
+    errors: np.ndarray | None = None
+    caps: bool = True
+    series_index: int
+    series_count: int
+    mode: BarMode
+    width: float
+    style: BarStyle = field(default_factory=BarStyle)
+
+
 # 计划里能出现的曲线（按画法列举；加新画法时在这里加上它的 spec 类型）
-type Curve = LineSpec | ScatterSpec
+type Curve = LineSpec | ScatterSpec | BarSpec
+
+
+@dataclass(frozen=True)
+class Layer:
+    """
+    一个图层：图里的每个样品各画一条的「配方」，写取哪两个通道、画成什么、挂哪根 Y 轴。
+
+    只写数据和画法，不写外观：颜色、线型、标签由分组、版式预设和回调决定。
+
+    Parameters
+    ----------
+    x, y : int, optional
+        X、Y 的通道号（样品内的列序号）；不写时用 `~plotlib.plotter.DataPlotter` 构造时的 *channel_x*、*channel_y*。
+    kind : {'line', 'scatter'}, default: 'line'
+        画成折线还是散点。
+    side : {'left', 'right'}, default: 'left'
+        挂在左 Y 轴还是右 Y 轴；两侧共用 X 轴。
+    neglog_x, neglog_y : bool, default: False
+        负对数：这一层的数据取绝对值，所在轴的刻度补负号。同一根轴上的图层要写得一致；
+        共用的 X 轴的负号由左侧图层决定，右侧图层的 *neglog_x* 只把自己的数据取绝对值。
+
+    Examples
+    --------
+    实测点和拟合线（拟合结果存成通道 3）画在同一张图里，每个样品一张：
+
+    >>> plotter.plot([Layer(0, 1, kind='scatter'), Layer(0, 3)], by='sample')
+    """
+    x: int | None = None
+    y: int | None = None
+    kind: CurveKind = 'line'
+    side: Axis = 'left'
+    neglog_x: bool = False
+    neglog_y: bool = False
 
 
 @dataclass
@@ -391,8 +518,9 @@ class FigureSpec:
     key : str or int
         这张图在结果字典 ``DataPlotter.figures`` 里的键：分组名或 ``'main'``；
         xy 图、双 Y 轴图是样品号。
-    curves : list of LineSpec or ScatterSpec
-        曲线列表，按绘制及图例顺序排列。
+    curves : list of LineSpec, ScatterSpec or BarSpec
+        曲线列表（柱状图是各个系列），按绘制顺序排列（``DrawnFigure.artists`` 与它一一对应）。图例顺序：Plotly 与此相同；
+        matplotlib 的图例先列左轴的曲线、再列右轴的，左右图层交错时与绘制顺序不同。
     x_unit, y_unit : str
         X 轴、左 Y 轴的标题（通道单位）。同一通道的单位在各样品间一致，所以属于图而不属于线。
     y2_unit : str or None, default: None
@@ -400,7 +528,7 @@ class FigureSpec:
     neglog : frozenset of str, default: frozenset()
         哪些轴的刻度文字要补负号（负对数）：``'x'``、``'y'``、``'y2'``，
         以及预留给上轴的 ``'x2'``。
-    layout : {'multiline', 'xy', 'dual_y'}, default: 'multiline'
+    layout : {'multiline', 'xy', 'dual_y', 'bars'}, default: 'multiline'
         按哪套版式预设排版（见 `plotlib.layouts.LAYOUTS`）。
     legend_title : str or None, default: None
         图例标题，已是最终文字（``'{name}'`` 已替换）；None 表示不加标题。
@@ -437,8 +565,8 @@ class DrawnFigure:
         ``{'left': 左轴}``，双 Y 轴图再有 ``'right'``。matplotlib 是 Axes 对象；
         Plotly 没有轴对象，是 layout 里的轴名（``'yaxis'``、``'yaxis2'``）。
     artists : list
-        画出的曲线对象（折线 ``Line2D``、散点 ``PathCollection``，Plotly 都是 trace），
-        与 ``spec.curves`` 一一对应、顺序相同。
+        画出的对象（折线 ``Line2D``、散点 ``PathCollection``、柱状图的一个系列 ``BarContainer``，
+        Plotly 都是 trace），与 ``spec.curves`` 一一对应、顺序相同。
 
     See Also
     --------
@@ -449,39 +577,47 @@ class DrawnFigure:
     axes: dict[str, Any]
     artists: list               # 曲线对象（Line2D / PathCollection / trace）
 
-    def artist(self, sample_idx: int, axis: Axis = 'left'):
+    def artist(self, key: int | str | None = None, axis: Axis = 'left', *, sample_idx: int | None = None):
         """
-        返回指定样品在指定轴上的绘图对象。
+        返回指定样品（柱状图是指定系列）在指定轴上的绘图对象。
 
         ``artists`` 不按样品号作键，因为双 Y 轴图里同一样品有左右两条线，所以要同时给出轴。
 
         Parameters
         ----------
-        sample_idx : int
-            样品号。
+        key : int or str
+            曲线图是样品号；柱状图是系列的键（样品号、原数据集里的通道号或组名，一张图里只有一种）。
         axis : {'left', 'right'}, default: 'left'
             线挂在哪根 Y 轴上。
+        sample_idx : int, optional
+            *key* 的兼容参数，仅接受关键字传参，如 ``artist(sample_idx=0)``。
 
         Returns
         -------
-        曲线对象
+        绘图对象
             ``artists`` 里对应的那一项（类型见类说明）。
 
         Raises
         ------
         KeyError
-            这张图里没有这个样品挂在这根轴上的线。
+            这张图里没有这个样品（系列）挂在这根轴上的对象。
+        TypeError
+            必须且只能提供 *key* 或 *sample_idx* 中的一个。
 
         Examples
         --------
-        >>> plotter.plot_dual_y()
+        >>> plotter.plot([Layer(0, 1), Layer(2, 3, side='right')], by='sample')
         >>> plotter.figures[0].artist(0, 'right')     # 样品 0 的右线
+        >>> plotter.plot_bars([1, 2]).figures['main'].artist(2)      # 通道 2 那个系列
         """
+        if (key is None) == (sample_idx is None):
+            raise TypeError("artist() 要写一个键：artist(key) 或 artist(sample_idx=...)，不能都写或都不写")
+        key = sample_idx if key is None else key
         for curve, artist in zip(self.spec.curves, self.artists):
-            # 基类不带样品号（以后的柱状图一组柱不一定是一个样品），按有没有这个字段取
-            if getattr(curve, 'sample_idx', None) == sample_idx and curve.axis == axis:
+            own_key = curve.key if isinstance(curve, BarSpec) else curve.sample_idx
+            if own_key == key and curve.axis == axis:
                 return artist
-        raise KeyError(f"图 {self.spec.key!r} 里没有样品 {sample_idx} 挂在 {axis} 轴上的线")
+        raise KeyError(f"图 {self.spec.key!r} 里没有 {key!r} 挂在 {axis} 轴上的对象")
 
 
 # ══════════════════════════════════════════════
@@ -541,8 +677,13 @@ class AxesFormatter:
         图例回调，以图例列表调用。一张图只有一个图例，归左轴；给其他轴配了会报错。
     scatter : callable, optional
         散点回调，以这根轴上的散点（matplotlib 是 ``PathCollection``，Plotly 是 trace）组成的列表调用。
+    bars : callable, optional
+        仅用于 ``plot_bars``，接收柱状图系列列表。Matplotlib 提供 ``BarContainer``，可通过 ``errorbar`` 访问误差棒。
+        Plotly 提供柱状 trace。并排时误差棒在 ``error_y`` 中，堆叠时由单独的散点 trace 绘制。
+        `~plotlib.formatters.make_bar_formatter` 支持调整两种排列方式的误差棒样式。
     """
     axes: Callable[..., Any] | None = None
     lines: Callable[..., Any] | None = None
     legend: Callable[..., Any] | None = None
     scatter: Callable[..., Any] | None = None
+    bars: Callable[..., Any] | None = None

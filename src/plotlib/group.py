@@ -5,20 +5,21 @@ import copy
 from collections.abc import Callable
 from numbers import Integral
 from collections import Counter
+from typing import overload
 
 
 
 import numpy as np
 from .dataset import DataSet
-from .processor import DataProcessLayer
-from .style import check_color, check_linestyle, check_marker
+from .processor import DataProcessLayer, Reduction, check_reduction, reduce_values
+from .style import check_color, check_hatch, check_linestyle, check_marker
 
 
 # 除单个整数外，num 支持以下序列类型。
 _NUM_CONTAINERS = (list, tuple, range, np.ndarray)
 
 # 校验跨后端通用的样式字段。其他选项作为自定义元数据保留。
-_STYLE_CHECKS = {'linestyle': check_linestyle, 'marker': check_marker, 'color': check_color}
+_STYLE_CHECKS = {'linestyle': check_linestyle, 'marker': check_marker, 'color': check_color, 'hatch': check_hatch}
 
 
 def _resolve_num(num) -> list[int]:
@@ -106,7 +107,7 @@ class Group():
 
     创建时校验所有分组。可通过 `names`、`sample_ids` 和 `options` 查询配置，
     通过 `add`、`set` 和 `delete` 更新分组。批量更新先完成校验，再应用变更。
-    `apply` 对每个分组执行一次计算，生成一个结果样品。
+    `apply` 对每个分组执行一次计算，生成一个结果样品；`reduce` 把每个分组汇总成一个值（如组内均值、标准误差）。
 
     Notes
     -----
@@ -114,7 +115,8 @@ class Group():
 
     - ``num`` 接受单个整数、列表、元组、``range`` 或 NumPy 数组。每组至少包含一个样品，
       且样品号必须存在于数据集中并且互不重复。样品号顺序决定 `apply` 的参数顺序。
-    - ``linestyle``、``marker`` 和 ``color`` 采用 `plotlib.style` 中定义的通用取值。
+    - ``linestyle``、``marker``、``color`` 和 ``hatch`` （柱状图纹理）采用 `plotlib.style` 中定义的通用取值。
+      ``hatch`` 是保留字段。请使用标准纹理名称，例如用 ``'slash'`` 表示斜线。后端专用符号（如 ``'///'``）会在校验时被拒绝。
     - 其余字段作为自定义选项保留，可通过 `options` 读取。
 
     `Group` 持有独立的外层字典，与传入的配置共享各分组的内层字典。
@@ -131,7 +133,7 @@ class Group():
     ['Ref', 'Doped']
     >>> groups.sample_ids('Doped')
     [2, 3, 4]
-    >>> DataPlotter(data, groups=groups).plot_groups(merge_groups=True)
+    >>> DataPlotter(data, groups=groups).plot(by='group', merge_groups=True)
     """
 
     def __init__(self, dataset: DataSet, group_config: dict):
@@ -227,6 +229,10 @@ class Group():
     def color(self, group_name: str):
         """返回应用于组内所有样品的颜色。未设置时返回 ``None``。"""
         return copy.deepcopy(self._require(group_name).get('color'))
+
+    def hatch(self, group_name: str):
+        """返回分组的柱状图纹理，如 ``'slash'``。未设置时返回 ``None``。"""
+        return self._require(group_name).get('hatch')
 
     def to_config(self) -> dict[str, dict]:
         """当前配置的深拷贝（``num`` 已整理成列表），可以保存、打印或用来创建新的 `Group`。"""
@@ -438,6 +444,96 @@ class Group():
             result_sample_idx += 1
 
         return accumulated
+
+    @overload
+    def reduce(self, how: Reduction | None = 'mean', within: Reduction | None = None,
+               channels: list[int] | None = None, rows: int | None = None) -> DataSet: ...
+    @overload
+    def reduce(self, how: list[Reduction | None] | tuple[Reduction | None, ...], within: Reduction | None = None,
+               channels: list[int] | None = None, rows: int | None = None) -> list[DataSet]: ...
+
+    def reduce(self, how: Reduction | None | list[Reduction | None] | tuple[Reduction | None, ...] = 'mean',
+               within: Reduction | None = None, channels: list[int] | None = None,
+               rows: int | None = None) -> DataSet | list[DataSet]:
+        """
+        对每个分组生成一个结果样品。
+
+        每个样品先按通道汇总为一个值，再按通道对组内的样品汇总值做统计。因此，原始行数不同的样品各贡献一个值。
+        样品属于多个分组时，分别计入各组。汇总方式见 `~plotlib.processor.DataTransformer.Reduce`。
+
+        Parameters
+        ----------
+        how : str, callable, None or list of them, default: 'mean'
+            组内跨样品的汇总方式，如 ``'mean'``、``'std'``、``'sem'`` （*n* 是有效的样品个数）。
+            可传入多种汇总方式。组内的各项统计共享同一批按 *within* 计算的样品汇总值。
+        within : str, callable or None, default: None
+            每个样品内多行的汇总方式；None 表示每个样品的每个通道至多一个有效值。
+        channels : list of int, optional
+            参与计算的通道号，按书写顺序排列；None 表示数据集里的全部通道（从小到大）。
+        rows : int, optional
+            每列只用前 *rows* 行（如绘图的 ``plotrange``）；None 用全部行。
+
+        Returns
+        -------
+        DataSet or list of DataSet
+            每个分组一个新样品，样品号按分组顺序从 0 起，名字是组名；每列一个值（一行）。
+            结果的第 *i* 个通道对应 ``channels[i]``，单位是该通道的单位。*how* 是列表时按它的顺序返回列表。
+
+        Raises
+        ------
+        ValueError
+            汇总方式未知、组内样品缺少指定通道、样品汇总值为无穷大，或以 ``None`` 汇总多个有效值。
+        TypeError
+            汇总方式的类型不对；数据是复数；函数返回的不是一个数。
+
+        Examples
+        --------
+        每组的平均强度和组内样品之间的标准误差（每个样品先取最大值，两种统计用同一批值）：
+
+        >>> mean, sem = groups.reduce(['mean', 'sem'], within='max', channels=[1])
+        """
+        several = isinstance(how, (list, tuple))
+        hows: list[Reduction | None] = list(how) if isinstance(how, (list, tuple)) else [how]
+        for one in (*hows, within):
+            check_reduction(one)
+        dataset = self.dataset
+        positions = dataset.column_positions        # 先校验数据集的当前状态
+        if channels is None:
+            channels = sorted(set(dataset.channel_idx))
+
+        results = [DataSet() for _ in hows]
+        for result_sample_idx, group_name in enumerate(self):
+            result_rows: list[list] = [[] for _ in hows]     # 每种汇总方式的一行结果
+            units = []
+            for channel in channels:
+                sample_values = []                  # 每个样品只汇总一次，下面各种统计共用
+                for sample in self.sample_ids(group_name):
+                    position = positions.get((sample, channel))
+                    if position is None:
+                        raise ValueError(f"分组 '{group_name}' 的样品号 {sample} 没有通道 {channel}")
+                    sample_values.append(reduce_values(
+                        dataset.data[:rows, position], within,
+                        where=f"分组 '{group_name}' 里样品 {dataset.names[position]}（样品号 {sample}）的 {dataset.units[position]} "))
+                unit = dataset.units[positions[(self.sample_ids(group_name)[0], channel)]]
+                # 在组内汇总前拦截无穷大，避免相反符号的无穷大求均值时产生 NaN。
+                for sample, value in zip(self.sample_ids(group_name), sample_values):
+                    if np.isinf(value):
+                        name = dataset.names[positions[(sample, channel)]]
+                        raise ValueError(f"分组 '{group_name}' 里样品 {name}（样品号 {sample}）的 {unit} 汇总出 {value}："
+                                         "样品汇总值是无穷大时，组内跨样品统计没有意义")
+                for row, one in zip(result_rows, hows):
+                    row.append(reduce_values(sample_values, one, where=f"分组 '{group_name}' 的 {unit} 跨样品"))
+                units.append(unit)
+
+            for result, row in zip(results, result_rows):
+                result.expandata(DataSet().form_array(
+                    data=np.array([row]).reshape(1, len(channels)),
+                    name=[group_name] * len(channels),
+                    unit=units,
+                    sample_idx=result_sample_idx,
+                    repeat_times=len(channels),
+                ))
+        return results if several else results[0]
 
 
     def _auto_naming(self, slices, n_cols, group_name, callback):

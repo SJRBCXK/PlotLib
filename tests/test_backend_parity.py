@@ -3,7 +3,7 @@
 
 同一个入口、同一份绘图计划（plan.plan_*），换后端只换「怎么画」，所以：
   - 构造时对分组参数的约定相同（plan.resolve_groups，与后端无关）；
-  - 同一个 Group 交给两个后端，四种绘图方法画出的图数、曲线条数、顺序、标签、数据一致（docs/WORK_PLAN.md 附录 C 第 3、4 步的验收）。
+  - 同一绘图计划在两个后端生成相同的图数、曲线条数、顺序、标签和数据。
 颜色不在这里比：两个库的色带实现不同，各自「位置 → 颜色」在 test_plotter.py / test_plotly_backend.py 里测。
 
 数据来自 conftest.py 的 eis_dataset：3 个样品；配置里样品 1 同时属于 A、B 两组。
@@ -16,7 +16,7 @@ pytest.importorskip("plotly")
 from plotlib.formatters import (combine_formatters, make_axes_formatter, make_legend_formatter,
                                 make_lines_formatter)
 from plotlib.group import Group
-from plotlib.plot_spec import AxisStyle, LegendStyle, LineStyle
+from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer, LegendStyle, LineStyle
 from plotlib.plotter import DataPlotter
 
 from conftest import EIS_UNITS
@@ -74,10 +74,10 @@ def test_default_groups_is_empty_group(eis_dataset, backend):
 # ══════════════════════════════════════════════
 @BACKENDS
 @pytest.mark.parametrize("draw, keys, axes", [
-    (lambda p: p.plot_multiline(), ['main'], {'left'}),
-    (lambda p: p.plot_groups(), ['A', 'B'], {'left'}),
-    (lambda p: p.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM), [0, 1, 2], {'left'}),
-    (lambda p: p.plot_dual_y(right=(FREQ, ZS_IM)), [0, 1, 2], {'left', 'right'}),
+    (lambda p: p.plot(), ['main'], {'left'}),
+    (lambda p: p.plot(by='group'), ['A', 'B'], {'left'}),
+    (lambda p: p.plot(Layer(ZS_RE, ZS_IM), by='sample'), [0, 1, 2], {'left'}),
+    (lambda p: p.plot([Layer(0, 1), Layer(FREQ, ZS_IM, side='right')], by='sample'), [0, 1, 2], {'left', 'right'}),
 ], ids=['multiline', 'groups', 'xy', 'dual_y'])
 def test_result_shape_is_uniform(eis_dataset, backend, draw, keys, axes):
     """
@@ -97,11 +97,11 @@ def test_result_shape_is_uniform(eis_dataset, backend, draw, keys, axes):
 
 
 @pytest.mark.parametrize("draw", [
-    lambda p: p.plot_multiline(),
-    lambda p: p.plot_groups(merge_groups=True),
-    lambda p: p.plot_groups(merge_groups=False),
-    lambda p: p.plot_xy(channel_x=ZS_RE, channel_y=ZS_IM),
-    lambda p: p.plot_dual_y(right=(FREQ, ZS_IM)),
+    lambda p: p.plot(),
+    lambda p: p.plot(by='group', merge_groups=True),
+    lambda p: p.plot(by='group', merge_groups=False),
+    lambda p: p.plot(Layer(ZS_RE, ZS_IM), by='sample'),
+    lambda p: p.plot([Layer(0, 1), Layer(FREQ, ZS_IM, side='right')], by='sample'),
 ], ids=['objects', 'merge', 'separate', 'xy', 'dual_y'])
 def test_same_figures_and_curves(eis_dataset, draw):
     """
@@ -119,7 +119,7 @@ def test_same_figures_and_curves(eis_dataset, draw):
 
 
 # ══════════════════════════════════════════════
-# 按轴回调只作用在自己那根轴上（第三方审查 E，用户选做法 2：后端把这根轴的东西交给回调）
+# 按轴回调的作用范围
 # 两个后端回调形状对应：axes (ax | 轴名, fig)、lines (这根轴的线)、legend (图例列表)
 # ══════════════════════════════════════════════
 @BACKENDS
@@ -128,10 +128,13 @@ def test_right_formatters_only_touch_right_axis(eis_dataset, backend):
     只给右轴配范围和线色：右轴、右线变；左轴范围仍自动、左线仍是预设的红。
     回归：Plotly 的按轴回调曾都只收 fig，工厂改了全部 Y 轴和全部线（左右一起变成 -5~0、绿色）。
     """
-    drawn = DataPlotter(eis_dataset, backend=backend).plot_dual_y(
-        left=(FREQ, ZS_RE), right=(FREQ, ZS_IM),
-        right_axes_formatter=make_axes_formatter(y=AxisStyle(limits=(-5, 0)), backend=backend),
-        right_lines_formatter=make_lines_formatter(LineStyle(color='green'), backend=backend),
+    drawn = DataPlotter(eis_dataset, backend=backend).plot(
+        [Layer(FREQ, ZS_RE), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+        formatters={
+            'right': AxesFormatter(axes=make_axes_formatter(y=AxisStyle(limits=(-5, 0)), backend=backend),
+                                   lines=make_lines_formatter(LineStyle(color='green'), backend=backend)),
+        },
     ).figures[0]
     left, right = drawn.artist(0), drawn.artist(0, 'right')
 
@@ -148,15 +151,28 @@ def test_right_formatters_only_touch_right_axis(eis_dataset, backend):
 
 
 @BACKENDS
-def test_right_legend_formatter_raises(eis_dataset, backend):
+def test_formatters_checked_before_drawing(eis_dataset, backend):
     """
-    双 Y 轴只有左轴有图例（右轴的线不进图例）：给右轴配图例回调 → 明确报错，提示交给 legend_formatter（用户定）。
-    回归：matplotlib 曾把 None 交给图例回调（AttributeError）；Plotly 曾悄悄改了唯一的那个图例。
+    渲染前校验回调配置：轴名写错、给不存在的右轴配回调、给右轴配图例回调（一张图只有一个图例，归左轴），
+    都明确报错，而且任何回调都还没执行、没有留下图窗。
+    回归：轴名写错或单轴图配了右侧时曾静默忽略；右侧图例曾在左侧回调执行之后才报错。
     """
-    with pytest.raises(ValueError, match='legend_formatter'):
-        DataPlotter(eis_dataset, backend=backend).plot_dual_y(
-            right=(FREQ, ZS_IM),
-            right_legend_formatter=make_legend_formatter(LegendStyle(font_size=8), backend=backend))
+    import matplotlib.pyplot as plt
+
+    calls = []
+    left = AxesFormatter(axes=lambda *_args: calls.append('left axes'))
+    single, dual = [Layer(0, 1)], [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')]
+    cases = [
+        (single, {'left': left, 'rigth': AxesFormatter()}, "'left'、'right'"),
+        (single, {'left': left, 'right': AxesFormatter(axes=lambda *_args: None)}, '右侧图层'),
+        (dual, {'left': left, 'right': AxesFormatter(legend=make_legend_formatter(LegendStyle(font_size=8),
+                                                                                  backend=backend))}, '左侧'),
+    ]
+    before = plt.get_fignums()
+    for layers, formatters, message in cases:
+        with pytest.raises(ValueError, match=message):
+            DataPlotter(eis_dataset, backend=backend).plot(layers, by='sample', formatters=formatters)
+    assert calls == [] and plt.get_fignums() == before
 
 
 @BACKENDS
@@ -167,11 +183,9 @@ def test_axes_formatter_keeps_tick_width(eis_dataset, backend):
     """
     from plotlib.plot_spec import TickStyle
 
-    drawn = DataPlotter(eis_dataset, ticks=TickStyle(width=5), backend=backend).plot_multiline(
-        axes_formatter=make_axes_formatter(
-            x=AxisStyle(scale='log'),
-            backend=backend,
-        )).figures['main']
+    log_x = make_axes_formatter(x=AxisStyle(scale='log'), backend=backend)
+    drawn = DataPlotter(eis_dataset, ticks=TickStyle(width=5), backend=backend).plot(
+        formatters=AxesFormatter(axes=log_x)).figures['main']
 
     if backend == 'matplotlib':
         drawn.fig.canvas.draw()
@@ -192,12 +206,11 @@ def test_axes_formatter_ticks_only_touch_its_axis(eis_dataset, backend):
     """
     from plotlib.plot_spec import TickStyle
 
-    drawn = DataPlotter(eis_dataset, dpi=200, backend=backend).plot_dual_y(
-        right=(FREQ, ZS_IM),
-        right_axes_formatter=make_axes_formatter(
-            ticks=TickStyle(length=12, minor=False),
-            backend=backend,
-        ),
+    right_ticks = make_axes_formatter(ticks=TickStyle(length=12, minor=False), backend=backend)
+    drawn = DataPlotter(eis_dataset, dpi=200, backend=backend).plot(
+        [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+        formatters={'right': AxesFormatter(axes=right_ticks)},
     ).figures[0]
 
     if backend == 'matplotlib':
@@ -220,7 +233,7 @@ def test_combine_formatters_same_kind(eis_dataset, backend):
     counts = []
     fmt = combine_formatters(make_lines_formatter(LineStyle(width=5), backend=backend), None,
                              lambda lines: counts.append(len(lines)))
-    drawn = DataPlotter(eis_dataset, backend=backend).plot_multiline(lines_formatter=fmt).figures['main']
+    drawn = DataPlotter(eis_dataset, backend=backend).plot(formatters=AxesFormatter(lines=fmt)).figures['main']
 
     # 线宽 5 磅：matplotlib 就是 5，Plotly 按 dpi 100 换成像素（样式对象化起两个后端都用磅）
     widths = [a.get_linewidth() if backend == 'matplotlib' else a.line.width for a in drawn.artists]
@@ -230,10 +243,12 @@ def test_combine_formatters_same_kind(eis_dataset, backend):
 
 @BACKENDS
 def test_group_marker_applies_to_scatter(eis_dataset, backend):
-    """分组写的 marker 对散点图也生效（第三方审查 G；以前分组样式只对折线应用）。"""
+    """散点图应用所属分组的标记样式。"""
     groups = Group(eis_dataset, {'A': {'num': [0, 1], 'marker': 'square'}})
-    artist = DataPlotter(eis_dataset, groups=groups, backend=backend) \
-        .plot_scatter().figures['A'].artist(0)
+    artist = DataPlotter(eis_dataset, groups=groups, backend=backend).plot(
+        Layer(kind='scatter'),
+        by='group',
+    ).figures['A'].artist(0)
 
     if backend == 'matplotlib':
         from matplotlib.markers import MarkerStyle
@@ -246,9 +261,9 @@ def test_group_marker_applies_to_scatter(eis_dataset, backend):
 
 
 @BACKENDS
-def test_plot_scatter_follows_group_rules(eis_dataset, backend):
+def test_scatter_follows_group_rules(eis_dataset, backend):
     """
-    plot_scatter 与折线共用分组规则（4.3）：没有分组画全部样品；有分组时分离模式每组一张图，
+    散点图层与折线共用分组规则（4.3）：by='all' 画全部样品；by='group' 时分离模式每组一张图，
     合并模式一张图、重复样品只画一次。画出来的是散点（不是线），数据、标签与计划一致。
     """
     def points(artist):
@@ -261,33 +276,37 @@ def test_plot_scatter_follows_group_rules(eis_dataset, backend):
         return list(artist.x), list(artist.y), artist.name
 
     plotter = DataPlotter(eis_dataset, channel_x=FREQ, channel_y=ZS_RE, backend=backend)
-    assert [points(a) for a in plotter.plot_scatter().figures['main'].artists] == \
+    assert [points(a) for a in plotter.plot(Layer(kind='scatter')).figures['main'].artists] == \
         [([1, 10, 100], [10 * k, 20 * k, 30 * k], f'S{k - 1}') for k in (1, 2, 3)]
 
     grouped = DataPlotter(eis_dataset, groups=Group(eis_dataset, overlap_config()), backend=backend)
-    assert list(grouped.plot_scatter().figures) == ['A', 'B']
-    merged = grouped.plot_scatter(merge_groups=True).figures['main']
+    assert list(grouped.plot(Layer(kind='scatter'), by='group').figures) == ['A', 'B']
+    merged = grouped.plot(Layer(kind='scatter'), by='group', merge_groups=True).figures['main']
     assert [points(a)[2] for a in merged.artists] == ['S0', 'S1', 'S2']
 
 
 @BACKENDS
 def test_line_and_scatter_formatters_are_separate(eis_dataset, backend):
     """
-    线条回调只改折线、散点回调只改散点（用户定：两者解耦）。双 Y 轴左边折线、右边散点：
+    线条和散点回调分别作用于对应的绘图对象。双 Y 轴左边折线、右边散点：
     左轴的线条回调改了线宽；右轴的线条回调（绿色）碰不到右边的散点，散点仍是预设的蓝。
-    plot_scatter 的散点回调改散点的颜色和大小。
+    散点图层的散点回调改散点的颜色和大小。
     """
     from plotlib.formatters import make_scatter_formatter
     from plotlib.plot_spec import ScatterStyle
 
-    drawn = DataPlotter(eis_dataset, backend=backend).plot_dual_y(
-        left=(FREQ, ZS_RE), right=(FREQ, ZS_IM), plot_kinds=('line', 'scatter'),
-        lines_formatter=make_lines_formatter(LineStyle(width=4), backend=backend),
-        right_lines_formatter=make_lines_formatter(LineStyle(color='green'), backend=backend),
+    drawn = DataPlotter(eis_dataset, backend=backend).plot(
+        [Layer(FREQ, ZS_RE), Layer(FREQ, ZS_IM, kind='scatter', side='right')],
+        by='sample',
+        formatters={
+            'left': AxesFormatter(lines=make_lines_formatter(LineStyle(width=4), backend=backend)),
+            'right': AxesFormatter(lines=make_lines_formatter(LineStyle(color='green'), backend=backend)),
+        },
     ).figures[0]
     line, dots = drawn.artist(0), drawn.artist(0, 'right')
-    scatter = DataPlotter(eis_dataset, backend=backend).plot_scatter(
-        scatter_formatter=make_scatter_formatter(ScatterStyle(color='black', size=9), backend=backend),
+    scatter = DataPlotter(eis_dataset, backend=backend).plot(
+        Layer(kind='scatter'),
+        formatters=AxesFormatter(scatter=make_scatter_formatter(ScatterStyle(color='black', size=9), backend=backend)),
     ).figures['main'].artist(0)
 
     if backend == 'matplotlib':
@@ -302,6 +321,46 @@ def test_line_and_scatter_formatters_are_separate(eis_dataset, backend):
 
 
 @BACKENDS
+def test_layers_and_formatter_scope(eis_dataset, backend):
+    """
+    按样品绘制多个图层时，每页 artists 的顺序与 layers 一致，artist(样品号, 轴) 是这根轴上的第一层；
+    线条、散点回调只收到对应轴、对应画法的对象；X 轴两侧共用，右侧坐标轴回调改 X 也作用在它上面。
+    """
+    from plotlib.formatters import make_axes_formatter
+
+    received: dict[str, list] = {}
+
+    def record(name):
+        return lambda objects, *_args: received.setdefault(name, []).extend(objects)
+
+    layers = [Layer(FREQ, ZS_RE, kind='scatter'), Layer(FREQ, ZS_RE), Layer(FREQ, ZS_IM, side='right')]
+    formatters = {'left': AxesFormatter(lines=record('left lines'), scatter=record('left scatter')),
+                  'right': AxesFormatter(axes=make_axes_formatter(x=AxisStyle(limits=(2, 50)), backend=backend),
+                                         lines=record('right lines'), scatter=record('right scatter'))}
+    pages = DataPlotter(eis_dataset, backend=backend).plot(layers, by='sample', formatters=formatters).figures
+
+    assert list(pages) == [0, 1, 2]
+    for k, page in pages.items():
+        assert isinstance(k, int)
+        dots, line, right = page.artists
+        assert page.artist(k) is dots and page.artist(k, 'right') is right
+        if backend == 'matplotlib':
+            from matplotlib.collections import PathCollection
+            from matplotlib.lines import Line2D
+            assert (type(dots), type(line), type(right)) == (PathCollection, Line2D, Line2D)
+            assert page.axes['left'].get_xlim() == (2, 50)
+        else:
+            assert (dots.mode, line.mode, right.mode) == ('markers', 'lines', 'lines')
+            assert tuple(page.fig.layout.xaxis.range) == (2, 50)
+
+    ids = lambda objects: sorted(map(id, objects))          # noqa: E731
+    assert ids(received['left scatter']) == ids(p.artists[0] for p in pages.values())
+    assert ids(received['left lines']) == ids(p.artists[1] for p in pages.values())
+    assert ids(received['right lines']) == ids(p.artists[2] for p in pages.values())
+    assert received.get('right scatter', []) == []          # 右侧没有散点：收到空列表（或不调用）
+
+
+@BACKENDS
 def test_scatter_defaults_and_hollow(eis_dataset, backend):
     """
     散点按库默认 DEFAULT_SCATTER 画（大小 6 磅、描边 1 磅），不受全局折线样式影响；
@@ -312,9 +371,11 @@ def test_scatter_defaults_and_hollow(eis_dataset, backend):
     from plotlib.plot_spec import ScatterStyle
 
     plotter = DataPlotter(eis_dataset, backend=backend, lines=LineStyle(width=5, marker_size=24))
-    plain = plotter.plot_scatter().figures['main'].artist(0)
-    hollow = plotter.plot_scatter(
-        scatter_formatter=make_scatter_formatter(ScatterStyle(filled=False), backend=backend)).figures['main'].artist(0)
+    plain = plotter.plot(Layer(kind='scatter')).figures['main'].artist(0)
+    hollow = plotter.plot(
+        Layer(kind='scatter'),
+        formatters=AxesFormatter(scatter=make_scatter_formatter(ScatterStyle(filled=False), backend=backend)),
+    ).figures['main'].artist(0)
 
     if backend == 'matplotlib':
         assert (plain.get_sizes().tolist(), plain.get_linewidths().tolist()) == ([36], [1])
@@ -342,10 +403,10 @@ def test_scatter_refill_and_line_markers(eis_dataset, backend):
     from plotlib.plot_spec import ScatterStyle
 
     plotter = DataPlotter(eis_dataset, backend=backend)
-    plain = plotter.plot_scatter().figures['main'].artist(0)
+    plain = plotter.plot(Layer(kind='scatter')).figures['main'].artist(0)
     fmt = lambda style: make_scatter_formatter(style, backend=backend)      # noqa: E731
     refill = combine_formatters(fmt(ScatterStyle(filled=False, edge_color='black')), fmt(ScatterStyle(filled=True)))
-    points = plotter.plot_scatter(scatter_formatter=refill).figures['main'].artist(0)
+    points = plotter.plot(Layer(kind='scatter'), formatters=AxesFormatter(scatter=refill)).figures['main'].artist(0)
     if backend == 'matplotlib':
         np.testing.assert_allclose(points.get_facecolor()[0], plain.get_facecolor()[0])
         np.testing.assert_allclose(points.get_edgecolor()[0], (0, 0, 0, 1))
@@ -358,7 +419,10 @@ def test_scatter_refill_and_line_markers(eis_dataset, backend):
         backend=backend)
     for chain in ([red, fmt(ScatterStyle(filled=True))],
                   [red, fmt(ScatterStyle(filled=False)), fmt(ScatterStyle(filled=True))]):
-        points = plotter.plot_scatter(scatter_formatter=combine_formatters(*chain)).figures['main'].artist(0)
+        points = plotter.plot(
+            Layer(kind='scatter'),
+            formatters=AxesFormatter(scatter=combine_formatters(*chain)),
+        ).figures['main'].artist(0)
         if backend == 'matplotlib':
             np.testing.assert_allclose(points.get_facecolor()[0], (1, 0, 0, 1))
         else:
@@ -370,7 +434,10 @@ def test_scatter_refill_and_line_markers(eis_dataset, backend):
         (lambda p: p.set_facecolor(colors)) if backend == 'matplotlib'
         else (lambda t: t.update(marker_color=np.array(colors)))], backend=backend)
     chain = [per_point, fmt(ScatterStyle(filled=False)), fmt(ScatterStyle(filled=True)), fmt(ScatterStyle(alpha=0.5))]
-    points = plotter.plot_scatter(scatter_formatter=combine_formatters(*chain)).figures['main'].artist(0)
+    points = plotter.plot(
+        Layer(kind='scatter'),
+        formatters=AxesFormatter(scatter=combine_formatters(*chain)),
+    ).figures['main'].artist(0)
     if backend == 'matplotlib':
         np.testing.assert_allclose(points.get_facecolor()[:, :3], [to_rgba(c)[:3] for c in colors])
     else:
@@ -382,23 +449,30 @@ def test_scatter_refill_and_line_markers(eis_dataset, backend):
         for filled in (True, False):
             with warnings.catch_warnings():
                 warnings.simplefilter('error')
-                points = grouped.plot_scatter(scatter_formatter=fmt(ScatterStyle(filled=filled))
-                                              ).figures['A'].artist(0)
+                points = grouped.plot(
+                    Layer(kind='scatter'),
+                    by='group',
+                    formatters=AxesFormatter(scatter=fmt(ScatterStyle(filled=filled))),
+                ).figures['A'].artist(0)
             if backend == 'matplotlib':                                     # 线形标记靠描边显示
                 assert np.asarray(points.get_edgecolor()).shape == (1, 4) and points.get_edgecolor()[0][3] == 1
 
 
 # ══════════════════════════════════════════════
-# 图例标题（2026-11-20 用户提出）：四种方法都能设，计划里写了就画上；'{name}' 的替换规则在 test_plot_plan.py
+# 检查两个后端是否显示计划中的图例标题。
 # ══════════════════════════════════════════════
 @BACKENDS
 @pytest.mark.parametrize("draw, expected", [
-    (lambda p: p.plot_multiline(), {'main': None}),
-    (lambda p: p.plot_multiline(legend_title='Samples'), {'main': 'Samples'}),
-    (lambda p: p.plot_groups(legend_title='Group {name}'), {'A': 'Group A', 'B': 'Group B'}),
-    (lambda p: p.plot_xy(legend_title='{name}'), {0: 'S0', 1: 'S1', 2: 'S2'}),
-    (lambda p: p.plot_dual_y(right=(FREQ, ZS_IM)), {0: 'S0', 1: 'S1', 2: 'S2'}),
-    (lambda p: p.plot_dual_y(right=(FREQ, ZS_IM), legend_title=None), {0: None, 1: None, 2: None}),
+    (lambda p: p.plot(), {'main': None}),
+    (lambda p: p.plot(legend_title='Samples'), {'main': 'Samples'}),
+    (lambda p: p.plot(by='group', legend_title='Group {name}'), {'A': 'Group A', 'B': 'Group B'}),
+    (lambda p: p.plot(by='sample', legend_title='{name}'), {0: 'S0', 1: 'S1', 2: 'S2'}),
+    (lambda p: p.plot([Layer(0, 1), Layer(FREQ, ZS_IM, side='right')], by='sample'), {0: 'S0', 1: 'S1', 2: 'S2'}),
+    (lambda p: p.plot(
+        [Layer(0, 1), Layer(FREQ, ZS_IM, side='right')],
+        by='sample',
+        legend_title=None,
+    ), {0: None, 1: None, 2: None}),
 ], ids=['multiline_default', 'multiline_text', 'groups_name', 'xy_name', 'dual_y_default', 'dual_y_none'])
 def test_legend_title_drawn(eis_dataset, backend, draw, expected):
     """
@@ -420,6 +494,52 @@ def test_legend_title_drawn(eis_dataset, backend, draw, expected):
     assert dict(zip(plotter.figures, titles)) == expected
 
 
+@BACKENDS
+def test_legend_lists_every_curve(eis_dataset, backend):
+    """
+    图例按计划里的曲线显式生成，一条一项、一项不漏（2026-11-25）：样品名以 '_' 开头或为空时 matplotlib 自动收集会跳过它；
+    只有一条曲线时 Plotly 默认不显示图例（写了 legend_title 也看不到）。双 Y 轴先左后右。
+    """
+    eis_dataset.names[0:3] = ['_S0'] * 3
+    eis_dataset.names[3:6] = [''] * 3
+    plotter = DataPlotter(eis_dataset, backend=backend)
+    left, right = EIS_UNITS[ZS_RE], EIS_UNITS[ZS_IM]
+    dual = [Layer(FREQ, ZS_IM, side='right'), Layer(FREQ, ZS_RE)]   # 右侧图层写在前面
+    # 期望的图例条目：(matplotlib, Plotly)。双 Y 轴 matplotlib 先左后右，Plotly 按绘制顺序（见 FigureSpec.curves）
+    cases = [(lambda: plotter.plot(), (['_S0', '', 'S2'],) * 2),
+             (lambda: plotter.plot(by='sample', legend_title='T'), (['_S0'],) * 2),
+             (lambda: plotter.plot(dual, by='sample'), ([left, right], [right, left]))]
+    for draw, (in_matplotlib, in_plotly) in cases:
+        drawn = next(iter(draw().figures.values()))
+        if backend == 'matplotlib':
+            assert [text.get_text() for text in drawn.axes['left'].get_legend().get_texts()] == in_matplotlib
+        else:
+            assert drawn.fig.layout.showlegend is True
+            assert [trace.name for trace in drawn.artists] == in_plotly
+
+    # matplotlib 的惯例照旧（与 adca55c 一致）：回调把名字改成 '_' 开头（如 '_nolegend_'）就不进图例；
+    # 坐标轴回调另加的带标签对象（参考线）在回调后重建图例时收进来，排在计划的曲线之后
+    if backend == 'matplotlib':
+        def add_reference(ax, fig):
+            ax.axhline(0, label='ref')
+
+        # 回调把标签设成 None（matplotlib 接受的值）也不列，与旧版一致；不能因为它重建图例时出错
+        for hidden in ('_nolegend_', None):
+            hide_first = make_lines_formatter(
+                custom=[lambda line, hidden=hidden: line.get_label() == '_S0' and line.set_label(hidden)])
+            drawn = plotter.plot(formatters=AxesFormatter(axes=add_reference, lines=hide_first)).figures['main']
+            assert [text.get_text() for text in drawn.axes['left'].get_legend().get_texts()] == ['', 'S2', 'ref']
+
+    # 线条回调改了曲线名，图例跟着改（matplotlib 重建图例时读对象当前的标签）
+    rename = make_lines_formatter(custom=[(lambda line: line.set_label('X')) if backend == 'matplotlib'
+                                          else (lambda trace: trace.update(name='X'))], backend=backend)
+    drawn = plotter.plot(formatters=AxesFormatter(lines=rename)).figures['main']
+    if backend == 'matplotlib':
+        assert [text.get_text() for text in drawn.axes['left'].get_legend().get_texts()] == ['X'] * 3
+    else:
+        assert [trace.name for trace in drawn.artists] == ['X'] * 3
+
+
 # ══════════════════════════════════════════════
 # 55576fb 复审的回归（2026-11-20）
 # ══════════════════════════════════════════════
@@ -431,7 +551,7 @@ def test_numeric_sample_names(make_dataset, backend):
     """
     rows = [[1, 10, -1], [10, 20, -2]]
     ds = make_dataset(EIS_UNITS, {'101': rows, '102': rows})
-    plotter = DataPlotter(ds, backend=backend).plot_dual_y(right=(FREQ, ZS_IM))
+    plotter = DataPlotter(ds, backend=backend).plot([Layer(0, 1), Layer(FREQ, ZS_IM, side='right')], by='sample')
 
     if backend == 'matplotlib':
         titles = [drawn.axes['left'].get_legend().get_title().get_text() for drawn in plotter.figures.values()]
@@ -439,7 +559,7 @@ def test_numeric_sample_names(make_dataset, backend):
         steps = plotter.add_page_slider().layout.sliders[0].steps
         titles = [step.args[1]['legend.title.text'] for step in steps]
         assert [step.label for step in steps] == ['101', '102']
-        curve_steps = DataPlotter(ds, backend=backend).plot_multiline().add_slider().layout.sliders[0].steps
+        curve_steps = DataPlotter(ds, backend=backend).plot().add_slider().layout.sliders[0].steps
         assert [step.label for step in curve_steps] == ['101', '102']
     assert titles == ['101', '102']
 
@@ -454,10 +574,11 @@ def test_global_marker(eis_dataset, backend):
     groups = Group(eis_dataset, {'A': {'num': [0], 'marker': 'square'}, 'B': {'num': [1, 2]}})
     plotter = DataPlotter(eis_dataset, groups=groups, backend=backend, lines=LineStyle(marker='diamond'))
 
-    lines = plotter.plot_multiline().figures['main'].artists
-    grouped = plotter.plot_groups(merge_groups=True).figures['main']
-    scatter = DataPlotter(eis_dataset, backend=backend, lines=LineStyle(marker='diamond')) \
-        .plot_scatter().figures['main'].artist(0)
+    lines = plotter.plot().figures['main'].artists
+    grouped = plotter.plot(by='group', merge_groups=True).figures['main']
+    scatter = DataPlotter(eis_dataset, backend=backend, lines=LineStyle(marker='diamond')).plot(
+        Layer(kind='scatter'),
+    ).figures['main'].artist(0)
     if backend == 'matplotlib':
         from matplotlib.markers import MarkerStyle
         assert [line.get_marker() for line in lines] == ['D'] * 3
@@ -474,7 +595,7 @@ def test_global_marker(eis_dataset, backend):
 
 @BACKENDS
 def test_backend_rejects_unknown_layout_and_kind(backend):
-    """计划里的版式、画法写错时，两个后端都明确报错，不悄悄画成别的（docs/WORK_PLAN.md 原则 5）。"""
+    """两个后端均拒绝无效的版式和画法。"""
     from plotlib.backends import get_backend
     from plotlib.plot_spec import Appearance, CurveBase, FigureSpec, LineSpec
 

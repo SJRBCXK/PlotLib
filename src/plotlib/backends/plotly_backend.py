@@ -9,15 +9,18 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any, Literal, cast
 
+import numpy as np
 import plotly.colors as plyc
 import plotly.graph_objects as go
 
 from ..layouts import LAYOUTS, NO_LEGEND_MESSAGE, LayoutPreset, resolve_frame, resolve_legend
-from ..plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_SCATTER, DEFAULT_TICKS, Appearance,
-                         AxesFormatter,
+from ..plot_spec import (DEFAULT_BARS, DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_SCATTER, DEFAULT_TICKS,
+                         Appearance, AxesFormatter, BarSpec,
                          CurveBase, DrawnFigure, FigureSpec, LineSpec, LineStyle, ScatterSpec)
-from ..style import (remember_fill, translate_color, translate_figsize, translate_frame, translate_legend_style,
-                     translate_line_style, translate_points, translate_scatter_style, translate_ticks)
+from ..style import (remember_fill, translate_bar_style, translate_color, translate_figsize, translate_frame,
+                     translate_legend_style, translate_line_style, translate_points, translate_scatter_style,
+                     translate_ticks)
+from .bar_layout import stack_bottoms
 from .plotly_styles import apply_axis, apply_frame, apply_log_format
 
 # 滑块模式：single 每档只显示一条曲线；cumulative 每档累加显示到当前曲线
@@ -152,6 +155,9 @@ class PlotlyBackend:
         pages = []      # 每页的 trace，与这页的 spec.curves 一一对应
         for page, spec in enumerate(specs):
             artists = [self._draw_curve(fig, curve, preset) for curve in spec.curves]
+            bar_pairs = [(curve, artist) for curve, artist in zip(spec.curves, artists) if isinstance(curve, BarSpec)]
+            if bar_pairs:
+                self._stack_errors(fig, [bar for bar, _ in bar_pairs], [artist for _, artist in bar_pairs])
             for artist in artists:
                 artist.visible = (page == 0)        # 刚画完只显示第一页
             pages.append(artists)
@@ -159,6 +165,9 @@ class PlotlyBackend:
         curves = [curve for spec in specs for curve in spec.curves]
         artists = [artist for page_artists in pages for artist in page_artists]
         self._apply_layout(fig, axes, first, preset)
+        bars = [curve for curve in first.curves if isinstance(curve, BarSpec)]
+        if bars:
+            self._apply_bar_layout(fig, bars)
         self._apply_optional_formatters(fig, axes, curves, artists, formatters)
         self._apply_figure_formatter(fig, axes, figure_formatter)
         self._apply_neglog_formatter(fig, axes, first)
@@ -203,16 +212,59 @@ class PlotlyBackend:
                 fig.add_trace(trace)
                 remember_fill(fig.data[-1], color)      # add_trace 会复制，要记在 Figure 里那一个上
                 return fig.data[-1]
+            case BarSpec():
+                trace = self._bar_trace(curve, preset)
             case _:
-                raise ValueError(f"不支持的画法：{type(curve).__name__}（可用 LineSpec、ScatterSpec）")
+                raise ValueError(f"不支持的画法：{type(curve).__name__}（可用 LineSpec、ScatterSpec、BarSpec）")
         fig.add_trace(trace)
         return fig.data[-1]
+
+    def _bar_trace(self, bar: BarSpec, preset: LayoutPreset) -> go.Bar:
+        """
+        为单个系列创建柱状 trace。
+
+        类别使用整数位置，以保留同名类别各自的柱位。Plotly 根据 ``barmode`` 排列各系列。
+        描边色用于填充上方的纹理。``caps=False`` 时省略端帽，以免缺失误差显示为零误差。
+        """
+        style = DEFAULT_BARS.updated(replace(bar.style, color=None))
+        if not bar.caps:
+            style = replace(style, capsize=0)
+        native = translate_bar_style(style, 'plotly', self.dpi)
+        error_y = {key.removeprefix('error_y_'): native.pop(key) for key in list(native) if key.startswith('error_y_')}
+        trace = go.Bar(x=list(range(len(bar.heights))), y=bar.heights, name=bar.label,
+                       hovertext=bar.categories, marker_color=self._curve_color(bar, preset),
+                       marker_pattern_fillmode='overlay', **native)
+        if bar.errors is not None and bar.mode == 'group':
+            trace.error_y = dict(type='data', array=bar.errors, visible=True, **error_y)
+        return trace
+
+    def _stack_errors(self, fig: go.Figure, bars: list[BarSpec], traces: list):
+        """
+        在各堆叠段末端绘制误差棒。
+
+        为每个有误差的系列创建一条透明散点 trace，以便在所有柱体上方显示完整的误差棒。
+        该 trace 不进入图例或悬停提示。柱状 trace 保留其引用，供 `~plotlib.formatters.make_bar_formatter` 更新误差棒样式。
+        """
+        bottoms = stack_bottoms(bars)
+        for bar, trace in zip(bars, traces):
+            if bar.errors is None or bar.mode != 'stack':
+                continue
+            style = DEFAULT_BARS.updated(replace(bar.style, color=None))
+            if not bar.caps:
+                style = replace(style, capsize=0)
+            native = translate_bar_style(style, 'plotly', self.dpi)
+            error_y = {key.removeprefix('error_y_'): value for key, value in native.items() if key.startswith('error_y_')}
+            fig.add_trace(go.Scatter(
+                x=list(range(len(bar.heights))), y=bottoms[id(bar)] + np.asarray(bar.heights, dtype=float),
+                mode='markers', marker=dict(opacity=0), name=bar.label, showlegend=False, hoverinfo='skip',
+                error_y=dict(type='data', array=bar.errors, visible=True, **error_y)))
+            trace._plotlib_errors = fig.data[-1]        # add_trace 会复制，记 Figure 里那一个
 
     # ========================================================================
     # 曲线颜色和样式
     # ========================================================================
 
-    def _curve_color(self, curve: LineSpec | ScatterSpec, preset: LayoutPreset) -> str | None:
+    def _curve_color(self, curve: LineSpec | ScatterSpec | BarSpec, preset: LayoutPreset) -> str | None:
         """
         算出一条线的最终颜色。
 
@@ -241,7 +293,8 @@ class PlotlyBackend:
         Plotly 会自动给图外的图例留边；图例的 ``draggable`` 也不用，Plotly 的拖动是显示时的设置。
         """
         legend = translate_legend_style(resolve_legend(preset, self.appearance), 'plotly', self.dpi)
-        fig.update_layout(legend=legend, xaxis_title_text=spec.x_unit, yaxis_title_text=spec.y_unit)
+        # 单个系列也显示图例及其标题。
+        fig.update_layout(legend=legend, showlegend=True, xaxis_title_text=spec.x_unit, yaxis_title_text=spec.y_unit)
         if spec.legend_title is not None:
             fig.update_layout(legend_title_text=spec.legend_title)
         if 'right' in axes:
@@ -255,6 +308,22 @@ class PlotlyBackend:
         frame = resolve_frame(preset, self.appearance)
         for axis_name in axes.values():
             apply_frame(fig, axis_name, frame)
+
+    @staticmethod
+    def _apply_bar_layout(fig: go.Figure, bars: list[BarSpec]):
+        """
+        柱状图的排列和类别刻度：并排 ``barmode='group'``、堆叠 ``'relative'`` （正负分开叠）；
+        ``bargap = 1 - width``、``bargroupgap = 0``，一个类别里全部柱子占间距的 *width*，与 matplotlib 一致。
+        X 轴用数字位置配类别文字，不画次刻度。
+
+        带误差棒的堆叠图禁用图例显隐。隐藏一个系列会重新堆叠柱体，而单独绘制的误差棒仍使用已计算的位置。
+        """
+        bar = bars[0]
+        fig.update_layout(barmode='group' if bar.mode == 'group' else 'relative', bargap=1 - bar.width, bargroupgap=0,
+                          xaxis=dict(tickmode='array', tickvals=list(range(len(bar.categories))),
+                                     ticktext=bar.categories, minor_ticks=''))
+        if bar.mode == 'stack' and any(each.errors is not None for each in bars):
+            fig.update_layout(legend_itemclick=False, legend_itemdoubleclick=False)
 
     # ========================================================================
     # 格式化回调和负对数刻度
@@ -283,6 +352,8 @@ class PlotlyBackend:
                 fm.lines(_artists_of(LineSpec, axis, curves, artists))
             if fm.scatter is not None:
                 fm.scatter(_artists_of(ScatterSpec, axis, curves, artists))
+            if fm.bars is not None:
+                fm.bars(_artists_of(BarSpec, axis, curves, artists))
 
         for axis, fm in fms.items():
             if fm.legend is not None:

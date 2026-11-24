@@ -9,7 +9,7 @@ Notes
 Examples
 --------
 >>> from plotlib.html_export import write_fit_html
->>> fig = DataPlotter(data, backend='plotly').plot_multiline().add_slider()
+>>> fig = DataPlotter(data, backend='plotly').plot().add_slider()
 >>> write_fit_html(fig, "output.html", side_html=panel_html, title="压电极化测试")
 """
 from __future__ import annotations
@@ -135,7 +135,7 @@ def write_fit_html(
 
     Examples
     --------
-    >>> fig = DataPlotter(data, backend='plotly').plot_xy().add_page_slider()
+    >>> fig = DataPlotter(data, backend='plotly').plot(by='sample').add_page_slider()
     >>> write_fit_html(fig, 'nyquist.html', title='Nyquist')
     """
     path = Path(path)

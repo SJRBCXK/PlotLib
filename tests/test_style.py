@@ -1,5 +1,5 @@
 """
-测试对象：src/plotlib/style.py —— 公共样式词汇与后端翻译（docs/WORK_PLAN.md 步骤 4.3）
+验证公共样式配置和后端参数转换。
 
 约定：程序入口只接受一套标准写法（与后端无关），不认识就报错，也不替用户改写；
       翻译只发生在后端：translate_* 把标准写法换成 matplotlib / Plotly 的原生值。
@@ -187,7 +187,7 @@ def test_translate_unknown_backend_raises(translate, value):
 
 
 # ──────────────────────────────────────────────
-# 排版与尺寸的翻译（docs/WORK_PLAN.md 步骤 6.7）：通用的翻译放在这一层，后端只管应用
+# 版式与尺寸参数转换
 # ──────────────────────────────────────────────
 def test_translate_tick_format():
     """刻度格式（与 make_axes_formatter 同一写法）：matplotlib 得到格式函数，Plotly 得到 d3 格式。"""
@@ -238,7 +238,7 @@ def test_translate_points_and_figsize():
 
 
 # ══════════════════════════════════════════════
-# 刻度 TickStyle（2026-11-20 用户提出：主 / 次刻度的长短、显示、文字都能精调）
+# 主刻度和次刻度样式
 #   标准写法：长度、宽度、字号、间距用磅；None 表示不改（沿用上一层）。翻译后只出现写了的字段
 # ══════════════════════════════════════════════
 PX = 100 / 72       # dpi 100 时 1 磅的像素数
@@ -260,7 +260,7 @@ def test_tick_style_defaults():
 # ══════════════════════════════════════════════
 def test_style_defaults_and_layers():
     """
-    库默认：线宽 3 实线、标记 6 磅；默认无框（用户定）、轴线宽 3；图例字号 10、无边框、不能拖动。
+    库默认：线宽 3 实线、标记 6 磅；默认隐藏上、右边框、轴线宽 3；图例字号 10、无边框、不能拖动。
     Appearance 只存用户写的那一层（全是 None），叠加时没写的字段沿用下一层。
     """
     from plotlib.plot_spec import (DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, Appearance, FrameStyle,
@@ -343,6 +343,38 @@ def test_translate_scatter_style():
         translate_scatter_style(ScatterStyle(filled='no'), 'matplotlib')      # pyright: ignore[reportArgumentType]
     with pytest.raises(ValueError):
         translate_line_style(LineStyle(width=float('nan')), 'matplotlib')    # 所有尺寸都拒绝非有限值
+
+
+def test_translate_bar_style():
+    """
+    BarStyle → matplotlib 的 bar / 误差棒参数、Plotly 的 marker / error_y（磅按 dpi 换像素）。
+    纹理写词名，'none' 清除（翻译成空字符串）；Plotly 的纹理颜色跟随描边色。
+    宽度类写 NaN、负数，纹理词写错，颜色写错，都报错。
+    """
+    from plotlib.plot_spec import BarStyle
+    from plotlib.style import translate_bar_style
+
+    full = BarStyle(color='white', edge_color='black', edge_width=1, hatch='backslash',
+                    error_color='red', error_width=2, capsize=3)
+    assert translate_bar_style(full, 'matplotlib') == {
+        'color': 'white', 'edgecolor': 'black', 'linewidth': 1, 'hatch': '\\',
+        'ecolor': 'red', 'elinewidth': 2, 'capsize': 3}
+    native = translate_bar_style(full, 'plotly', dpi=100)
+    assert {key: native[key] for key in ('marker_color', 'marker_line_color', 'marker_pattern_shape',
+                                         'marker_pattern_fgcolor', 'error_y_color')} == \
+        {'marker_color': 'white', 'marker_line_color': 'black', 'marker_pattern_shape': '\\',
+         'marker_pattern_fgcolor': 'black', 'error_y_color': 'red'}
+    assert (native['marker_line_width'], native['error_y_thickness'], native['error_y_width']) == \
+        pytest.approx((1 * PX, 2 * PX, 3 * PX))
+    assert translate_bar_style(BarStyle(hatch='none'), 'matplotlib') == {'hatch': ''}
+    assert translate_bar_style(BarStyle(), 'plotly', dpi=100) == {}
+
+    for bad, error in [(BarStyle(edge_width=float('nan')), ValueError), (BarStyle(error_width=0), ValueError),
+                       (BarStyle(capsize=-1), ValueError), (BarStyle(hatch='/'), ValueError),
+                       (BarStyle(hatch=1), TypeError),                    # pyright: ignore[reportArgumentType]
+                       (BarStyle(error_color='notacolor'), ValueError)]:
+        with pytest.raises(error):
+            translate_bar_style(bad, 'matplotlib')
 
 
 def test_translate_axis_style():
@@ -448,7 +480,7 @@ def test_translate_ticks_plotly():
 
 @pytest.mark.parametrize("field", ['minor_label_font', 'minor_label_size', 'minor_label_pad'])
 def test_translate_ticks_plotly_rejects_minor_label_style(field):
-    """Plotly 的次刻度没有文字属性：单独设次刻度文字的字体 / 字号 / 间距 → 报错说明（用户定：不悄悄忽略）。"""
+    """Plotly 拒绝次刻度文字的字体、字号和间距设置。"""
     from plotlib.plot_spec import TickStyle
     from plotlib.style import translate_ticks
 

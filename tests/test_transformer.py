@@ -11,7 +11,7 @@ eis_dataset 列号：S0 = 0~2，S1 = 3~5，S2 = 6~8；每个样品 [Freq, Zs', Z
 import numpy as np
 import pytest
 
-from plotlib.processor import DataTransformer
+from plotlib.processor import DataTransformer, Reduction
 
 ZS_RE = "Zs'(ohm)"
 
@@ -275,3 +275,68 @@ def test_apply_accepts_python_scalar(eis_dataset):
     """回调返回 Python 标量（如 1.0）当作 1 × 1，与返回 np.float64 一样。"""
     result = DataTransformer(eis_dataset).apply(lambda d: float(d.max()), indicies=1)
     assert result.data.tolist() == [[30.0]]
+
+
+# ══════════════════════════════════════════════
+# Reduce：每列汇总成一个值
+# ══════════════════════════════════════════════
+def test_reduce_statistics():
+    """
+    四列：[1, NaN, 3, 5]（样品 3）、[7]（样品 3）、[2]（样品 5）、全 NaN（样品 5）。
+    忽略 NaN 后手算；单个有效值的 std / sem 为 NaN，全 NaN 的列任何汇总都是 NaN。
+    """
+    from plotlib.dataset import DataSet
+
+    nan = np.nan
+    s3 = DataSet().form_array(np.array([[1, 7], [nan, nan], [3, nan], [5, nan]]),
+                              ['S3', 'S3'], ['F(N)', 'E(%)'], 3, repeat_times=2)
+    s5 = DataSet().form_array(np.array([[2, nan]]), ['S5', 'S5'], ['F(N)', 'E(%)'], 5, repeat_times=2)
+    data = s3.expandata(s5)
+    data.data = data.data.astype(np.float32)        # 单精度输入，结果提升到双精度
+
+    expected = {
+        'mean': [3, 7, 2, nan], 'median': [3, 7, 2, nan],
+        'first': [1, 7, 2, nan], 'last': [5, 7, 2, nan],
+        'max': [5, 7, 2, nan], 'min': [1, 7, 2, nan],
+        'std': [2, nan, nan, nan], 'sem': [2 / 3 ** 0.5, nan, nan, nan],
+        np.sum: [9, 7, 2, nan],                     # 函数收到去掉 NaN 的一维数组
+    }
+    for how, values in expected.items():
+        result = DataTransformer(data).Reduce(how)
+        assert result.data.dtype == np.float64
+        np.testing.assert_allclose(result.data, [values], rtol=1e-12, err_msg=str(how))
+        assert (result.names, result.units, result.sample_idx) == (
+            ['S3', 'S3', 'S5', 'S5'], ['F(N)', 'E(%)'] * 2, [3, 3, 5, 5])
+
+    # None：每列至多一个有效值，原样取出；多于一个时报错，信息带样品、单位和个数
+    np.testing.assert_array_equal(DataTransformer(data).Reduce(None, indicies=[1, 3]).data, [[7, nan]])
+    with pytest.raises(ValueError, match=r"S3.*F\(N\).*3 个"):
+        DataTransformer(data).Reduce(None)
+
+    # 写法不对、函数返回的不是一个实数（数组、字符串、None、复数），都在汇总时报错
+    for how, error in (('avg', ValueError), (3, TypeError), (lambda v: v, TypeError),
+                       (lambda v: 'bad', TypeError), (lambda v: None, TypeError), (lambda v: 3 + 4j, TypeError)):
+        with pytest.raises(error):
+            DataTransformer(data).Reduce(how)       # type: ignore[arg-type]
+
+    complex_data = DataSet().form_array(np.array([[1 + 1j]]), ['A'], ['u'], 0)
+    with pytest.raises(TypeError, match='复数'):
+        DataTransformer(complex_data).Reduce('mean')
+
+    # 来自两个数据集、长度不同的列：逐列先算成一个值再组装，不在拼原始列时出错
+    a = DataSet().form_array(np.array([2, 4]), ['A'], ['u'], 0)
+    b = DataSet().form_array(np.array([3, 6, 9]), ['B'], ['u'], 1)
+    result = DataTransformer().Reduce('mean', column=[a.column[0], b.column[0]])
+    np.testing.assert_array_equal(result.data, [[3, 6]])
+    assert (result.names, result.sample_idx) == (['A', 'B'], [0, 1])
+
+    # 中间步骤不上溢、不下溢（原则 14）：std 的平方项、mean 的求和（含正负无穷相加得到 NaN）；
+    # 常规量级走原来的算法，大偏置、小波动的数据不因缩放丢精度
+    extremes: list[tuple[list[float], Reduction, float]] = [
+        ([1e200, 2e200], 'std', 0.5 ** 0.5 * 1e200), ([1e-200, 2e-200], 'std', 0.5 ** 0.5 * 1e-200),
+        ([1e308, 1e308], 'mean', 1e308), ([1e308, 1e308], 'median', 1e308),
+        ([1e308, 1e308, -1e308, -1e308], 'mean', 0.0), ([1e15, 1e15 + 1], 'std', 0.5 ** 0.5),
+        ([-1.5e308, 1.5e308], 'sem', 1.5e308)]          # 标准差本身上溢，除以 √n 后可以表示
+    for values, how, expected in extremes:
+        extreme = DataSet().form_array(np.array(values), ['A'], ['u'], 0)
+        np.testing.assert_allclose(DataTransformer(extreme).Reduce(how).data, [[expected]], rtol=1e-12)

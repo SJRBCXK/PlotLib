@@ -13,7 +13,7 @@ from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
 from plotlib.plotter import DataPlotter
 from plotlib.formatters import make_axes_formatter
-from plotlib.plot_spec import AxisStyle
+from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer
 from plotlib.group import Group
 
 plt.close('all')
@@ -23,7 +23,7 @@ plt.close('all')
 # ============================================================
 COLUMNS_PER_SAMPLE = 8  # 每个样品的列数（含 1 列标识）
 
-# 数据列索引定义（从0开始）
+# 通道编号从 0 开始。
 dataRowNum_unit1 = 0  # Frequency
 dataRowNum_unit2 = 1  # Real Z (实部阻抗)
 dataRowNum_unit3 = 2  # Imaginary Z (虚部阻抗)
@@ -32,7 +32,7 @@ dataRowNum_unit5 = 4  # Phase angle (相角)
 dataRowNum_unit6 = 5  # Real Z' (for Nyquist)
 dataRowNum_unit7 = 6  # Imaginary Z'' (for Nyquist)
 
-# 数据分组配置（用于 plot_groups）
+# 分组配置，供 plot(by='group') 使用。
 # 样式用标准写法（style.py）：线型 'solid' / 'dash' / 'dot' / 'dashdot'，或自定义虚线 (实线长, 空白长)
 data_groups = {
     '1st': {'num': [0, 1], 'linestyle': 'solid'},
@@ -116,10 +116,7 @@ Test_pltliner1 = DataPlotter(
     dataset=data,
     channel_x = dataRowNum_unit6,
     channel_y = dataRowNum_unit7
-).plot_multiline(
-    axes_formatter=Nyquist_formatter,
-    neglog_y=True
-)
+).plot(Layer(neglog_y=True), formatters=AxesFormatter(axes=Nyquist_formatter))
 
 # --- Nyquist 图（分组绘制）---
 Test_pltGliner2 = DataPlotter(
@@ -127,51 +124,48 @@ Test_pltGliner2 = DataPlotter(
     groups=groups,
     channel_x = dataRowNum_unit6,
     channel_y = dataRowNum_unit7
-).plot_groups(
-    axes_formatter=Nyquist_formatter,
-    neglog_y=True,
-    merge_groups=False,
-    lines_formatter=Group_lines_formatter
+).plot(
+    Layer(neglog_y=True),
+    by='group',
+    formatters=AxesFormatter(axes=Nyquist_formatter, lines=Group_lines_formatter),
 )
 
 
 # --- Y-Y 子图（Real Z vs -Imaginary Z）---
 Test_pltsubsyy = DataPlotter(
     dataset=data,
-).plot_xy(
-    channel_x=dataRowNum_unit6,
-    channel_y=dataRowNum_unit7,
-    neglog_y=True,
-    axes_formatter=NegLog_formatter
+).plot(
+    Layer(dataRowNum_unit6, dataRowNum_unit7, neglog_y=True),
+    by='sample',
+    formatters=AxesFormatter(axes=NegLog_formatter),
 )
 # 备用方案：使用自定义 eis_log_formatter
-# ).plot_xy(
-#     channel_x=dataRowNum_unit6,
-#     channel_y=dataRowNum_unit7,
-#     axes_formatter=eis_log_formatter
+# ).plot(
+#     Layer(dataRowNum_unit6, dataRowNum_unit7),
+#     by='sample',
+#     formatters=AxesFormatter(axes=eis_log_formatter),
 # )
 
 # --- X-YY 双轴子图（Frequency vs Z components）---
 Test_pltsubsxyy = DataPlotter(
     dataset=data,
-).plot_dual_y(
-    left=(dataRowNum_unit1, dataRowNum_unit6),
-    right=(dataRowNum_unit1, dataRowNum_unit7),
-    neglog_y2=True,
-    axes_formatter=NegLog_formatter,
-    right_axes_formatter=NegLog_formatter,
-    # 整图回调 (fig, axes)：axes['right'] 是右轴（原 custom_formatter(ax1, ax2, fig) 的 ax2）
+).plot(
+    [Layer(dataRowNum_unit1, dataRowNum_unit6),
+     Layer(dataRowNum_unit1, dataRowNum_unit7, side='right', neglog_y=True)],
+    by='sample',
+    formatters={'left': AxesFormatter(axes=NegLog_formatter), 'right': AxesFormatter(axes=NegLog_formatter)},
+    # 整图回调通过 axes['right'] 调整右侧 Y 轴和共用的 X 轴。
     figure_formatter=lambda _fig, axes: (
         axes['right'].spines['right'].set_visible(True),
         axes['right'].spines['top'].set_visible(True),
         axes['right'].set_xscale('log'),
         axes['right'].yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.1e}"))
-    )
+    ),
 )
 # 备用方案：使用自定义 eis_dual_axis_formatter
-# ).plot_dual_y(
-#     left=(dataRowNum_unit1, dataRowNum_unit6),
-#     right=(dataRowNum_unit1, dataRowNum_unit7),
+# ).plot(
+#     [Layer(dataRowNum_unit1, dataRowNum_unit6), Layer(dataRowNum_unit1, dataRowNum_unit7, side='right')],
+#     by='sample',
 #     figure_formatter=lambda fig, axes: eis_dual_axis_formatter(axes['left'], axes['right'], fig),
 # )
 Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data
@@ -184,16 +178,14 @@ Impendence_pltliner1 = DataPlotter(
     dataset=data,
     channel_x = 0,
     channel_y = 7
-).plot_multiline(
-    axes_formatter=Nyquist_formatter,
-)
+).plot(formatters=AxesFormatter(axes=Nyquist_formatter))
 
 
 
 
 
 # ============================================================
-# 使用 Group.apply() 重构的分组计算
+# 使用 Group.apply() 按组计算
 # ============================================================
 
 def rev_camp(*slices):
@@ -211,11 +203,6 @@ print(RevCampdata_v2.units)
 
 RevCampdata_v2_pltsubsyy = DataPlotter(
     dataset=RevCampdata_v2,
-).plot_xy(
-    channel_x=2,
-    channel_y=1,
-    neglog_y=True,
-    axes_formatter=NegLog_formatter
-)
+).plot(Layer(2, 1, neglog_y=True), by='sample', formatters=AxesFormatter(axes=NegLog_formatter))
 
 plt.show()

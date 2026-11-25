@@ -121,8 +121,28 @@ plotter = DataPlotter(data, groups=groups, channel_x=0, channel_y=1)
 plotter.plot(by="group", legend_title="{name}")
 ```
 
-分组线型适用于折线，标记适用于折线和散点，颜色适用于所有图形类型。分组颜色会应用到组内所有样品。
+分组线型适用于折线，标记适用于折线和散点。指定的分组颜色应用于组内样品，启用散点颜色映射时由映射值决定点色。
 合并绘图时，重复出现的样品采用第一个所属分组的样式。未指定分组颜色时，合并图按各组首个样品的颜色配色，独立分组图按样品配色。
+
+### 散点颜色与大小映射
+
+在散点图层中用 `ScatterMap` 指定颜色或大小通道。以下示例假设通道 0 是正值频率，通道 1、2 分别是实部和虚部。
+
+```python
+from plotlib import ColorbarStyle, DataPlotter, Layer, ScatterMap
+
+plotter = DataPlotter(data)
+plotter.plot(
+    Layer(1, 2, kind="scatter", mapping=ScatterMap(color=0)),
+    colorbar=ColorbarStyle(scale="log"),
+)
+```
+
+一次 `plot()` 仅支持一个颜色映射图层，各张图共用颜色范围。默认线性着色，颜色条标题取颜色通道的列标题。设置 `limits=(下限, 上限)` 可固定范围，某一端也可设为 `None` 以自动取值。对数色标要求用于着色的值和范围端点均为正。
+
+`ScatterMap(size=3, size_range=(4, 16))` 将通道 3 映射为散点大小。映射值与点的面积呈线性关系，`size_range` 指定最小和最大直径，单位为磅。颜色和大小可同时映射。
+
+如需自定义颜色条，可在整图回调中读取 `axes['colorbar']`。Matplotlib 返回 `Colorbar` 对象，Plotly 返回布局中的轴名 `'coloraxis'`。
 
 ### 双 Y 轴和图例
 

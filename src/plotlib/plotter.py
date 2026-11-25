@@ -13,7 +13,8 @@ from .dataset import DataSet
 from .group import Group
 from .layouts import NO_LEGEND_MESSAGE
 from .plan import BarErrors, plan_bars, plan_figures, resolve_groups
-from .plot_spec import (Appearance, AxesFormatter, BarDimension, BarMode, BarStyle, DrawnFigure, FigureSpec,
+from .plot_spec import (Appearance, AxesFormatter, BarDimension, BarMode, BarStyle, ColorbarStyle, DrawnFigure,
+                        FigureSpec,
                         FrameStyle, Layer, LegendStyle, LineStyle, Members, TickStyle)
 from .processor import Reduction
 
@@ -310,6 +311,7 @@ class DataPlotter:
              formatters: AxesFormatter | dict[str, AxesFormatter] | None = None,
              figure_formatter: FigureFormatter | None = None,
              legend_title: str | None = 'auto',
+             colorbar: ColorbarStyle | None = None,
              ) -> DataPlotter:
         """
         绘制折线和散点图。*by* 指定样品的分图方式，*layers* 指定每个图层的通道、画法和 Y 轴。
@@ -330,11 +332,14 @@ class DataPlotter:
             回调签名见类说明。左右两侧共享 X 轴，任一侧的坐标轴回调都可调整该轴。
             画图前检查：轴名只能是 ``'left'``、``'right'``，没有右侧图层时不能给 ``'right'``，图例回调只能放在左侧。
         figure_formatter : callable, optional
-            整图回调 ``figure_formatter(fig, axes)``，在各轴回调之后调用一次，可以同时调整两根轴。
+            在各轴回调之后调用一次 ``figure_formatter(fig, axes)``。颜色映射图可通过 ``axes['colorbar']`` 访问颜色条。
         legend_title : str or None, default: 'auto'
             图例标题，``'{name}'`` 换成每张图自己的名字：``by='sample'`` 是样品名，分组分离时是组名
             （只有一个样品或一个分组、只画出一张图时也替换）；``'all'`` 和合并模式的图没有自己的名字，原样保留。
             ``'auto'``：一个样品画多层时是样品名，否则不加；None 表示不加。
+        colorbar : ColorbarStyle, optional
+            为 ``ScatterMap(color=...)`` 配置色带、范围、刻度类型和标题。
+            默认使用线性的 ``'viridis'`` 色带，范围取自可绘制数据，标题取自颜色通道的列标题。
 
         Returns
         -------
@@ -373,6 +378,11 @@ class DataPlotter:
         每个样品一张双 Y 轴图，左轴实测点、右轴另一个量：
 
         >>> plotter.plot([Layer(0, 1, kind='scatter'), Layer(0, 2, side='right')], by='sample')
+
+        散点按通道 3 着色、按通道 4 定大小，颜色条用对数刻度：
+
+        >>> plotter.plot(Layer(0, 1, kind='scatter', mapping=ScatterMap(color=3, size=4)),
+        ...              colorbar=ColorbarStyle(scale='log'))
         """
         if layers is None:
             layers = [Layer()]
@@ -382,7 +392,8 @@ class DataPlotter:
         layers = [replace(layer, x=self.channel_x if layer.x is None else layer.x,
                           y=self.channel_y if layer.y is None else layer.y) for layer in layers]
         specs = plan_figures(self.dataset, self.groups if by == 'group' else None, layers, by=by,
-                             merge_groups=merge_groups, plotrange=self.plotrange, legend_title=legend_title)
+                             merge_groups=merge_groups, plotrange=self.plotrange, legend_title=legend_title,
+                             colorbar=colorbar)
         if formatters is None:
             formatters = {}
         elif isinstance(formatters, AxesFormatter):

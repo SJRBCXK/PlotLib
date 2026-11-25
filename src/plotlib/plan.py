@@ -9,7 +9,9 @@ Matplotlib 和 Plotly 共用取数、去重和配色规则，渲染时再应用�
 
 `plan_bars` 生成柱状图的计划：一张「类别 × 系列」的表，每格的值由数据处理层汇总，这里只负责排列和配色。
 """
+import math
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from functools import partial
 from numbers import Integral, Real
 from typing import Literal
@@ -18,10 +20,11 @@ import numpy as np
 
 from .dataset import DataSet
 from .group import Group
-from .plot_spec import (Axis, BarDimension, BarMode, BarSpec, BarStyle, Curve, CurveKind, FigureSpec, Layer, Layout,
-                        LineSpec, LineStyle, Members, ScatterSpec, ScatterStyle)
+from .plot_spec import (DEFAULT_COLORBAR, Axis, BarDimension, BarMode, BarSpec, BarStyle, ColorbarStyle, Curve,
+                        CurveKind, FigureSpec, Layer, Layout, LineSpec, LineStyle, Members, ScatterMap, ScatterSpec,
+                        ScatterStyle)
 from .processor import Reduction, check_reduction, reduce_values, reduce_with_error
-from .style import check_bar_style
+from .style import check_bar_style, check_colorbar_style
 
 
 def color_positions(sample_idx):
@@ -212,7 +215,7 @@ _SIDES: tuple[Axis, ...] = ('left', 'right')
 
 def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer], *,
                  by: Members = 'all', merge_groups: bool = False, plotrange: int | None = None,
-                 legend_title: str | None = 'auto') -> list[FigureSpec]:
+                 legend_title: str | None = 'auto', colorbar: ColorbarStyle | None = None) -> list[FigureSpec]:
     """
     生成绘图计划（``DataPlotter.plot``）：*by* 决定哪些样品进哪张图，*layers* 决定每个样品画哪几条。
 
@@ -235,6 +238,8 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
         图例标题，``'{name}'`` 换成每张图自己的名字：``'sample'`` 是样品名，分离模式是组名
         （只有一个样品或一个分组、只画出一张图时也替换）；``'all'`` 和合并模式的图没有自己的名字，原样保留。
         ``'auto'``：一个样品画多层时是 ``'{name}'`` （样品名），否则不加；None 表示不加。
+    colorbar : ColorbarStyle, optional
+        颜色条的外观，叠在 ``DEFAULT_COLORBAR`` 上；只有某个图层写了 ``ScatterMap(color=...)`` 时才能给。
 
     Returns
     -------
@@ -247,7 +252,9 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
     ------
     ValueError
         *by*、画法、轴写错；图层没写通道；没有图层或没有左侧图层；``by`` 不是 ``'group'`` 却写了 *merge_groups*；
-        ``by='group'`` 但没有分组；``by='all'`` / ``'group'`` 画多个图层（暂不支持）；同一根轴上的负对数写法不一致。
+        ``by='group'`` 但没有分组；``by='all'`` / ``'group'`` 画多个图层（暂不支持）；同一根轴上的负对数写法不一致；
+        映射写错（见 `~plotlib.plot_spec.ScatterMap`）、有两个颜色映射层、给了 *colorbar* 却没有颜色映射层、
+        颜色条写错或对数色标遇到不为正的值、映射值有无穷大。
     RuntimeError
         数据集为空。
 
@@ -262,9 +269,12 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
     - **负对数**：每层的数据各自取绝对值；刻度补负号按轴：共用的 X 轴看左侧图层，左右 Y 轴各看本侧图层。
       右侧图层的 ``neglog_x`` 只把自己的 X 数据取绝对值。
     - **轴标题**：X 取第一个左侧图层的 X 单位，左 / 右 Y 取该侧第一个图层的 Y 单位。
+    - **映射**：先按图层取出各点的原始映射值，全部图生成后再按共用范围换算（大小换成直径、颜色条的范围），
+      所以同一个值在每张图、每个样品里都是同色、同大小。
     """
     layers = list(layers)
     _check_layers(layers, by, merge_groups)
+    colorbar_style = _check_colorbar(layers, colorbar)
     column_index = dataset.column_positions
     _check_not_empty(dataset)
     # 分组只在 by='group' 时使用，也只在那时检查（其他模式传进来的分组不看）
@@ -278,11 +288,15 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
                       positions=column_index, channel_x=_channels(layer)[0], channel_y=_channels(layer)[1],
                       plotrange=plotrange,
                       neglog_x=layer.neglog_x, neglog_y=layer.neglog_y, axis=layer.side,
-                      label_from='unit' if len(layers) > 1 else 'name')
+                      label_from='unit' if len(layers) > 1 else 'name', mapping=layer.mapping)
               for layer in layers]
+    made: list[list[Curve]] = [[] for _ in layers]      # 每个图层生成的曲线，映射按图层换算范围时用
 
     def make_curves(sample: int, group_name: str | None, color_position: float | None) -> list[Curve]:
-        return [make(sample, group_name, color_position) for make in makers]
+        curves = [make(sample, group_name, color_position) for make in makers]
+        for own, curve in zip(made, curves):
+            own.append(curve)
+        return curves
 
     layout: Layout = 'dual_y' if right else ('xy' if by == 'sample' else 'multiline')
     if legend_title == 'auto':
@@ -295,15 +309,28 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
                                               y2=bool(right) and right[0].neglog_y))
 
     if by == 'sample':
-        return [make_figure(sample, make_curves(sample, None, None),
-                            sample_name(dataset, sample, positions=column_index))
-                for sample in sorted(set(dataset.sample_idx))]
-    positions = color_positions(dataset.sample_idx)   # 按整个数据集排名一次
-    if resolved is None:                                # by='all'
-        return [_plan_all_samples(dataset, positions, make_curves, make_figure)]
-    if merge_groups:
-        return [_plan_merged(resolved, positions, make_curves, make_figure)]
-    return _plan_separate(resolved, positions, make_curves, make_figure)
+        figures = [make_figure(sample, make_curves(sample, None, None),
+                               sample_name(dataset, sample, positions=column_index))
+                   for sample in sorted(set(dataset.sample_idx))]
+    else:
+        positions = color_positions(dataset.sample_idx)   # 按整个数据集排名一次
+        if resolved is None:                                # by='all'
+            figures = [_plan_all_samples(dataset, positions, make_curves, make_figure)]
+        elif merge_groups:
+            figures = [_plan_merged(resolved, positions, make_curves, make_figure)]
+        else:
+            figures = _plan_separate(resolved, positions, make_curves, make_figure)
+
+    # 映射的范围要等全部曲线生成后才知道：大小按图层各自换算，颜色条各图共用
+    for layer, curves in zip(layers, made):
+        scatters = [curve for curve in curves if isinstance(curve, ScatterSpec)]
+        if layer.mapping is not None and layer.mapping.size is not None:
+            _apply_sizes(scatters, layer.mapping.size_range)
+        if layer.mapping is not None and layer.mapping.color is not None and colorbar_style is not None:
+            resolved_bar = _resolve_colorbar(scatters, colorbar_style, layer.mapping.color, dataset)
+            for figure in figures:
+                figure.colorbar = resolved_bar
+    return figures
 
 
 def _channels(layer: Layer) -> tuple[int, int]:
@@ -329,6 +356,12 @@ def _check_layers(layers: list[Layer], by: str, merge_groups: bool) -> None:
             raise ValueError(f"不支持的画法 {layer.kind!r}，图层可选 'line'、'scatter'")
         if layer.side not in _SIDES:
             raise ValueError(f"图层的 side 只能是 'left'、'right'，实际是 {layer.side!r}")
+        if layer.mapping is not None:
+            if layer.kind != 'scatter':
+                raise ValueError(f"只有散点图层能写 mapping（第三通道映射），这一层是 kind={layer.kind!r}")
+            _check_mapping(layer.mapping)
+    if sum(_maps_color(layer) for layer in layers) > 1:
+        raise ValueError("一次绘图只能有一个颜色映射层（ScatterMap(color=...)）：一张图只设计了一个颜色条")
     if not any(layer.side == 'left' for layer in layers):
         raise ValueError("至少要有一个左侧图层：两侧共用的 X 轴按左侧图层定（单位、负号）")
     if len(layers) > 1 and by != 'sample':
@@ -339,6 +372,49 @@ def _check_layers(layers: list[Layer], by: str, merge_groups: bool) -> None:
     for side in _SIDES:
         if len({layer.neglog_y for layer in layers if layer.side == side}) > 1:
             raise ValueError(f"{side} 侧图层的 neglog_y 要写得一致：它们共用一根 Y 轴")
+
+
+def _maps_color(layer: Layer) -> bool:
+    """这个图层是否把某个通道映射成颜色。"""
+    return layer.mapping is not None and layer.mapping.color is not None
+
+
+def _check_mapping(mapping: ScatterMap) -> None:
+    """校验散点映射：类型、至少一个通道、通道号是整数、``size_range`` 是两个有限正数且下限不大于上限。"""
+    if not isinstance(mapping, ScatterMap):
+        raise TypeError(f"mapping 要写 ScatterMap(color=..., size=...)，实际是 {type(mapping).__name__}")
+    if mapping.color is None and mapping.size is None:
+        raise ValueError("ScatterMap 至少要写 color 或 size 中的一个通道号")
+    for name in ('color', 'size'):
+        channel = getattr(mapping, name)
+        if channel is not None and (not isinstance(channel, Integral) or isinstance(channel, bool)):
+            raise TypeError(f"ScatterMap 的 {name} 要写通道号（整数），实际是 {channel!r}")
+    size_range = mapping.size_range
+    if not isinstance(size_range, (tuple, list)) or len(size_range) != 2:
+        raise ValueError(f"ScatterMap 的 size_range 要写 (最小直径, 最大直径) 两个数（磅），实际是 {size_range!r}")
+    if not all(isinstance(d, Real) and not isinstance(d, bool) for d in size_range):
+        raise TypeError(f"ScatterMap 的 size_range 要写数字（磅），实际是 {size_range!r}")
+    low, high = size_range
+    if not (math.isfinite(low) and math.isfinite(high) and 0 < low <= high):
+        raise ValueError(f"ScatterMap 的 size_range 要写两个有限正数，下限不大于上限，实际是 {size_range!r}")
+
+
+def _check_colorbar(layers: list[Layer], colorbar: ColorbarStyle | None) -> ColorbarStyle | None:
+    """
+    叠上库默认并校验颜色条，返回这次绘图的颜色条外观；没有颜色映射层时返回 None。
+
+    给了 *colorbar* 却没有颜色映射层时报错：否则这份设置会被悄悄忽略。
+    """
+    if not any(_maps_color(layer) for layer in layers):
+        if colorbar is not None:
+            raise ValueError("给了 colorbar，但没有颜色映射层（Layer(kind='scatter', mapping=ScatterMap(color=...))），"
+                             "颜色条不会画出来")
+        return None
+    if colorbar is not None and not isinstance(colorbar, ColorbarStyle):
+        raise TypeError(f"colorbar 要写 ColorbarStyle(...)，实际是 {type(colorbar).__name__}")
+    style = DEFAULT_COLORBAR.updated(colorbar)
+    check_colorbar_style(style)
+    return style
 
 
 def _check_not_empty(dataset: DataSet) -> None:
@@ -378,12 +454,16 @@ def _make_curve(sample: int, group_name: str | None, color_position: float | Non
                 dataset: DataSet, positions: Mapping[tuple[int, int], int],
                 channel_x: int, channel_y: int, plotrange: int | None,
                 neglog_x: bool, neglog_y: bool,
-                axis: Axis = 'left', label_from: Literal['name', 'unit'] = 'name') -> Curve:
+                axis: Axis = 'left', label_from: Literal['name', 'unit'] = 'name',
+                mapping: ScatterMap | None = None) -> Curve:
     """
     取一个样品的 X、Y 数据，按 *kind* 生成 `LineSpec` 或 `ScatterSpec`，样式按画法从分组读取。
 
     各计划函数预先绑定画法、分组和用于读取曲线的共用参数，包括已经校验的列位置索引；
     调用处只给样品号、分组名、色带位置。
+
+    对映射散点按原始行对齐各通道。排除坐标非有限或映射值缺失的行，保留其余行的映射原值。
+    `plan_figures` 收集全部样品后，使用共享范围将大小值换算为直径。颜色映射覆盖分组颜色。
     """
     spec_type, read_style = _KINDS[kind]
     x, y, _, name, _, unit = get_xy_data(
@@ -391,10 +471,114 @@ def _make_curve(sample: int, group_name: str | None, color_position: float | Non
         neglog_x=neglog_x, neglog_y=neglog_y, plotrange=plotrange, positions=positions,
     )
     label = name if label_from == 'name' else unit
-    return spec_type(sample_idx=sample, x=x, y=y, label=label,
-                     group_name=group_name, color_position=color_position,
-                     style=read_style(groups, group_name),     # type: ignore[arg-type]  _KINDS 里类型与样式一一对应
-                     axis=axis)
+    style = read_style(groups, group_name)
+    if mapping is None:
+        return spec_type(sample_idx=sample, x=x, y=y, label=label,
+                         group_name=group_name, color_position=color_position,
+                         style=style,       # type: ignore[arg-type]  _KINDS 里类型与样式一一对应
+                         axis=axis)
+
+    values = {role: _mapping_values(dataset, sample, channel, plotrange, positions, role)
+              for role, channel in (('size', mapping.size), ('color', mapping.color)) if channel is not None}
+    keep = np.isfinite(x) & np.isfinite(y)          # 排除不可绘制的坐标及对应的映射值。
+    for column in values.values():
+        keep &= ~np.isnan(column)
+    if mapping.color is not None:
+        style = replace(style, color=None)
+    return ScatterSpec(sample_idx=sample, x=x[keep], y=y[keep], label=label,
+                       group_name=group_name, color_position=color_position,
+                       style=style, axis=axis,      # type: ignore[arg-type]  散点读的是 ScatterStyle
+                       sizes=values['size'][keep] if 'size' in values else None,
+                       colors=values['color'][keep] if 'color' in values else None,
+                       color_unit=None if mapping.color is None else channel_unit(dataset, mapping.color))
+
+
+def _mapping_values(dataset: DataSet, sample: int, channel: int, plotrange: int | None,
+                    positions: Mapping[tuple[int, int], int], role: str) -> np.ndarray:
+    """取一个样品映射通道的前 *plotrange* 行（至少双精度）；是复数或有无穷大时报错。"""
+    column, _, unit = get_column_data(dataset, sample, channel, plotrange, positions=positions)
+    what = '颜色' if role == 'color' else '大小'
+    if np.iscomplexobj(column):
+        raise ValueError(f"样品 {sample} 的通道 {channel}（{unit}）是复数，不能直接映射成{what}；"
+                         f"请先用变换器取模（np.abs）或实部，存成实数通道再映射")
+    column = np.asarray(column, dtype=np.promote_types(np.asarray(column).dtype, np.float64))
+    if np.isinf(column).any():
+        raise ValueError(f"样品 {sample} 的通道 {channel}（{unit}）有无穷大，不能映射成{what}")
+    return column
+
+
+def _apply_sizes(scatters: list[ScatterSpec], size_range: tuple[float, float]) -> None:
+    """
+    把一个图层各条散点的原始大小值按共用范围换成直径（磅），原地改写 ``sizes``。
+
+    面积线性：数值从最小到最大，面积从 ``size_range[0]²`` 变到 ``size_range[1]²``；整列相同时取面积的中点。
+    先各除以 2 再相减，数值跨度接近浮点上限时也不溢出。
+    """
+    present = [curve.sizes for curve in scatters if curve.sizes is not None and curve.sizes.size]
+    if not present:
+        return
+    low = min(float(values.min()) for values in present)
+    high = max(float(values.max()) for values in present)
+    small, large = (d ** 2 for d in size_range)
+    for curve in scatters:
+        if curve.sizes is None:
+            continue
+        if high > low:
+            fraction = (curve.sizes / 2 - low / 2) / (high / 2 - low / 2)
+        else:
+            fraction = np.full_like(curve.sizes, 0.5)
+        curve.sizes = np.sqrt(small + fraction * (large - small))
+
+
+def _resolve_colorbar(scatters: list[ScatterSpec], style: ColorbarStyle, channel: int,
+                      dataset: DataSet) -> ColorbarStyle:
+    """
+    根据各图的可绘制点补齐颜色范围，默认以颜色通道的列标题命名颜色条。
+    两端均为自动值且颜色值相同时，扩展范围以统一两个后端的着色结果。
+
+    Raises
+    ------
+    ValueError
+        对数色标的颜色值非正、范围无效、自动扩展前的端点量级超过 ``1e300``，或自动定界时没有可绘制点。
+    """
+    present = [curve.colors for curve in scatters if curve.colors is not None and curve.colors.size]
+    unit = channel_unit(dataset, channel)
+    if style.scale == 'log' and any((values <= 0).any() for values in present):
+        raise ValueError(f"对数色标要求颜色值都为正：颜色通道 {channel}（{unit}）有不为正的值；"
+                         f"请改用线性色标，或先把数据变换后再映射")
+    low, high = style.limits if style.limits is not None else (None, None)
+    if (low is None or high is None) and not present:
+        raise ValueError(f"颜色通道 {channel}（{unit}）没有可画的点，无法自动确定颜色条的范围；请写全 limits")
+    automatic = low is None and high is None
+    if low is None:
+        low = min(float(values.min()) for values in present)
+    if high is None:
+        high = max(float(values.max()) for values in present)
+    if max(abs(low), abs(high)) > _COLOR_LIMIT:
+        raise ValueError(f"颜色条的范围 ({low:g}, {high:g}) 量级超过 ±1e300：matplotlib 在接近浮点上限时"
+                         f"画不出颜色条；请先缩放数据（如换单位），或用 limits 写一个更小的范围")
+    if automatic and low == high:
+        low, high = _widen(low, style.scale == 'log')
+    if not low < high:
+        raise ValueError(f"颜色条的 limits 补齐后下限不小于上限：({low}, {high})；请检查写了的那一端")
+    return replace(style, limits=(float(low), float(high)), title=unit if style.title is None else style.title)
+
+
+# 在等值范围扩展前检查端点，为 Matplotlib 计算刻度预留数值余量。
+_COLOR_LIMIT = 1e300
+
+
+def _widen(value: float, log: bool) -> tuple[float, float]:
+    """
+    扩展自动计算的等值范围，使该值位于色带中点。
+
+    线性撑开成 ``(v - |v| / 2, v + |v| / 2)``，v 为 0 时是 ``(-0.5, 0.5)``；对数各撑开半个数量级 ``(v / √10, v × √10)``。
+    调用前已检查 ``|v| ≤ _COLOR_LIMIT``，撑开后不会溢出。
+    """
+    if log:
+        return value / math.sqrt(10), value * math.sqrt(10)
+    half = abs(value) / 2 or 0.5
+    return value - half, value + half
 
 
 def _make_figure(key: str | int, curves: list[Curve], name: str | None, *,

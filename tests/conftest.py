@@ -69,6 +69,27 @@ def bar_data() -> DataSet:
     return data
 
 
+def map_data() -> DataSet:
+    """
+    散点映射的测试数据：两个样品，样品号无序（3 在前、0 在后），每个样品 4 个通道，行数不等（拼接时补 NaN）：
+
+        通道 0 x(mm)   样品 3: [1, 2, 3]       样品 0: [1, 2]
+        通道 1 y(mm)   样品 3: [1, 2, 3]       样品 0: [4, 5]
+        通道 2 E(%)    样品 3: [0, 5, NaN]     样品 0: [10, 10]     （大小通道：最小 0、最大 10）
+        通道 3 T(K)    样品 3: [1, 2, 40]      样品 0: [3, NaN]     （颜色通道）
+
+    同时映射大小和颜色时，样品 3 的第 3 行（大小缺）和样品 0 的第 2 行（颜色缺）不画，
+    颜色范围按画出的点算是 (1, 3)，不受不画的 40 影响。每次调用新建一份，测试可以随意改。
+    """
+    nan = np.nan
+    units = ['x(mm)', 'y(mm)', 'E(%)', 'T(K)']
+    data = DataSet().form_array(np.array([[1, 1, 0, 1], [2, 2, 5, 2], [3, 3, nan, 40]]),
+                                ['S3'] * 4, units, 3, repeat_times=4)
+    data.expandata(DataSet().form_array(np.array([[1, 4, 10, 3], [2, 5, 10, nan]]),
+                                        ['S0'] * 4, units, 0, repeat_times=4))
+    return data
+
+
 @pytest.fixture(autouse=True)
 def close_figures():
     """

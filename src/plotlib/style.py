@@ -27,11 +27,13 @@ from collections.abc import Callable
 from numbers import Integral, Real
 from typing import Any, Literal, overload
 
+import numpy as np
 # 使用 Matplotlib 的颜色表校验两个后端共用的 CSS 颜色名。
-from matplotlib.colors import CSS4_COLORS
+from matplotlib.colors import CSS4_COLORS, LogNorm, Normalize
 from matplotlib.markers import MarkerStyle
 
-from .plot_spec import AxisStyle, BarStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
+from .plot_spec import (AxisStyle, BarStyle, ColorbarStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle,
+                        TickStyle)
 
 type Backend = Literal["matplotlib", "plotly"]
 
@@ -66,6 +68,16 @@ HATCHES: dict[str, dict[str, str]] = {
     'dot':        {'matplotlib': '.',  'plotly': '.'},
     'none':       {'matplotlib': '',   'plotly': ''},
 }
+
+# 两个后端共用的感知均匀色带。选用颜色方向一致的色带。
+COLORMAPS: dict[str, dict[str, str]] = {
+    'viridis': {'matplotlib': 'viridis', 'plotly': 'Viridis'},
+    'plasma':  {'matplotlib': 'plasma',  'plotly': 'Plasma'},
+    'inferno': {'matplotlib': 'inferno', 'plotly': 'Inferno'},
+    'magma':   {'matplotlib': 'magma',   'plotly': 'Magma'},
+    'cividis': {'matplotlib': 'cividis', 'plotly': 'Cividis'},
+}
+COLOR_SCALES = ('linear', 'log')
 
 _HEX_COLOR = re.compile(r'#[0-9a-fA-F]{6}')
 _SEQUENCES = (tuple, list)
@@ -192,6 +204,24 @@ def check_hatch(value) -> None:
                          f"（后端写法如 '/'、'///' 请改用标准词，疏密用后端默认）")
 
 
+def check_colormap(value) -> None:
+    """
+    校验颜色映射的色带：必须是标准词之一（见 ``COLORMAPS``）。
+
+    Raises
+    ------
+    TypeError
+        不是字符串。
+    ValueError
+        不认识的色带（含后端原生名，如 Plotly 的 ``'Viridis'``）。
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"色带 {value!r} 的类型不支持：应为 {_words(COLORMAPS)} 之一")
+    if value not in COLORMAPS:
+        raise ValueError(f"不支持的色带 {value!r}，可用 {_words(COLORMAPS)}"
+                         f"（只收两个后端定义相同的色带；后端原生名请改用小写标准词）")
+
+
 # ══════════════════════════════════════════════
 # 翻译：标准写法 → 后端原生值
 # ══════════════════════════════════════════════
@@ -246,6 +276,13 @@ def translate_color(value, backend: Backend):
     if backend == 'matplotlib':
         return tuple(x / 255 for x in value)
     return f"rgb({value[0]},{value[1]},{value[2]})"
+
+
+def translate_colormap(value, backend: Backend) -> str:
+    """把标准色带词翻译成后端的原生名（如 ``'viridis'`` → Plotly 的 ``'Viridis'``）。"""
+    check_backend(backend)
+    check_colormap(value)
+    return COLORMAPS[value][backend]
 
 
 def _check_positive(name: str, value, allow_zero: bool = False) -> None:
@@ -391,6 +428,39 @@ def check_bar_style(style: BarStyle) -> None:
         check_hatch(style.hatch)
 
 
+def check_colorbar_style(style: ColorbarStyle) -> None:
+    """
+    校验 `ColorbarStyle`：色带词、刻度类型、范围（有限数字，两端都写时下限小于上限，对数色标要为正）、标题。
+
+    Raises
+    ------
+    TypeError, ValueError
+        某个字段写错，信息里带字段名和写错的值。
+    """
+    if style.cmap is not None:
+        check_colormap(style.cmap)
+    if style.scale is not None and style.scale not in COLOR_SCALES:
+        raise ValueError(f"颜色条的 scale 只能是 {_words(COLOR_SCALES)}，实际是 {style.scale!r}")
+    if style.title is not None and not isinstance(style.title, str):
+        raise TypeError(f"颜色条的 title 要写字符串，实际是 {style.title!r}")
+    if style.limits is None:
+        return
+    if not isinstance(style.limits, _SEQUENCES) or len(style.limits) != 2:
+        raise ValueError(f"颜色条的 limits 要写 (下, 上) 两个值，某端可写 None，实际是 {style.limits!r}")
+    for end in style.limits:
+        if end is None:
+            continue
+        if not _is_number(end):
+            raise TypeError(f"颜色条的 limits 要写数字或 None，实际是 {style.limits!r}")
+        if not math.isfinite(end):
+            raise ValueError(f"颜色条的 limits 要写有限的数字，实际是 {style.limits!r}")
+        if style.scale == 'log' and end <= 0:
+            raise ValueError(f"对数色标的 limits 要为正，实际是 {style.limits!r}")
+    low, high = style.limits
+    if low is not None and high is not None and not low < high:
+        raise ValueError(f"颜色条的 limits 下限要小于上限，实际是 {style.limits!r}")
+
+
 def translate_bar_style(style: BarStyle, backend: Backend, dpi: float | None = None) -> dict:
     """
     将 `BarStyle` 中显式指定的字段转换为后端参数。
@@ -532,6 +602,114 @@ def is_line_marker(marker: str | None) -> bool:
     线形标记没有填充，matplotlib 用填充色画笔画、不接受 ``edgecolors``。
     """
     return marker is not None and not MarkerStyle(translate_marker(marker, 'matplotlib')).is_filled()
+
+
+# ══════════════════════════════════════════════
+# 散点的第三通道映射：颜色条翻译、映射标记
+# ══════════════════════════════════════════════
+def translate_colorbar(style: ColorbarStyle, backend: Backend) -> dict:
+    """
+    将已解析的颜色条样式转换为后端参数。
+
+    Returns
+    -------
+    dict
+        matplotlib：``ax.scatter`` 的 ``cmap`` （原生名）和 ``norm`` （``Normalize`` 或 ``LogNorm``，同一张图的
+        各组散点共用这一个对象）。Plotly：``layout.coloraxis`` 的内容：``colorscale``、``cmin`` / ``cmax``、
+        颜色条标题；对数色标的 ``cmin`` / ``cmax`` 是 log10 值，另有 ``tickvals`` / ``ticktext`` （见 `log_colorbar_ticks`）。
+
+    Raises
+    ------
+    ValueError
+        颜色条没算好（范围、色带、刻度类型、标题有一项是 None）或写错。
+    """
+    check_backend(backend)
+    check_colorbar_style(style)
+    low, high = style.limits if style.limits is not None else (None, None)
+    if low is None or high is None or style.cmap is None or style.scale is None or style.title is None:
+        raise ValueError(f"颜色条还没算好范围和标题：{style!r}（应先经过绘图计划）")
+    cmap = translate_colormap(style.cmap, backend)
+    if backend == 'matplotlib':
+        # 归一化前截断范围外的数据，避免极值溢出并保留端点颜色。
+        norm = LogNorm(low, high, clip=True) if style.scale == 'log' else Normalize(low, high, clip=True)
+        return {'cmap': cmap, 'norm': norm}
+    colorbar: dict[str, Any] = {'title': {'text': style.title}}
+    if style.scale == 'log':
+        colorbar['tickvals'], colorbar['ticktext'] = log_colorbar_ticks(low, high)
+        low, high = math.log10(low), math.log10(high)
+    return {'colorscale': cmap, 'cmin': low, 'cmax': high, 'colorbar': colorbar}
+
+
+def colorbar_values(values, style: ColorbarStyle, backend: Backend):
+    """
+    为 Plotly 对数色标返回 log10 变换值，其余情况沿用原值。
+    """
+    check_backend(backend)
+    if backend == 'plotly' and style.scale == 'log':
+        return np.log10(values)
+    return values
+
+
+def log_colorbar_ticks(low: float, high: float) -> tuple[list[float], list[str]]:
+    """
+    Plotly 对数色标的刻度（Plotly 的颜色条没有原生对数刻度，颜色按 log10 值着色）。
+
+    范围里有两个以上整数次幂时，刻度放在整数次幂上、文字写成 ``10<sup>n</sup>``；
+    不到两个时退回 1、2、5 × 10ⁿ 的刻度，文字写原值；仍不到两个时只在两端各标一个原值。
+
+    Returns
+    -------
+    tuple
+        ``(tickvals, ticktext)``：刻度位置（log10 值）和刻度文字。
+
+    Examples
+    --------
+    >>> log_colorbar_ticks(1, 1000)
+    ([0.0, 1.0, 2.0, 3.0], ['10<sup>0</sup>', '10<sup>1</sup>', '10<sup>2</sup>', '10<sup>3</sup>'])
+    >>> log_colorbar_ticks(1, 3)
+    ([0.0, 0.3010299956639812], ['1', '2'])
+    """
+    first, last = math.log10(low), math.log10(high)
+    decades = range(math.ceil(first - 1e-9), math.floor(last + 1e-9) + 1)
+    if len(decades) >= 2:
+        return [float(n) for n in decades], [f'10<sup>{n}</sup>' for n in decades]
+    nice = [m * 10.0 ** n for n in range(math.floor(first) - 1, math.ceil(last) + 1) for m in (1, 2, 5)
+            if low * (1 - 1e-9) <= m * 10.0 ** n <= high * (1 + 1e-9)]
+    if len(nice) < 2:
+        nice = [low, high]
+    return [math.log10(v) for v in nice], [f'{v:g}' for v in nice]
+
+
+# 映射标记：画映射散点时记在后端对象上，散点回调据此检查不能改的字段
+_MAPPED_ATTR = '_plotlib_mapped'
+
+
+def mark_mapped(artist, sizes: bool, colors: bool) -> None:
+    """在散点对象上记下它的大小、颜色是不是由映射决定的（Plotly 要记在 Figure 里的那个 trace 上）。"""
+    setattr(artist, _MAPPED_ATTR, frozenset(name for name, on in (('size', sizes), ('color', colors)) if on))
+
+
+def check_mapped_style(style: ScatterStyle, artist) -> None:
+    """
+    散点回调在映射层上不能改由映射决定的字段：颜色映射层不能写 ``color``、``filled=False``，
+    大小映射层不能写 ``size`` （会把整层改成一个颜色 / 大小，颜色条或大小就失去了意义）。
+
+    Raises
+    ------
+    ValueError
+        写了映射层不能改的字段。
+    """
+    mapped = getattr(artist, _MAPPED_ATTR, frozenset())
+    blocked = []
+    if 'color' in mapped:
+        blocked += [f"{name}={value!r}" for name, value in (('color', style.color), ('filled', style.filled))
+                    if value is not None and not (name == 'filled' and value)]
+    if 'size' in mapped and style.size is not None:
+        blocked.append(f"size={style.size!r}")
+    if blocked:
+        what = '、'.join(word for name, word in (('color', '颜色'), ('size', '大小')) if name in mapped)
+        raise ValueError(f"这一层散点的{what}由 ScatterMap 映射决定，散点回调不能写 {', '.join(blocked)}"
+                         f"（其余字段如 edge_color、marker、alpha 可以写）")
 
 
 # ══════════════════════════════════════════════

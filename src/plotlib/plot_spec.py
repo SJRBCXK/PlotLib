@@ -18,6 +18,7 @@ type Members = Literal['all', 'group', 'sample']     # DataPlotter.plot 的 by�
 type BarDimension = Literal['sample', 'group', 'channel']  # 柱状图的类别（x）和系列各取哪一维
 type BarMode = Literal['group', 'stack']        # 并排、堆叠
 type Layout = Literal['multiline', 'xy', 'dual_y', 'bars']
+type ColorScale = Literal['linear', 'log']      # 颜色条的刻度类型
 
 
 # ══════════════════════════════════════════════
@@ -194,6 +195,50 @@ class BarStyle(StyleLayer):
     capsize: float | None = None            # 端帽长度（磅），可以为 0
 
 
+@dataclass(frozen=True)
+class ColorbarStyle(StyleLayer):
+    """
+    配置散点颜色条的色带、数值范围、刻度类型和标题。
+
+    在 `ScatterMap` 中指定颜色通道，通过 ``DataPlotter.plot(colorbar=...)`` 配置共享的颜色条。
+    如需调整具体刻度或位置，可在 *figure_formatter* 中使用后端原生接口。
+
+    Parameters
+    ----------
+    cmap : str, optional
+        两个后端均支持 ``'viridis'``、``'plasma'``、``'inferno'``、``'magma'`` 和 ``'cividis'``。
+    limits : tuple of (float or None), optional
+        颜色范围 ``(下限, 上限)``。设为 ``None`` 的端点从可绘制点的最小值或最大值推导。
+        指定的端点和自动推导的端点均须在 ``[-1e300, 1e300]`` 内，此检查在等值范围自动扩展前完成。
+        超出颜色范围的点使用对应端点的颜色。
+    scale : {'linear', 'log'}, optional
+        刻度类型。``'log'`` 要求颜色值和 *limits* 都为正。
+    title : str, optional
+        默认使用颜色通道的列标题。传入空字符串 ``''`` 可隐藏颜色条标题。
+
+    Notes
+    -----
+    默认使用线性的 ``'viridis'`` 色带。同一张图中，Matplotlib 的散点共用 ``Normalize`` 或 ``LogNorm``，
+    Plotly 的散点共用 ``coloraxis``。Plotly 对数色标按 log10 着色，刻度按原值标注，悬停显示原始数值。
+    ``FigureSpec.colorbar`` 保存解析后的色带、范围、刻度类型和标题。
+
+    Matplotlib 在每次渲染时根据可见的右轴和图例定位颜色条。右边距在建图时预留一次。
+    整图回调扩大右侧内容后，可调用 ``fig.tight_layout()`` 重新分配边距。自行定位颜色条时，
+    请先调用 ``axes['colorbar'].ax.set_axes_locator(None)``。
+    Plotly 根据右轴和图例估算间距，并考虑各页的图例标题。需要扩大间距时，可在 *figure_formatter* 中调整
+    ``fig.layout.coloraxis.colorbar.xpad``。
+
+    Examples
+    --------
+    >>> plotter.plot(Layer(0, 1, kind='scatter', mapping=ScatterMap(color=3)),
+    ...              colorbar=ColorbarStyle(cmap='magma', scale='log'))
+    """
+    cmap: str | None = None                                 # 色带词名
+    limits: tuple[float | None, float | None] | None = None     # (下, 上)，None 端自动
+    scale: ColorScale | None = None                         # 'linear' | 'log'
+    title: str | None = None                                # 不写用颜色通道的列标题；'' 不加
+
+
 type AxisScale = Literal['linear', 'log', 'symlog', 'logit']    # 'symlog'、'logit' 只有 matplotlib
 
 
@@ -355,6 +400,7 @@ DEFAULT_SCATTER = ScatterStyle(marker='circle', size=6, filled=True, edge_width=
 # 柱状图的库默认：没有描边（描边色仍写黑，纹理跟随它，两个后端一致）、没有纹理、黑色误差棒、不画端帽
 DEFAULT_BARS = BarStyle(edge_color='black', edge_width=0, hatch='none',
                         error_color='black', error_width=2, capsize=0)
+DEFAULT_COLORBAR = ColorbarStyle(cmap='viridis', scale='linear')
 DEFAULT_FRAME = FrameStyle(width=3, top=False, right=False)
 DEFAULT_LEGEND = LegendStyle(position='upper right', font_size=10, frame=False, draggable=False)
 # 默认显示主刻度和次刻度线，并隐藏次刻度标签。
@@ -424,11 +470,20 @@ class ScatterSpec(CurveBase):
         已取好的数据（负对数时已取绝对值，``plotrange`` 已截断）。
     style : ScatterStyle, default: ScatterStyle()
         分组指定的标记形状和颜色。
+    sizes : numpy.ndarray or None, default: None
+        大小映射：每个点的直径（磅），已按共用范围算好；None 表示不映射大小。
+    colors : numpy.ndarray or None, default: None
+        颜色映射：每个点的原始数值，按 ``FigureSpec.colorbar`` 的色带和范围着色；None 表示不映射颜色。
+    color_unit : str or None, default: None
+        颜色通道的列标题，悬停时标明颜色值（颜色条标题可能写成 ``''``）；None 表示不映射颜色。
     """
     sample_idx: int
     x: np.ndarray
     y: np.ndarray
     style: ScatterStyle = field(default_factory=ScatterStyle)
+    sizes: np.ndarray | None = None     # 每个点的直径（磅）
+    colors: np.ndarray | None = None    # 每个点的颜色值（原始数值）
+    color_unit: str | None = None       # 颜色通道的列标题（悬停用）
 
 
 @dataclass(kw_only=True)
@@ -476,6 +531,49 @@ type Curve = LineSpec | ScatterSpec | BarSpec
 
 
 @dataclass(frozen=True)
+class ScatterMap:
+    """
+    将同一行的通道值映射到散点的颜色或大小。
+
+    通过 ``Layer(kind='scatter', mapping=...)`` 配置。一次 ``DataPlotter.plot`` 的各张图使用相同的颜色范围，
+    每个大小映射图层在各张图中也使用相同的大小范围。
+
+    Parameters
+    ----------
+    color : int, optional
+        决定颜色的通道号；颜色条的外观见 `ColorbarStyle`。一次绘图只能有一个颜色映射层。
+    size : int, optional
+        决定大小的通道号。*color*、*size* 至少写一个。
+    size_range : tuple of float, default: (4, 16)
+        最小、最大点的直径（磅），都是有限正数，下限不大于上限。
+
+    Notes
+    -----
+    - 映射值与点的面积呈线性关系。映射值全部相等时，使用面积范围的中点。
+    - X 或 Y 非有限，或映射值为 NaN 时，整行从绘图和范围计算中排除。映射值为无穷大或复数时会报错。
+      若回调将坐标轴设为对数刻度，应先筛掉该轴上非正的坐标，否则这些点仍参与范围计算。
+    - 颜色映射决定点色，分组的 ``marker`` 仍可用于区分样品。`make_scatter_formatter` 禁止为颜色映射层指定
+      ``color`` 或 ``filled=False``，也禁止为大小映射层指定固定 ``size``。
+    - 图例按样品列出。颜色与数值的对应关系见颜色条，可用 *figure_formatter* 自定义大小图例。
+    - ``neglog_x`` 和 ``neglog_y`` 只变换对应的坐标值。
+
+    Examples
+    --------
+    Nyquist 图按频率（通道 0）着色，对数色标：
+
+    >>> plotter.plot(Layer(1, 2, kind='scatter', mapping=ScatterMap(color=0)),
+    ...              colorbar=ColorbarStyle(scale='log'))
+
+    气泡图：点的大小表示通道 3：
+
+    >>> plotter.plot(Layer(0, 1, kind='scatter', mapping=ScatterMap(size=3, size_range=(4, 20))))
+    """
+    color: int | None = None                        # 决定颜色的通道号
+    size: int | None = None                         # 决定大小的通道号
+    size_range: tuple[float, float] = (4, 16)       # 最小、最大直径（磅）
+
+
+@dataclass(frozen=True)
 class Layer:
     """
     一个图层：图里的每个样品各画一条的「配方」，写取哪两个通道、画成什么、挂哪根 Y 轴。
@@ -493,6 +591,8 @@ class Layer:
     neglog_x, neglog_y : bool, default: False
         负对数：这一层的数据取绝对值，所在轴的刻度补负号。同一根轴上的图层要写得一致；
         共用的 X 轴的负号由左侧图层决定，右侧图层的 *neglog_x* 只把自己的数据取绝对值。
+    mapping : ScatterMap, optional
+        第三通道映射：用另一个通道决定点的颜色或大小，只有散点能写（见 `ScatterMap`）。
 
     Examples
     --------
@@ -506,6 +606,7 @@ class Layer:
     side: Axis = 'left'
     neglog_x: bool = False
     neglog_y: bool = False
+    mapping: ScatterMap | None = None
 
 
 @dataclass
@@ -535,6 +636,9 @@ class FigureSpec:
     name : str or None, default: None
         样品名或组名。多线图和合并分组图为 ``None``。
         Plotly 使用该名称作为翻页滑块的档位标签。
+    colorbar : ColorbarStyle or None, default: None
+        颜色条：色带、算好的范围、刻度类型、最终标题；只有颜色映射的图有。
+        一次绘图的各张图共用同一个范围。
     """
     key: str | int              # 分组名或 'main'；xy、双 Y 轴图是样品号
     curves: list[Curve]
@@ -545,6 +649,7 @@ class FigureSpec:
     layout: Layout = 'multiline'
     legend_title: str | None = None
     name: str | None = None
+    colorbar: ColorbarStyle | None = None   # 颜色映射的颜色条（范围已算好）；没有颜色映射为 None
 
 
 @dataclass
@@ -552,8 +657,7 @@ class DrawnFigure:
     """
     `FigureSpec` 对应的渲染结果。
 
-    两个后端、四种绘图方法交回的结果形状相同，`~plotlib.plotter.DataPlotter` 把它们存成
-    ``figures = {spec.key: DrawnFigure}``。
+    `~plotlib.plotter.DataPlotter` 按绘图计划的键保存结果，形式为 ``figures = {spec.key: DrawnFigure}``。
 
     Parameters
     ----------
@@ -562,8 +666,8 @@ class DrawnFigure:
     fig : `matplotlib.figure.Figure` or `plotly.graph_objects.Figure`
         原生的图对象。Plotly 画多张计划时，各页共用同一个 Figure。
     axes : dict
-        ``{'left': 左轴}``，双 Y 轴图再有 ``'right'``。matplotlib 是 Axes 对象；
-        Plotly 没有轴对象，是 layout 里的轴名（``'yaxis'``、``'yaxis2'``）。
+        ``'left'`` 对应左轴，双 Y 轴图提供 ``'right'``。Matplotlib 保存 ``Axes`` 对象，Plotly 保存布局中的轴名。
+        颜色映射图还提供 ``'colorbar'``，对应 Matplotlib 的 ``Colorbar`` 对象或 Plotly 的 ``'coloraxis'``。
     artists : list
         画出的对象（折线 ``Line2D``、散点 ``PathCollection``、柱状图的一个系列 ``BarContainer``，
         Plotly 都是 trace），与 ``spec.curves`` 一一对应、顺序相同。

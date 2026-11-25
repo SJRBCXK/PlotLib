@@ -47,6 +47,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `test_plan_helpers.py` | `src/plotlib/plan.py` 的公共函数 | 生成计划用的函数：样品号 → 色带位置；分组参数检查 `resolve_groups`；共用取数 |
 | `test_plot_plan.py` | `src/plotlib/plan.py` 的 `plan_figures`、`plan_bars` | 绘图计划：`by` 三种分图（不分组 / 分离 / 合并各画几张图、哪些线、归哪个分组、色带位置、样式；每样品一张）、多个图层、双 Y 轴；图层面的单位、neglog、版式；入口校验；柱状图的「类别 × 系列」表、误差、样式；不开图窗 |
 | `test_bars.py` | `DataPlotter.plot_bars` 与两个后端的柱状图 | 入口校验（含回调与画法不配、柱状图不接滑块）；matplotlib 的并排偏移、缺数据保留位置、堆叠底部、误差棒位置；Plotly 的 `barmode` 与 Kaleido 实际渲染（柱位置、缺误差的系列无端帽、图例纹理）；同名类别不合并；颜色、纹理、回调组合；Y 轴标题、图例；`artist(key)`、失败后的状态 |
+| `test_scatter_map.py` | 散点第三通道映射（`ScatterMap`、`ColorbarStyle`）与两个后端 | 两个后端照计划着色（共用 norm / `coloraxis`、描边跟随、对数色标、等值取中间色、悬停标明列标题）和定大小；颜色条不压右轴和图例、也不浪费右边距，含 Plotly 图例回调、matplotlib 整图回调里 `tight_layout()`、放不下时绘图区宽度下限（matplotlib 量边界框，Plotly 用 Kaleido 渲染核对）；映射层上回调不能写颜色 / 大小；`axes['colorbar']`、分页共用颜色轴、全缺颜色的样品和空页仍有图例和颜色条、SVG / PDF 后端、失败后的状态 |
 | `test_style.py` | `src/plotlib/style.py` | 样式标准写法（线型、标记、颜色）的校验，以及到 matplotlib / Plotly 的翻译 |
 | `test_plotter.py` | `src/plotlib/plotter.py` | matplotlib 把计划画对（每张计划一张图、位置 → 颜色、样式翻译）；formatter、图例、`linestyle`、`figsize`、负对数刻度、x-y 单线图 / 双 Y 轴 |
 | `test_formatters.py` | `src/plotlib/formatters.py` | 三种格式化器工厂设置的坐标轴、线条、图例属性（matplotlib 与 Plotly） |
@@ -200,6 +201,11 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 柱状图 `plan_bars`（4.7，数据见 conftest 的 `bar_data`）：4 种「类别 × 系列」组合的类别、系列键（原通道号）、高度、配色位置；
   先截 `plotrange` 行再汇总；Y 轴标题三种情况；缺数据保留位置；分组配置与 `styles` 的优先级、样式在汇总前校验；
   误差：两种模式的 std / sem、误差通道按原行对齐（first / max / mean）、端帽标记、不可哈希的汇总对象、汇总后误差的校验、分组时每个样品只汇总一次
+- 散点映射（4.5，数据见 conftest 的 `map_data`）：大小按面积线性换成直径（`[0, 5, 10]` → `[4, √136, 16]`）、整列相同取中间；
+  一次绘图共用一个范围（含分组分图）；X、Y 非有限或映射值是 NaN 的点一起去掉，范围按画出的点算；`plotrange` 先截行；
+  颜色条自动扩展前的端点量级超过 ±1e300 时报错，等值范围的线性和对数扩展无溢出警告，复数映射值会报错；
+  颜色条的范围（只写一端时另一端自动、对数色标）、标题（默认列标题、`''` 不加）；颜色映射层不读分组 `color`、照读 `marker`；
+  入口校验 19 种写错（折线写映射、`size_range`、无穷大、对数遇到不为正、色带词、`limits`、有 `colorbar` 没颜色映射、两个颜色映射层）
 
 ### 样式标准写法 — `test_style.py`
 - 合法：线型 `'solid'` / `'dash'` / `'dot'` / `'dashdot'` 与自定义虚线 `(3, 5)`、`[3, 5]`；7 个标记名；
@@ -218,6 +224,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
   叠加顺序 库默认 < 版式预设 < 全局（全局写了的图例位置盖过预设，没写的拖动仍用预设；双 Y 轴预设完整的框，全局 `top=False` 盖过它）；
   `LineStyle` → Line2D 属性 / Plotly 扁平写法（磅 → 像素，点跟着线色）；`AxisStyle` → 刻度类型、范围、格式函数（× scaler）、着色 / Plotly 轴配置，
   Plotly 的 `scaler`、`symlog` 报错，对数轴边界 ≤ 0 报错；`FrameStyle` → 线宽与上 / 右边；`LegendStyle` → 两个后端的图例参数，位置同一张表，写错报错
+- 色带（4.5）：5 个标准词名 → matplotlib 原名 / Plotly 首字母大写；后端原生名、`'Greys'`、未知词报错并列出可选词
 
 ### 绘图 — `test_plotter.py`
 分组规则不在这里测（见 `test_plot_plan.py`）；这里只测 matplotlib 把计划画对，以及它独有的功能。

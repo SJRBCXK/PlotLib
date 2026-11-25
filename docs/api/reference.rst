@@ -73,6 +73,7 @@ API 参考
    LineStyle
    ScatterStyle
    BarStyle
+   ColorbarStyle
    AxisStyle
    FrameStyle
    LegendStyle
@@ -81,14 +82,17 @@ API 参考
 图层与按轴回调
 --------------
 
-``DataPlotter.plot`` 的 *layers* 写每个样品画哪几条（通道、画法、挂哪根 Y 轴），
-*formatters* 按轴打包坐标轴、折线、散点、柱状图（``plot_bars``）、图例回调。
+``DataPlotter.plot`` 的 *layers* 指定每个图层的通道、画法和 Y 轴。散点图层通过 ``ScatterMap`` 选择颜色或大小通道。
+同一次绘图的各张图共享颜色范围，颜色条外观由 ``ColorbarStyle`` 配置。
+
+``AxesFormatter`` 按轴配置坐标轴、折线、散点、柱状图和图例的回调。
 
 .. autosummary::
    :toctree: generated
    :nosignatures:
 
    Layer
+   ScatterMap
    AxesFormatter
 
 格式化回调

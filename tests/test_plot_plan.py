@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 from conftest import bar_data, bar_specs, xy_curves
 
+from plotlib.dataset import DataSet
 from plotlib.group import Group
 from plotlib.plot_spec import BarStyle, CurveKind, Layer, LineStyle
 from plotlib.processor import Reduction
@@ -591,3 +592,185 @@ def test_bar_errors():
 
     figure = plan_bars(data, groups, 0, x='group', reduce=first_seen, errors='std')
     assert len(seen) == 3                           # G1 两个样品、G2 一个样品，各汇总一次
+
+
+# ══════════════════════════════════════════════
+# 散点的第三通道映射（4.5）
+# ══════════════════════════════════════════════
+X, Y, SIZE, COLOR = 0, 1, 2, 3      # map_data 的通道：大小通道 E(%)、颜色通道 T(K)
+MID = round(np.sqrt(136), 2)        # size_range=(4, 16) 时面积的中点：√((4² + 16²) / 2) ≈ 11.66
+
+
+def test_scatter_map_plan():
+    """
+    映射在计划层算好：大小按面积线性换成每个点的直径（磅），颜色存原始数值，颜色条的范围、标题写在图上。
+
+    数据见 conftest 的 map_data：大小 S3 [0, 5, NaN]、S0 [10, 10]，颜色 S3 [1, 2, 40]、S0 [3, NaN]。
+    - 一次 plot() 里所有样品、所有图共用一个范围：大小 0 ~ 10 → 直径 4 ~ 16，同一个值在哪里都一样大；
+    - 映射值是 NaN 的点在 x、y、大小、颜色里一起去掉；范围按画出的点算（不画的 40 不算）；
+    - plotrange 先截行再映射；整列相同时取中间大小（面积的中点）；
+    - limits 只写一端时另一端自动；颜色条标题默认取颜色通道的列标题，写 '' 不加；
+    - 颜色映射层不读分组的 color（点色只由数值决定），照读 marker；只有大小映射时照读 color。
+    """
+    from conftest import map_data
+
+    from plotlib.plan import plan_figures
+    from plotlib.plot_spec import ColorbarStyle, Members, ScatterMap, ScatterSpec, ScatterStyle
+
+    def mapped(mapping, by: Members = 'all', groups=None, data=None, **kwargs):
+        layer = Layer(X, Y, kind='scatter', mapping=mapping)
+        return plan_figures(map_data() if data is None else data, groups, [layer], by=by, **kwargs)
+
+    def points(figure):
+        """每条散点的 (样品号, x, 直径, 颜色值)，直径保留两位小数便于比较。"""
+        return [(c.sample_idx, list(c.x), None if c.sizes is None else [round(d, 2) for d in c.sizes],
+                 None if c.colors is None else list(c.colors))
+                for c in xy_curves(figure) if isinstance(c, ScatterSpec)]
+
+    # 同时映射大小和颜色：样品 3 的第 3 行（大小缺）、样品 0 的第 2 行（颜色缺）不画；曲线按样品号排序
+    [figure] = mapped(ScatterMap(size=SIZE, color=COLOR))
+    assert points(figure) == [(0, [1], [16], [3]), (3, [1, 2], [4, MID], [1, 2])]
+    assert [list(c.y) for c in xy_curves(figure)] == [[4], [1, 2]]
+    assert figure.colorbar == ColorbarStyle(cmap='viridis', limits=(1, 3), scale='linear', title='T(K)')
+
+    # 只映射大小：颜色缺的那一行照画；没有颜色映射就没有颜色条
+    [figure] = mapped(ScatterMap(size=SIZE))
+    assert points(figure) == [(0, [1, 2], [16, 16], None), (3, [1, 2], [4, MID], None)]
+    assert figure.colorbar is None
+
+    # 只映射颜色：大小缺的那一行照画，范围算上它的 40
+    [figure] = mapped(ScatterMap(color=COLOR))
+    assert points(figure) == [(0, [1], None, [3]), (3, [1, 2, 3], None, [1, 2, 40])]
+    assert figure.colorbar is not None and figure.colorbar.limits == (1, 40)
+
+    # size_range 上下限相等：全部同一个直径
+    [figure] = mapped(ScatterMap(size=SIZE, size_range=(2, 2)))
+    assert [d for p in points(figure) for d in p[2] or []] == [2] * 4
+
+    # plotrange=1 先截行：只剩各自第 1 行，大小 S3 0、S0 10，范围仍是 0 ~ 10
+    [figure] = mapped(ScatterMap(size=SIZE, color=COLOR), plotrange=1)
+    assert points(figure) == [(0, [1], [16], [3]), (3, [1], [4], [1])]
+
+    # 整列相同：大小都取中间（样品 3 的大小通道是第 2 列、样品 0 的是第 6 列）
+    data = map_data()
+    data.data[:, 2] = 7
+    data.data[:2, 6] = 7
+    [figure] = mapped(ScatterMap(size=SIZE), data=data)
+    assert points(figure) == [(0, [1, 2], [MID] * 2, None), (3, [1, 2, 3], [MID] * 3, None)]
+
+    # 颜色条：limits 只写一端、另一端自动；标题写 '' 不加；换色带；对数色标的自动范围
+    for colorbar, expected in [
+        (ColorbarStyle(limits=(None, 2.5)), ColorbarStyle(cmap='viridis', limits=(1, 2.5), scale='linear', title='T(K)')),
+        (ColorbarStyle(limits=(0, None), title=''), ColorbarStyle(cmap='viridis', limits=(0, 3), scale='linear', title='')),
+        (ColorbarStyle(cmap='magma', scale='log'), ColorbarStyle(cmap='magma', limits=(1, 3), scale='log', title='T(K)')),
+    ]:
+        [figure] = mapped(ScatterMap(size=SIZE, color=COLOR), colorbar=colorbar)
+        assert figure.colorbar == expected, colorbar
+
+    # 分组分图：两张图共用一个范围（B 组只有样品 0，它的大小 10 仍是 16 磅，颜色条范围相同）
+    def config():
+        return {'A': {'num': [3], 'color': 'red', 'marker': 'square'}, 'B': {'num': [0]}}
+
+    data = map_data()
+    figures = mapped(ScatterMap(size=SIZE, color=COLOR), by='group', groups=Group(data, config()), data=data)
+    assert [f.key for f in figures] == ['A', 'B']
+    assert points(figures[1]) == [(0, [1], [16], [3])]
+    assert figures[0].colorbar == figures[1].colorbar == ColorbarStyle(cmap='viridis', limits=(1, 3),
+                                                                      scale='linear', title='T(K)')
+    # 颜色映射层不读分组 color、照读 marker；只有大小映射时 color 照读
+    assert xy_curves(figures[0])[0].style == ScatterStyle(marker='square')
+    data = map_data()
+    sized = mapped(ScatterMap(size=SIZE), by='group', groups=Group(data, config()), data=data)
+    assert xy_curves(sized[0])[0].style == ScatterStyle(marker='square', color='red')
+
+    # 画不出来的点（X 或 Y 是 ±inf）也去掉，不参与范围（复审：颜色 1e6 曾把上限撑大，画出的两个点同色）；
+    # 颜色值全部相同且很大时撑开范围不溢出（复审：1.5e308 撑开成 inf）
+    for row, column in ((2, 0), (2, 1)):
+        data = DataSet().form_array(np.array([[1, 1, 10], [2, 2, 20], [3, 3, 1e6]]), ['S0'] * 3, ['x', 'y', 'T'], 0,
+                                    repeat_times=3)
+        data.data[row, column] = np.inf if column == 0 else -np.inf
+        [figure] = plan_figures(data, None, [Layer(0, 1, kind='scatter', mapping=ScatterMap(color=2))])
+        assert points(figure) == [(0, [1, 2], None, [10, 20])]
+        assert figure.colorbar is not None and figure.colorbar.limits == (10, 20)
+    # 颜色条范围的量级超过 ±1e300 时报错（复验：matplotlib 贴近浮点上限时画不出颜色条）；
+    # 1e300 以内等值撑开不溢出；对数色标全是 0.1 时撑开不出现除法溢出警告
+    def equal_colors(value, colorbar=None):
+        data = DataSet().form_array(np.array([[1, 1, value], [2, 2, value]]), ['S0'] * 3, ['x', 'y', 'T'], 0,
+                                    repeat_times=3)
+        [figure] = plan_figures(data, None, [Layer(0, 1, kind='scatter', mapping=ScatterMap(color=2))],
+                                colorbar=colorbar)
+        assert figure.colorbar is not None and figure.colorbar.limits is not None
+        return figure.colorbar.limits
+
+    for value in (1.5e308, -2e300):
+        with pytest.raises(ValueError, match='1e300'):
+            equal_colors(value)
+    with pytest.raises(ValueError, match='1e300'):
+        equal_colors(1, ColorbarStyle(limits=(None, 1e301)))
+    low, high = equal_colors(1e300)
+    assert low is not None and high is not None and np.isfinite(high) and low / 2 + high / 2 == pytest.approx(1e300)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        low, high = equal_colors(0.1, ColorbarStyle(scale='log'))
+    assert low is not None and high is not None and np.sqrt(low * high) == pytest.approx(0.1)
+
+    # 颜色映射可以和右侧图层同图；不写映射的散点 sizes / colors 都是 None，也没有颜色条
+    figures = plan_figures(map_data(), None, [Layer(X, Y, kind='scatter', mapping=ScatterMap(color=COLOR)),
+                                              Layer(X, SIZE, side='right')], by='sample')
+    assert figures[0].colorbar is not None
+    plain = plan_figures(map_data(), None, [Layer(X, Y, kind='scatter')])[0]
+    assert [p[2:] for p in points(plain)] == [(None, None)] * 2
+    assert plain.colorbar is None
+
+
+def test_scatter_map_entry_checks():
+    """映射和颜色条写错时尽早报错，信息指出哪里写错（4.5「限制」一节）。"""
+    from conftest import map_data
+
+    from plotlib.plan import plan_figures
+    from plotlib.plot_spec import ColorbarStyle, ScatterMap
+
+    def scatter(**mapping):
+        return Layer(X, Y, kind='scatter', mapping=ScatterMap(**mapping))
+
+    infinite = map_data()
+    infinite.data[0, 2] = np.inf                    # 样品 3 的大小通道第 1 行
+    infinite.data[1, 3] = -np.inf                   # 样品 3 的颜色通道第 2 行
+    inf = float('inf')
+    cases = [
+        (dict(layers=[Layer(X, Y, mapping=ScatterMap(color=COLOR))]), '散点'),       # 折线写了映射
+        (dict(layers=[scatter()]), '至少'),                                          # 两个通道都没写
+        (dict(layers=[scatter(size=SIZE, size_range=(0, 16))]), 'size_range'),
+        (dict(layers=[scatter(size=SIZE, size_range=(16, 4))]), 'size_range'),
+        (dict(layers=[scatter(size=SIZE, size_range=(np.nan, 16))]), 'size_range'),
+        (dict(layers=[scatter(size=SIZE, size_range=(4, inf))]), 'size_range'),
+        (dict(layers=[scatter(size=SIZE, size_range=(4,))]), 'size_range'),
+        (dict(layers=[scatter(size=SIZE)], dataset=infinite), '无穷'),
+        (dict(layers=[scatter(color=COLOR)], dataset=infinite), '无穷'),
+        (dict(layers=[scatter(color=SIZE)], colorbar=ColorbarStyle(scale='log')), '正'),      # 大小通道里有 0
+        (dict(layers=[scatter(color=COLOR)], colorbar=ColorbarStyle(scale='log', limits=(0, None))), '正'),
+        (dict(layers=[scatter(color=COLOR)], colorbar=ColorbarStyle(cmap='jet')), 'viridis'),    # 信息列出可选词
+        (dict(layers=[scatter(color=COLOR)], colorbar=ColorbarStyle(cmap='Greys')), 'viridis'),
+        (dict(layers=[scatter(color=COLOR)], colorbar=ColorbarStyle(scale='sqrt')), 'scale'),  # pyright: ignore[reportArgumentType]
+        (dict(layers=[scatter(color=COLOR)], colorbar=ColorbarStyle(limits=(np.nan, 1))), 'limits'),
+        (dict(layers=[scatter(color=COLOR)], colorbar=ColorbarStyle(limits=(3, 1))), 'limits'),
+        (dict(layers=[scatter(color=COLOR)], colorbar=ColorbarStyle(limits=(1, 1))), 'limits'),
+        (dict(layers=[scatter(size=SIZE)], colorbar=ColorbarStyle(cmap='magma')), 'colorbar'),   # 没有颜色映射层
+        (dict(layers=[scatter(color=COLOR), scatter(color=SIZE)], by='sample'), '颜色映射'),    # 两个颜色条：暂不支持
+    ]
+    for kwargs, message in cases:
+        dataset = kwargs.pop('dataset', None) or map_data()
+        kwargs.setdefault('by', 'all')
+        with pytest.raises(ValueError, match=message):
+            plan_figures(dataset, None, kwargs.pop('layers'), **kwargs)
+
+    # 复数的映射值（复审：matplotlib 丢掉虚部照画、Plotly 导出时报错）：报错指出样品和通道，提示先取模或实部
+    complex_data = DataSet().form_array(np.array([[1, 1, 1 + 2j], [2, 2, 2 + 3j]]), ['S0'] * 3, ['x', 'y', 'Z'], 0,
+                                        repeat_times=3)
+    for mapping in (ScatterMap(color=2), ScatterMap(size=2)):
+        with pytest.raises(ValueError, match='样品 0.*通道 2.*复数'):
+            plan_figures(complex_data, None, [Layer(0, 1, kind='scatter', mapping=mapping)])
+
+    # 放开的组合：多个大小映射层（各自一个范围）
+    assert plan_figures(map_data(), None, [scatter(size=SIZE), scatter(size=COLOR)], by='sample')

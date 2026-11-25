@@ -9,10 +9,10 @@ PlotLib 按样品和通道组织数据，并通过共同的绘图接口生成 Ma
 - `DataProcessLayer`：按样品、列名、单位选列；
 - `DataTransformer`：逐样品计算（自定义函数、范数、每列汇总成一个值）；
 - `Group`：样品分组，用于分组绘图和逐分组计算（含组内汇总）；
-- `DataPlotter`：`plot` 画曲线类的图（全部样品、按分组、每样品一张；折线、散点；单 / 双 Y 轴），`Layer` 写每层画什么；
-  `plot_bars` 画柱状图（类别 × 系列，并排或堆叠，误差棒）；
-- `LineStyle`、`ScatterStyle`、`BarStyle`、`AxisStyle`、`FrameStyle`、`LegendStyle`、`TickStyle`：
-  折线、散点、柱状图、坐标轴、边框、图例、刻度的样式；
+- `DataPlotter`：通过 `plot` 绘制折线和散点。用 `Layer` 指定各图层的通道、画法和 Y 轴，
+  用 `ScatterMap` 将通道值映射到散点颜色或大小。`plot_bars` 支持并排或堆叠的柱状图及误差棒。
+- `LineStyle`、`ScatterStyle`、`BarStyle`、`ColorbarStyle`、`AxisStyle`、`FrameStyle`、`LegendStyle`、`TickStyle`：
+  折线、散点、柱状图、颜色条、坐标轴、边框、图例、刻度的样式；
 - `make_axes_formatter`、`make_lines_formatter`、`make_scatter_formatter`、`make_bar_formatter`、`make_legend_formatter`：
   单根轴、折线、散点、柱状图、图例的格式化回调。
 
@@ -37,8 +37,8 @@ from .formatters import (
 )
 from .group import Group
 from .plan import color_positions
-from .plot_spec import (AxesFormatter, AxisStyle, BarStyle, FrameStyle, Layer, LegendStyle, LineStyle, ScatterStyle,
-                        TickStyle)
+from .plot_spec import (AxesFormatter, AxisStyle, BarStyle, ColorbarStyle, FrameStyle, Layer, LegendStyle, LineStyle,
+                        ScatterMap, ScatterStyle, TickStyle)
 
 __all__ = [
     'DataSet',
@@ -56,6 +56,7 @@ __all__ = [
     'Group',
     # 绘图的图层与按轴回调
     'Layer',
+    'ScatterMap',
     'AxesFormatter',
     # 公共样式对象
     'AxisStyle',
@@ -64,6 +65,7 @@ __all__ = [
     'LineStyle',
     'ScatterStyle',
     'BarStyle',
+    'ColorbarStyle',
     'TickStyle',
 ]
 

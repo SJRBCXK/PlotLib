@@ -377,6 +377,23 @@ def test_translate_bar_style():
             translate_bar_style(bad, 'matplotlib')
 
 
+def test_translate_colorbar_style():
+    """
+    色带只收 5 个标准词名（两个后端定义相同），翻译成各后端的原生名；
+    后端原生名（如 Plotly 的 'Viridis'）和两边方向相反的色带（'Greys'）不收，信息列出可选词。
+    """
+    from plotlib.style import translate_colormap
+
+    for word in ('viridis', 'plasma', 'inferno', 'magma', 'cividis'):
+        assert translate_colormap(word, 'matplotlib') == word
+        assert translate_colormap(word, 'plotly') == word.capitalize()
+    for bad, error in [('Viridis', ValueError), ('Greys', ValueError), ('jet', ValueError), (1, TypeError)]:
+        with pytest.raises(error, match='viridis'):                # 两种错误的信息都列出可选词
+            translate_colormap(bad, 'plotly')                       # pyright: ignore[reportArgumentType]
+    with pytest.raises(ValueError):
+        translate_colormap('viridis', 'bokeh')                      # pyright: ignore[reportArgumentType]
+
+
 def test_translate_axis_style():
     """
     AxisStyle → matplotlib（刻度类型、范围、格式函数、着色）/ Plotly 轴配置；Plotly 做不到的（scaler、symlog）报错。

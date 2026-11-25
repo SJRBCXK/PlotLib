@@ -5,6 +5,7 @@
 ``DrawnFigure.axes`` 保存布局中的轴名，例如 ``{'left': 'yaxis', 'right': 'yaxis2'}``，
 可通过 ``fig.layout[轴名]`` 访问。
 """
+import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import Any, Literal, cast
@@ -15,11 +16,11 @@ import plotly.graph_objects as go
 
 from ..layouts import LAYOUTS, NO_LEGEND_MESSAGE, LayoutPreset, resolve_frame, resolve_legend
 from ..plot_spec import (DEFAULT_BARS, DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_SCATTER, DEFAULT_TICKS,
-                         Appearance, AxesFormatter, BarSpec,
+                         Appearance, AxesFormatter, BarSpec, ColorbarStyle,
                          CurveBase, DrawnFigure, FigureSpec, LineSpec, LineStyle, ScatterSpec)
-from ..style import (remember_fill, translate_bar_style, translate_color, translate_figsize, translate_frame,
-                     translate_legend_style, translate_line_style, translate_points, translate_scatter_style,
-                     translate_ticks)
+from ..style import (colorbar_values, mark_mapped, remember_fill, translate_bar_style, translate_color,
+                     translate_colorbar, translate_figsize, translate_frame, translate_legend_style,
+                     translate_line_style, translate_points, translate_scatter_style, translate_ticks)
 from .bar_layout import stack_bottoms
 from .plotly_styles import apply_axis, apply_frame, apply_log_format
 
@@ -28,6 +29,13 @@ type SliderMode = Literal['single', 'cumulative']
 
 # 线挂的轴（CurveBase.axis）→ Plotly 配置里的纵轴名、trace 上的 yaxis 引用
 _Y_AXIS = {'left': 'yaxis', 'right': 'yaxis2'}
+# 颜色映射共用的颜色轴（layout.coloraxis）；DrawnFigure.axes['colorbar'] 就是这个名字
+_COLORAXIS = 'coloraxis'
+
+
+def _text_width(text: str, font_px: float) -> float:
+    """估算一行文字的宽度（像素）：中日韩等全角字符约一个字号宽，其余约 0.6 个字号。"""
+    return sum(font_px if unicodedata.east_asian_width(char) in 'WF' else 0.6 * font_px for char in text)
 _TRACE_Y = {'left': 'y', 'right': 'y2'}
 # 排版预设 / 计划里的轴名（'x'、'y'、'y2'）→ Plotly 配置里的轴名
 _LAYOUT_AXIS = {'x': 'xaxis', 'y': 'yaxis', 'y2': 'yaxis2'}
@@ -152,9 +160,11 @@ class PlotlyBackend:
         if any(curve.axis == 'right' for spec in specs for curve in spec.curves):
             axes['right'] = _Y_AXIS['right']
 
+        # 颜色映射：一次绘图的各页共用同一个颜色条（范围在计划里已统一）
+        colorbar = next((spec.colorbar for spec in specs if spec.colorbar is not None), None)
         pages = []      # 每页的 trace，与这页的 spec.curves 一一对应
         for page, spec in enumerate(specs):
-            artists = [self._draw_curve(fig, curve, preset) for curve in spec.curves]
+            artists = [self._draw_curve(fig, curve, preset, colorbar) for curve in spec.curves]
             bar_pairs = [(curve, artist) for curve, artist in zip(spec.curves, artists) if isinstance(curve, BarSpec)]
             if bar_pairs:
                 self._stack_errors(fig, [bar for bar, _ in bar_pairs], [artist for _, artist in bar_pairs])
@@ -169,16 +179,53 @@ class PlotlyBackend:
         if bars:
             self._apply_bar_layout(fig, bars)
         self._apply_optional_formatters(fig, axes, curves, artists, formatters)
-        self._apply_figure_formatter(fig, axes, figure_formatter)
+        # 根据各轴回调后的布局放置共享颜色条，再执行整图回调。
+        shown = dict(axes)
+        if colorbar is not None:
+            # 预留空间时考虑当前图例及翻页后的标题。
+            legend_texts = [str(trace.name or '') for trace in artists]
+            legend_texts.append(str(fig.layout['legend'].to_plotly_json().get('title', {}).get('text') or ''))
+            legend_texts += [spec.legend_title for spec in specs if spec.legend_title]
+            self._apply_colorbar(fig, colorbar, right_axis='right' in axes, legend_texts=legend_texts)
+            shown['colorbar'] = _COLORAXIS
+        self._apply_figure_formatter(fig, shown, figure_formatter)
         self._apply_neglog_formatter(fig, axes, first)
         # 根据回调完成后的设置处理对数轴的显式格式与次刻度标签。
         for axis_name in ('xaxis', *axes.values()):
             apply_log_format(fig, axis_name)
 
-        return [DrawnFigure(spec=spec, fig=fig, axes=axes, artists=page_artists)
+        return [DrawnFigure(spec=spec, fig=fig, axes=shown, artists=page_artists)
                 for spec, page_artists in zip(specs, pages)]
 
-    def _draw_curve(self, fig: go.Figure, curve: CurveBase, preset: LayoutPreset):
+    # 颜色条要让开的东西，Plotly 渲染前量不出文字宽度，只能按字号估算：
+    # 右轴 =「刻度文字 N 个字符 + 一行轴标题（1.5 倍字号）」+ 刻度线和间隙；图外图例 = 最长一行文字 + 图例符号和边距
+    _COLORBAR_XPAD = 10             # Plotly 颜色条的默认 xpad（像素）
+    _RIGHT_AXIS_CHARS = 6
+    _RIGHT_AXIS_EXTRA_PX = 12
+    _LEGEND_SYMBOL_PX = 50
+
+    def _apply_colorbar(self, fig: go.Figure, colorbar: ColorbarStyle, right_axis: bool, legend_texts: list[str]):
+        """
+        设置共享的颜色轴：色带、范围、颜色条标题（对数色标另有 10 的幂刻度）。
+
+        在各轴回调后根据右轴和图例的宽度估算 ``xpad``，为绘图区右侧的颜色条预留空间。
+        若右轴或图例文字较长，可在 *figure_formatter* 中调整 ``fig.layout.coloraxis.colorbar.xpad``。
+        """
+        coloraxis = translate_colorbar(colorbar, 'plotly')
+        xpad = self._COLORBAR_XPAD
+        if right_axis:
+            font = translate_points(self.appearance.font_size, self.dpi, 'plotly')
+            xpad += round(font * (0.6 * self._RIGHT_AXIS_CHARS + 1.5) + self._RIGHT_AXIS_EXTRA_PX)
+        legend: dict = fig.layout['legend'].to_plotly_json()
+        x = legend.get('x')
+        if x is not None and x >= 1 and legend.get('xanchor') == 'left' and legend_texts:     # 图外右侧
+            font = legend.get('font', {}).get('size') or translate_points(self.appearance.font_size, self.dpi, 'plotly')
+            xpad += round(max(_text_width(text, font) for text in legend_texts) + self._LEGEND_SYMBOL_PX)
+        coloraxis['colorbar']['xpad'] = xpad
+        fig.update_layout(coloraxis=coloraxis)
+
+    def _draw_curve(self, fig: go.Figure, curve: CurveBase, preset: LayoutPreset,
+                    colorbar: ColorbarStyle | None = None):
         """
         按曲线的类型往 Figure 里加一条 trace，返回 Figure 里实际保存的那一个（``fig.data[-1]``，不是传入前的对象）。
 
@@ -187,7 +234,10 @@ class PlotlyBackend:
         - `LineSpec`：``mode='lines'`` 的 ``go.Scatter``。标记按「DataPlotter 全局 < 分组」叠加
           （全局标记只给折线，写进模板会连散点一起改）；有标记时改成 ``'lines+markers'``，标记才显示
           （matplotlib 不需要这一步）。线和点都写上颜色，否则点会用 Plotly 默认配色。
-        - `ScatterSpec`：``mode='markers'`` 的 ``go.Scatter``。
+        - `ScatterSpec`：``mode='markers'`` 的 ``go.Scatter``。大小映射：``marker.size`` 是每个点的直径换成像素；
+          颜色映射：填充和描边都按逐点数值指向共享的 ``coloraxis`` （对数色标用 log10 值），
+          ``customdata`` 存原值，悬停显示它。颜色映射后一个点也不剩时放一个位置为 NaN 的占位点，
+          图例条目和颜色条才不会消失。
 
         Raises
         ------
@@ -206,11 +256,31 @@ class PlotlyBackend:
             case ScatterSpec():
                 # 先套库默认（大小、描边都写明），模板里的折线样式就漏不到散点上
                 style = DEFAULT_SCATTER.updated(replace(curve.style, color=None))
-                color = self._curve_color(curve, preset)
+                mapped = curve.colors is not None and colorbar is not None
+                color = None if mapped else self._curve_color(curve, preset)
                 native = translate_scatter_style(style, 'plotly', self.dpi, fallback_color=color)
-                trace = go.Scatter(x=curve.x, y=curve.y, name=curve.label, mode='markers', **placement, **native)
+                if curve.sizes is not None:
+                    native['marker_size'] = curve.sizes * self.dpi / 72     # 磅 → 像素
+                x, y = curve.x, curve.y
+                if curve.colors is not None and colorbar is not None:
+                    colors = curve.colors
+                    if not len(colors):
+                        # NaN 位置保留图例和颜色条，同时避免显示占位点。
+                        x, y = np.array([np.nan]), np.array([np.nan])
+                        colors = np.array([(colorbar.limits or (0, 0))[0]], dtype=float)
+                        if curve.sizes is not None:
+                            native['marker_size'] = np.array([0.0])
+                    values = colorbar_values(colors, colorbar, 'plotly')
+                    label = curve.color_unit or colorbar.title
+                    native.update(marker_color=values, marker_coloraxis=_COLORAXIS,
+                                  marker_line_color=values, marker_line_coloraxis=_COLORAXIS,
+                                  customdata=colors,
+                                  hovertemplate=f'(%{{x}}, %{{y}})<br>{f"{label}: " if label else ""}%{{customdata}}'
+                                                '<extra>%{fullData.name}</extra>')
+                trace = go.Scatter(x=x, y=y, name=curve.label, mode='markers', **placement, **native)
                 fig.add_trace(trace)
                 remember_fill(fig.data[-1], color)      # add_trace 会复制，要记在 Figure 里那一个上
+                mark_mapped(fig.data[-1], sizes=curve.sizes is not None, colors=mapped)
                 return fig.data[-1]
             case BarSpec():
                 trace = self._bar_trace(curve, preset)

@@ -1,0 +1,249 @@
+/* Corporate Clean palette with Minimalist Flat geometry.
+   Names: workspace, sectionRule, settingsPanel, plotPanel, statusStrip.
+   Register this folder via QDir.setSearchPaths("plotlibtheme", [folder]). */
+
+QWidget {
+    color: #0f172a;
+    font-size: 16px;
+}
+
+QWidget#workspace {
+    background-color: #f1f5f9;
+}
+
+QMenuBar {
+    background-color: #f8fafc;
+    color: #0f172a;
+    border-bottom: 2px solid #0f172a;
+    font-weight: 700;
+    padding: 0 8px;
+}
+
+QMenuBar::item {
+    background-color: transparent;
+    padding: 12px 16px;
+    border-radius: 0;
+}
+
+QMenuBar::item:selected, QMenuBar::item:pressed {
+    background-color: #1e40af;
+    color: #ffffff;
+}
+
+QMenu {
+    background-color: #f8fafc;
+    border: 2px solid #0f172a;
+    border-radius: 0;
+}
+
+QMenu::item {
+    padding: 8px 24px;
+}
+
+QMenu::item:selected {
+    background-color: #1e40af;
+    color: #ffffff;
+}
+
+QMenu::item:disabled {
+    color: #64748b;
+}
+
+QFrame#sectionRule {
+    background-color: #0f172a;
+    border: 0;
+}
+
+QFrame#statusStrip, QStatusBar#statusStrip {
+    background-color: #f8fafc;
+    border-top: 2px solid #0f172a;
+}
+
+QStatusBar#statusStrip::item {
+    border: 0;
+}
+
+QFrame#settingsPanel, QFrame#plotPanel, QFrame[role="section"] {
+    background-color: #f8fafc;
+    border: 2px solid #0f172a;
+    border-radius: 0;
+}
+
+QFrame#plotHeader {
+    background-color: #f1f5f9;
+    border: 0;
+    border-bottom: 2px solid #0f172a;
+}
+
+QTabWidget#settingsTabs::pane {
+    border: 0;
+    border-top: 2px solid #0f172a;
+}
+
+QTabWidget#settingsTabs::tab-bar {
+    left: 16px;
+}
+
+QTabWidget#settingsTabs QTabBar::tab {
+    background-color: #f1f5f9;
+    border: 2px solid #0f172a;
+    border-bottom: 0;
+    margin-right: -2px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QTabWidget#settingsTabs QTabBar::tab:last {
+    margin-right: 0;
+}
+
+QTabWidget#settingsTabs QTabBar::tab:selected {
+    background-color: #1e40af;
+    color: #ffffff;
+}
+
+QScrollArea#settingsScroll, QWidget#settingsPage {
+    background-color: #f8fafc;
+    border: 0;
+}
+
+QLabel[role="display"] {
+    font-size: 64px;
+    font-weight: 900;
+}
+
+QLabel[role="heading"] {
+    font-size: 24px;
+    font-weight: 700;
+}
+
+QLabel[role="label"], QLabel[role="value"], QLabel[role="status"] {
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel[role="value"] {
+    background-color: #f1f5f9;
+    padding: 4px 8px;
+}
+
+QLabel[role="status"] {
+    color: #64748b;
+}
+
+QPushButton {
+    background-color: #f8fafc;
+    color: #1e40af;
+    border: 2px solid #1e40af;
+    border-radius: 0;
+    font-weight: 700;
+    padding: 16px 32px;
+}
+
+QPushButton:hover, QPushButton[variant="primary"] {
+    background-color: #1e40af;
+    color: #ffffff;
+}
+
+QPushButton[variant="primary"]:hover {
+    background-color: #f8fafc;
+    color: #1e40af;
+}
+
+QPushButton:pressed, QPushButton[variant="primary"]:pressed {
+    background-color: #3b82f6;
+    color: #0f172a;
+    border-color: #3b82f6;
+}
+
+QPushButton:focus, QPushButton[variant="primary"]:focus {
+    border-color: #3b82f6;
+}
+
+QPushButton:disabled, QPushButton[variant="primary"]:disabled {
+    background-color: #f8fafc;
+    color: #64748b;
+    border-color: #64748b;
+}
+
+QLineEdit, QComboBox {
+    background-color: transparent;
+    border: 0;
+    border-bottom: 2px solid #64748b;
+    border-radius: 0;
+    padding: 12px 0;
+    selection-background-color: #1e40af;
+    selection-color: #ffffff;
+}
+
+QLineEdit:focus, QComboBox:focus, QComboBox:on {
+    border-bottom-color: #3b82f6;
+}
+
+QLineEdit:disabled, QComboBox:disabled {
+    color: #64748b;
+    border-bottom-color: #e5e7eb;
+}
+
+QComboBox {
+    padding-right: 24px;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 24px;
+    border: 0;
+}
+
+QComboBox::down-arrow {
+    image: url(plotlibtheme:chevron-down.xpm);
+    width: 11px;
+    height: 6px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #f8fafc;
+    border: 2px solid #0f172a;
+    selection-background-color: #1e40af;
+    selection-color: #ffffff;
+}
+
+QSlider:horizontal {
+    min-height: 28px;
+}
+
+QSlider::groove:horizontal {
+    background-color: #e5e7eb;
+    height: 2px;
+}
+
+QSlider::sub-page:horizontal {
+    background-color: #1e40af;
+}
+
+QSlider::handle:horizontal {
+    background-color: #1e40af;
+    border: 2px solid #1e40af;
+    border-radius: 0;
+    margin: -8px 0;
+    width: 14px;
+}
+
+QSlider::handle:horizontal:hover {
+    background-color: #f8fafc;
+}
+
+QSlider::handle:horizontal:pressed {
+    background-color: #3b82f6;
+}
+
+QSlider::handle:horizontal:focus {
+    border-color: #3b82f6;
+}
+
+QSlider::sub-page:horizontal:disabled, QSlider::handle:horizontal:disabled {
+    background-color: #64748b;
+    border-color: #64748b;
+}

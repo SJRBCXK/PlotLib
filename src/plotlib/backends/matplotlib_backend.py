@@ -10,15 +10,17 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.backends.backend_agg import RendererAgg
 from matplotlib.ticker import Formatter, NullFormatter, NullLocator
+from matplotlib.transforms import Bbox
 
 from ..layouts import LAYOUTS, NO_LEGEND_MESSAGE, LayoutPreset, resolve_frame, resolve_legend
 from ..plot_spec import (DEFAULT_BARS, DEFAULT_FRAME, DEFAULT_LEGEND, DEFAULT_LINES, DEFAULT_SCATTER, DEFAULT_TICKS,
                          Appearance, AxesFormatter, BarSpec,
                          CurveBase, DrawnFigure, FigureSpec, LineSpec, ScatterSpec)
-from ..style import (is_line_marker, remember_fill, translate_axis_style, translate_bar_style, translate_color,
-                     translate_frame, translate_legend_style, translate_line_style, translate_scatter_style,
-                     translate_ticks)
+from ..style import (is_line_marker, mark_mapped, remember_fill, translate_axis_style, translate_bar_style,
+                     translate_color, translate_colorbar, translate_frame, translate_legend_style, translate_line_style,
+                     translate_scatter_style, translate_ticks)
 from .bar_layout import stack_bottoms
 from .matplotlib_styles import apply_axis, apply_frame, apply_minor, apply_tick_params, legend_kwargs
 
@@ -158,8 +160,10 @@ class MatplotlibBackend:
 
         artists = []    # 与 spec.curves 一一对应
         bottoms = stack_bottoms([curve for curve in spec.curves if isinstance(curve, BarSpec)])
+        # 同图的映射散点共用颜色归一化对象和色带。
+        colormap = None if spec.colorbar is None else translate_colorbar(spec.colorbar, 'matplotlib')
         for curve in spec.curves:
-            artist = self._draw_curve(axes[curve.axis], curve, preset, bottoms.get(id(curve)))
+            artist = self._draw_curve(axes[curve.axis], curve, preset, bottoms.get(id(curve)), colormap)
             # 恢复计划中的空标签。Matplotlib 会为未命名的对象生成内部标签，
             # 图例重建时则读取对象的当前标签。
             if artist.get_label() != curve.label:
@@ -174,7 +178,11 @@ class MatplotlibBackend:
 
         self._apply_layout(fig, axes, spec, preset, legend, entries)
         self._apply_optional_formatters(fig, axes, spec, spec.curves, artists, formatters, legend, entries)
-        self._apply_figure_formatter(fig, axes, figure_formatter)
+        # 根据轴回调后的布局放置颜色条，再将颜色条传给整图回调。
+        shown = dict(axes)
+        if spec.colorbar is not None:
+            shown['colorbar'] = self._add_colorbar(fig, axes, spec, artists)
+        self._apply_figure_formatter(fig, shown, figure_formatter)
         # 改变轴类型会重置次刻度。回调完成后仅补充仍采用默认值的设置。
         for axis_ax in axes.values():
             apply_minor(axis_ax, self.ticks, only_defaults=True)
@@ -184,7 +192,60 @@ class MatplotlibBackend:
         if 'right' in axes:
             self._apply_neglog_formatter(axes['right'], False, 'y2' in spec.neglog)
 
-        return DrawnFigure(spec=spec, fig=fig, axes=axes, artists=artists)
+        return DrawnFigure(spec=spec, fig=fig, axes=shown, artists=artists)
+
+    # 颜色条的尺寸（磅）：离右侧内容（右轴、图外图例）的间距、色条宽度
+    _COLORBAR_GAP_PT = 8
+    _COLORBAR_WIDTH_PT = 14
+    # 占图宽的比例：颜色条的文字离图右边留的距离；腾位置时绘图区宽度的下限
+    _FIGURE_EDGE = 0.02
+    _MIN_AXES_WIDTH = 0.25
+
+    def _add_colorbar(self, fig, axes: dict, spec: FigureSpec, artists: list):
+        """
+        给颜色映射的散点加颜色条，返回 ``Colorbar`` 对象。
+
+        颜色条是左轴的子轴。定位器在绘制时读取可见右轴和图例的实际边界，间距和条宽以磅计。
+        初始右边距由 `_make_room` 预留。``tight_layout`` 与紧边界导出均会计入颜色条。
+        自行定位时可用 ``colorbar.ax.set_axes_locator(None)`` 停用定位器。
+        """
+        assert spec.colorbar is not None and spec.colorbar.title is not None
+        mappable = next(artist for curve, artist in zip(spec.curves, artists)
+                        if isinstance(curve, ScatterSpec) and curve.colors is not None)
+        cax = axes['left'].inset_axes([1, 0, 0.05, 1])
+        cax.set_axes_locator(lambda _cax, renderer: self._locate_colorbar(fig, axes, renderer))
+        colorbar = fig.colorbar(mappable, cax=cax)
+        colorbar.set_label(spec.colorbar.title)
+        self._make_room(fig, axes, colorbar)
+        return colorbar
+
+    def _locate_colorbar(self, fig, axes: dict, renderer):
+        """
+        将颜色条放在可见右轴和图例之外，高度与左轴相同。
+        """
+        box = axes['left'].get_window_extent(renderer)
+        edges = [box.x1]
+        if 'right' in axes and axes['right'].get_visible():
+            if (right := axes['right'].get_tightbbox(renderer)) is not None:
+                edges.append(right.x1)
+        if (legend := axes['left'].get_legend()) is not None and legend.get_visible():
+            edges.append(legend.get_window_extent(renderer).x1)
+        x0 = max(edges) + self._COLORBAR_GAP_PT * fig.dpi / 72
+        width = self._COLORBAR_WIDTH_PT * fig.dpi / 72
+        return fig.transSubfigure.inverted().transform_bbox(Bbox.from_extents(x0, box.y0, x0 + width, box.y1))
+
+    def _make_room(self, fig, axes: dict, colorbar) -> None:
+        """
+        在整图回调前，根据颜色条及其文字的边界预留右边距。
+
+        ``subplots_adjust`` 同时调整共享位置的左右轴。此次调整为绘图区保留最小宽度，右侧内容过宽时颜色条可能出界。
+        整图回调扩大右侧内容后，可用 ``fig.tight_layout()`` 重新分配空间。该布局由 Matplotlib 决定绘图区宽度。
+        """
+        renderer = _measuring_renderer(fig)
+        right = colorbar.ax.get_tightbbox(renderer).x1
+        shift = (fig.bbox.x1 * (1 - self._FIGURE_EDGE) - right) / fig.bbox.width
+        box = axes['left'].get_position()
+        fig.subplots_adjust(right=box.x0 + max(box.width + shift, self._MIN_AXES_WIDTH))
 
     # ========================================================================
     # 曲线颜色和样式
@@ -210,7 +271,8 @@ class MatplotlibBackend:
     # 渲染：画线
     # ========================================================================
 
-    def _draw_curve(self, ax, curve: CurveBase, preset: LayoutPreset, bottom: np.ndarray | None = None):
+    def _draw_curve(self, ax, curve: CurveBase, preset: LayoutPreset, bottom: np.ndarray | None = None,
+                    colormap: dict | None = None):
         """
         按曲线的类型画出来，返回画出的对象：`LineSpec` → ``Line2D``，`ScatterSpec` → ``PathCollection``，
         `BarSpec` → ``BarContainer``。
@@ -218,6 +280,8 @@ class MatplotlibBackend:
         颜色由 ``_curve_color`` 一次给出（样式里写的颜色已算在里面），其余样式按画法翻译
         （如 ``LineStyle(linestyle='dash')`` → ``{'linestyle': '--'}``，散点大小换成面积 ``s``）。
         *bottom* 是堆叠柱状图这个系列的底部（见 `stack_bottoms`）。
+        映射散点：大小映射的 ``s`` 是每个点直径的平方；颜色映射按 *colormap* （这张图共用的 ``cmap``、``norm``）着色，
+        描边跟随逐点的填充色（``edgecolors='face'``）。
 
         Raises
         ------
@@ -231,8 +295,13 @@ class MatplotlibBackend:
             case ScatterSpec():
                 # 先套库默认（大小、描边都写明），全局折线样式（rc 的 lines.*）就漏不到散点上
                 style = DEFAULT_SCATTER.updated(replace(curve.style, color=None))
-                color = self._curve_color(curve, preset).get('color')
+                mapped = curve.colors is not None and colormap is not None
+                color = None if mapped else self._curve_color(curve, preset).get('color')
                 native = translate_scatter_style(style, 'matplotlib', fallback_color=color)
+                if curve.sizes is not None:
+                    native['s'] = np.square(curve.sizes)
+                if curve.colors is not None and colormap is not None:
+                    native.update(c=curve.colors, edgecolors='face', **colormap)
                 # 线形标记（x、cross）传 edgecolors 会警告：先不传，画完再用 setter 补上，
                 # 对象的状态（填充、描边分开）就和其他标记一样，之后的散点回调不用区分
                 edge = native.pop('edgecolors', None) if is_line_marker(style.marker) else None
@@ -240,6 +309,7 @@ class MatplotlibBackend:
                 if edge is not None:
                     points.set_edgecolor(edge)
                 remember_fill(points, color)
+                mark_mapped(points, sizes=curve.sizes is not None, colors=mapped)
                 return points
             case BarSpec():
                 return self._draw_bars(ax, curve, preset, bottom)
@@ -412,6 +482,17 @@ class MatplotlibBackend:
             if not isinstance(axis.get_minor_formatter(), NullFormatter):
                 axis.set_minor_formatter(_NegativeFormatter(axis.get_minor_formatter()))
         return ax
+
+
+def _measuring_renderer(fig):
+    """
+    量文字和边界框用的渲染器：画布自己的（Agg 及交互后端）；SVG、PDF 等画布没有 ``get_renderer``，
+    另建一个同尺寸、同 dpi 的 Agg 渲染器来量（只量不画）。
+    """
+    get_renderer = getattr(fig.canvas, 'get_renderer', None)
+    if get_renderer is not None:
+        return get_renderer()
+    return RendererAgg(fig.bbox.width, fig.bbox.height, fig.dpi)
 
 
 def _artists_of(spec_type: type, axis: str, curves: Sequence[CurveBase], artists: list) -> list:

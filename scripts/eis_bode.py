@@ -16,8 +16,8 @@ from plotlib.plotter import DataPlotter
 from plotlib.dataset import DataSet
 from plotlib.processor import DataProcessLayer as DPL
 from plotlib.processor import DataTransformer as DT
-from plotlib.formatters import make_axes_formatter, make_scatter_formatter
-from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer, ScatterStyle
+from plotlib.formatters import make_axes_formatter, make_legend_formatter, make_scatter_formatter
+from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer, LegendStyle, ScatterStyle
 from plotlib.group import Group
 
 plt.close('all')
@@ -171,7 +171,13 @@ def f_peak(data):
 Selected_data = DPL(dataset=data).select("Tan(Delta)","Frequency(Hz)").Selected_data
 f_delta_peak = DataSet()
 for dataslice in Selected_data:
-    f_delta_peak_slice = DT(dataslice).apply(func=f_peak,extended=False)
+    # 结果的名字用原样品名、单位写明两个计算结果（柱状图的图例就是这两个单位）；
+    # 不写时自动命名为 Results_0_of_样品名、unitless_0 / unitless_1
+    f_delta_peak_slice = DT(dataslice).apply(
+        func=f_peak,
+        extended=False,
+        naming_func=lambda: {'names': [dataslice.names[0]] * 2, 'units': ['Peak tan δ', 'Peak frequency (Hz)']},
+    )
     f_delta_peak.expandata(f_delta_peak_slice)
 
 # 汇总图每行对应一个原始样品，保留按输入行顺序检出的第一个峰。
@@ -203,6 +209,29 @@ peak_plotter = DataPlotter(peak_summary).plot(
     },
     figure_formatter=format_peak_summary,
     legend_title=None,
+)
+
+
+# 同一份损耗峰汇总的柱状图模式：每个样品一组柱，两个计算结果（峰值 tan δ、峰频率）各一根，图例是两者的单位。
+# 一个样品可能检出多个峰，reduce='first' 取按行顺序的第一个（与上面的汇总图一致）。
+# 两者量级相差很大（tan δ 约 0.1，频率 1e3～1e6），Y 轴用对数，矮的那组柱才看得见；单位不同，Y 轴标题自动留空。
+def rotate_sample_labels(fig, axes):
+    """样品名较长：X 轴刻度文字斜放，再收紧边距。"""
+    ax = axes['left']
+    ax.tick_params(axis='x', labelrotation=45, labelsize=11)
+    for label in ax.get_xticklabels():
+        label.set_horizontalalignment('right')
+    fig.tight_layout()
+
+
+peak_bars = DataPlotter(f_delta_peak).plot_bars(
+    [0, 1],
+    reduce='first',
+    formatters=AxesFormatter(
+        axes=make_axes_formatter(y=AxisStyle(scale='log')),
+        legend=make_legend_formatter(LegendStyle(position='best')),     # 默认右上角会压住最高的柱
+    ),
+    figure_formatter=rotate_sample_labels,
 )
 
 

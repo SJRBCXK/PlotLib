@@ -60,7 +60,8 @@ from .backends.plotly_styles import apply_ticks as apply_plotly_ticks
 from .backends.plotly_styles import figure_dpi
 from .plot_spec import AxisStyle, BarStyle, FrameStyle, LegendStyle, LineStyle, ScatterStyle, TickStyle
 from .style import (HOLLOW_FILL, Backend, check_axis_style, check_backend, check_bar_style, check_frame,
-                    check_legend_style, check_line_style, check_scatter_style, check_ticks, remember_fill,
+                    check_legend_style, check_line_style, check_mapped_style, check_scatter_style, check_ticks,
+                    remember_fill,
                     remembered_fill, translate_axis_style, translate_bar_style, translate_color, translate_frame,
                     translate_legend_style, translate_line_style, translate_scatter_style, translate_ticks)
 
@@ -313,7 +314,11 @@ def make_scatter_formatter(style: ScatterStyle | None = None, custom: Iterable[C
     Raises
     ------
     TypeError, ValueError
-        *style* 含无效字段值。
+        *style* 含无效字段值，或为映射散点覆盖了由映射决定的样式。
+
+    Notes
+    -----
+    颜色映射保留逐点颜色及填充，大小映射保留逐点直径。仍可调整描边、标记和透明度。
 
     Examples
     --------
@@ -344,6 +349,8 @@ def make_scatter_formatter(style: ScatterStyle | None = None, custom: Iterable[C
 
         def formatter(scatters, *_args, **_kwargs):
             _ = _args, _kwargs
+            for points in scatters:     # 应用样式前校验全部散点对象。
+                check_mapped_style(style, points)
             for points in scatters:
                 # 保留完整的 RGBA 数组，供恢复逐点配色。无可见填充时视为空心。
                 faces, edges = points.get_facecolor(), points.get_edgecolor()
@@ -365,9 +372,14 @@ def make_scatter_formatter(style: ScatterStyle | None = None, custom: Iterable[C
         return formatter
 
     def plotly_formatter(traces):
+        for trace in traces:        # 应用样式前校验全部散点对象。
+            check_mapped_style(style, trace)
         for trace in traces:
             # 使用所属 Figure 的 DPI 将磅换算为像素。
             native = translate_scatter_style(style, 'plotly', figure_dpi(trace.figure))
+            # 显式描边色覆盖描边的数值映射。
+            if 'marker_line_color' in native and trace.marker.line.coloraxis is not None:
+                native['marker_line_coloraxis'] = None
             # 仅将字符串与透明填充值比较，逐点颜色数组作为整体保留。
             fill = trace.marker.color
             hollow = fill is None or (isinstance(fill, str) and fill == HOLLOW_FILL['plotly'])

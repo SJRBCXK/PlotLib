@@ -96,7 +96,7 @@ class MatplotlibBackend:
         figsize : tuple of (float, float)
             图尺寸（英寸）。
         formatters : dict, optional
-            按轴分组的用户回调 ``{'left': AxesFormatter(...), 'right': ...}``；没给的轴不调用。
+            按轴指定的回调 ``{'left': AxesFormatter(...), 'right': ...}``。仅调用已配置的回调。
         figure_formatter : callable, optional
             ``figure_formatter(fig, axes)``，整张图画完、各轴回调之后调用一次，
             ``axes = {'left': ax}``，双 Y 轴再有 ``'right'``。
@@ -172,7 +172,7 @@ class MatplotlibBackend:
         bars = [curve for curve in spec.curves if isinstance(curve, BarSpec)]
         if bars:
             self._apply_categories(axes['left'], bars[0].categories)
-        # 图例条目按计划显式给出：一条曲线（一个系列）一项，先左轴、后右轴，各侧按绘制顺序；规则见 _make_legend
+        # 按左轴、右轴的顺序收集图例条目，各轴内采用绘制顺序。
         order = sorted(range(len(spec.curves)), key=lambda i: spec.curves[i].axis != 'left')
         entries = [(artists[i], spec.curves[i].label) for i in order]
 
@@ -274,7 +274,7 @@ class MatplotlibBackend:
     def _draw_curve(self, ax, curve: CurveBase, preset: LayoutPreset, bottom: np.ndarray | None = None,
                     colormap: dict | None = None):
         """
-        按曲线的类型画出来，返回画出的对象：`LineSpec` → ``Line2D``，`ScatterSpec` → ``PathCollection``，
+        按规格绘制对象。`LineSpec` 返回 ``Line2D``，`ScatterSpec` 返回 ``PathCollection``，
         `BarSpec` → ``BarContainer``。
 
         颜色由 ``_curve_color`` 一次给出（样式里写的颜色已算在里面），其余样式按画法翻译
@@ -293,7 +293,7 @@ class MatplotlibBackend:
                 native = translate_line_style(replace(curve.style, color=None), 'matplotlib')
                 return ax.plot(curve.x, curve.y, label=curve.label, **self._curve_color(curve, preset), **native)[0]
             case ScatterSpec():
-                # 先套库默认（大小、描边都写明），全局折线样式（rc 的 lines.*）就漏不到散点上
+                # 使用独立的散点默认样式，避免继承 rcParams 中的折线样式。
                 style = DEFAULT_SCATTER.updated(replace(curve.style, color=None))
                 mapped = curve.colors is not None and colormap is not None
                 color = None if mapped else self._curve_color(curve, preset).get('color')
@@ -302,8 +302,8 @@ class MatplotlibBackend:
                     native['s'] = np.square(curve.sizes)
                 if curve.colors is not None and colormap is not None:
                     native.update(c=curve.colors, edgecolors='face', **colormap)
-                # 线形标记（x、cross）传 edgecolors 会警告：先不传，画完再用 setter 补上，
-                # 对象的状态（填充、描边分开）就和其他标记一样，之后的散点回调不用区分
+                # x 和 cross 的描边通过 PathCollection 设置，以避免 scatter 的 edgecolors 警告。
+                # 这样散点回调可统一读取描边状态。
                 edge = native.pop('edgecolors', None) if is_line_marker(style.marker) else None
                 points = ax.scatter(curve.x, curve.y, label=curve.label, **native)
                 if edge is not None:
@@ -344,7 +344,7 @@ class MatplotlibBackend:
 
     @staticmethod
     def _apply_categories(ax, categories: list[str]):
-        """柱状图的类别刻度：数字位置 0、1、2 …… 配类别文字（同名类别也分开）；X 轴是类别轴，不画次刻度。"""
+        """用整数位置设置类别刻度，保留同名类别的独立位置，并关闭 X 轴次刻度。"""
         ax.set_xticks(range(len(categories)), categories)
         ax.xaxis.set_minor_locator(NullLocator())
 
@@ -371,7 +371,7 @@ class MatplotlibBackend:
         if 'right' in axes:
             axes['right'].set_ylabel(spec.y2_unit)
 
-        # 各轴（AxisStyle）：刻度格式、着色（标题、刻度、轴线同色）；预设没列的轴保留 matplotlib 默认
+        # 为预设指定的轴应用刻度格式与轴颜色。其余轴采用 Matplotlib 默认样式。
         for axis_name, axis_style in preset.axes.items():
             axis_ax, letter = self._axis(axes, axis_name)
             apply_axis(axis_ax, letter, translate_axis_style(axis_style, 'matplotlib', letter))
@@ -430,7 +430,7 @@ class MatplotlibBackend:
         """
         执行坐标轴、线条、散点和图例回调。
 
-        线条回调只收这根轴上的折线，散点回调只收这根轴上的散点，两者互不干扰。
+        折线和散点回调分别接收当前轴上的折线对象和散点对象。
         图例句柄保存的是创建时的曲线样式。应用曲线回调后重建图例，再执行整图图例回调。
 
         Raises

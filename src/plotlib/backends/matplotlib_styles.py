@@ -29,7 +29,7 @@ def apply_axis(ax, letter: str, native: dict) -> None:
     ax : matplotlib.axes.Axes
         坐标轴。
     letter : {'x', 'y'}
-        改哪个方向。
+        轴向。
     native : dict
         ``style.translate_axis_style(..., 'matplotlib')`` 的结果。
 
@@ -68,8 +68,7 @@ def apply_frame(ax, native: dict) -> None:
     """
     应用已转换的轴线宽度和上、右边框设置。
 
-    双 Y 轴的右轴（twin）自己的右边就是右轴的轴线，总是画，只跟着上边的设置；
-    它的左边、下边与左轴重合，不画，免得盖住左轴着色的轴线。
+    双 Y 轴的右侧 Axes 始终绘制右轴线。上边框由配置控制，左、下边框隐藏以保留左侧 Axes 的轴线。
     """
     if 'linewidth' in native:
         for spine in ax.spines.values():
@@ -146,7 +145,8 @@ def apply_minor(ax, native: dict, only_defaults: bool) -> None:
 
     Notes
     -----
-    线性轴细分主刻度间隔，对数轴使用对数定位器。其他刻度类型优先使用自身的次刻度定位器。
+    线性轴细分主刻度间隔，对数轴使用对数定位器。其他刻度类型（如 ``'symlog'`` 和 ``'logit'``）
+    在启用次刻度时保留当前定位器。关闭次刻度会将定位器替换为 ``NullLocator``，重新设置轴类型可恢复原生定位器。
     """
     for axis in visible_axes(ax):
         scale = axis.get_scale()
@@ -158,27 +158,8 @@ def apply_minor(ax, native: dict, only_defaults: bool) -> None:
                 axis.set_minor_locator(AutoMinorLocator())
             elif log:
                 axis.set_minor_locator(LogLocator(base=axis.get_transform().base, subs='auto'))
-            else:
-                axis.set_minor_locator(_scale_minor_locator(axis))
         if 'minor_labels' in native and (axis.isDefault_minfmt or not only_defaults):
             axis.set_minor_formatter(_minor_formatter(native['minor_labels'], log))
-
-
-def _scale_minor_locator(axis):
-    """
-    获取当前刻度类型的默认次刻度定位器，并保留轴上已有的主刻度定位器及标签格式器。
-
-    由刻度类型生成定位器，以保留底数、线性区宽度等参数。默认定位器为空时使用线性细分。
-    """
-    keep = (axis.get_major_locator(), axis.get_major_formatter(), axis.get_minor_formatter(),
-            axis.isDefault_majloc, axis.isDefault_majfmt, axis.isDefault_minfmt)
-    axis._scale.set_default_locators_and_formatters(axis)
-    locator = axis.get_minor_locator()
-    axis.set_major_locator(keep[0])
-    axis.set_major_formatter(keep[1])
-    axis.set_minor_formatter(keep[2])
-    axis.isDefault_majloc, axis.isDefault_majfmt, axis.isDefault_minfmt = keep[3:]
-    return AutoMinorLocator() if isinstance(locator, NullLocator) else locator
 
 
 def _minor_formatter(minor_labels: str, log: bool):

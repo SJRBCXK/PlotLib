@@ -16,8 +16,6 @@ from plotlib.formatters import make_axes_formatter
 from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer
 from plotlib.group import Group
 
-plt.close('all')
-
 # ============================================================
 # 数据配置常量
 # ============================================================
@@ -102,107 +100,120 @@ def eis_dual_axis_formatter(ax1, ax2, _fig):
     ax1.set_ylim(bottom=0, top=max_value)
     ax2.set_ylim(bottom=0, top=min_value)
 
-# ============================================================
-# 数据加载
-# ============================================================
-data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
-groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图和计算都用它
-
-# ============================================================
-# 绘图部分
-# ============================================================
-# --- Nyquist 图（标准线图）---
-Test_pltliner1 = DataPlotter(
-    dataset=data,
-    channel_x = dataRowNum_unit6,
-    channel_y = dataRowNum_unit7
-).plot(Layer(neglog_y=True), formatters=AxesFormatter(axes=Nyquist_formatter))
-
-# --- Nyquist 图（分组绘制）---
-Test_pltGliner2 = DataPlotter(
-    dataset=data,
-    groups=groups,
-    channel_x = dataRowNum_unit6,
-    channel_y = dataRowNum_unit7
-).plot(
-    Layer(neglog_y=True),
-    by='group',
-    formatters=AxesFormatter(axes=Nyquist_formatter, lines=Group_lines_formatter),
-)
-
-
-# --- Y-Y 子图（Real Z vs -Imaginary Z）---
-Test_pltsubsyy = DataPlotter(
-    dataset=data,
-).plot(
-    Layer(dataRowNum_unit6, dataRowNum_unit7, neglog_y=True),
-    by='sample',
-    formatters=AxesFormatter(axes=NegLog_formatter),
-)
-# 备用方案：使用自定义 eis_log_formatter
-# ).plot(
-#     Layer(dataRowNum_unit6, dataRowNum_unit7),
-#     by='sample',
-#     formatters=AxesFormatter(axes=eis_log_formatter),
-# )
-
-# --- X-YY 双轴子图（Frequency vs Z components）---
-Test_pltsubsxyy = DataPlotter(
-    dataset=data,
-).plot(
-    [Layer(dataRowNum_unit1, dataRowNum_unit6),
-     Layer(dataRowNum_unit1, dataRowNum_unit7, side='right', neglog_y=True)],
-    by='sample',
-    formatters={'left': AxesFormatter(axes=NegLog_formatter), 'right': AxesFormatter(axes=NegLog_formatter)},
-    # 整图回调通过 axes['right'] 调整右侧 Y 轴和共用的 X 轴。
-    figure_formatter=lambda _fig, axes: (
-        axes['right'].spines['right'].set_visible(True),
-        axes['right'].spines['top'].set_visible(True),
-        axes['right'].set_xscale('log'),
-        axes['right'].yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.1e}"))
-    ),
-)
-# 备用方案：使用自定义 eis_dual_axis_formatter
-# ).plot(
-#     [Layer(dataRowNum_unit1, dataRowNum_unit6), Layer(dataRowNum_unit1, dataRowNum_unit7, side='right')],
-#     by='sample',
-#     figure_formatter=lambda fig, axes: eis_dual_axis_formatter(axes['left'], axes['right'], fig),
-# )
-Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data
-Impendence = DataSet()
-for dataslice in Selected_data:
-    impendence_slice = DT(dataslice).Norm(extended=False,norm_unit='|Z|(ohm)')
-    Impendence.expandata(impendence_slice)
-data = data.expandata(Impendence).sort_columns()
-Impendence_pltliner1 = DataPlotter(
-    dataset=data,
-    channel_x = 0,
-    channel_y = 7
-).plot(formatters=AxesFormatter(axes=Nyquist_formatter))
-
-
-
-
 
 # ============================================================
 # 使用 Group.apply() 按组计算
 # ============================================================
 
 def rev_camp(*slices):
+    """
+    组内第二个样品减第一个样品（Zs'、Zs''），频率取第一个样品的。
+    按行配对：要求组内各样品的频率点相同、按行对齐，否则相减的不是同一频率。
+    """
     camp = slices[1].data[:,:2] - slices[0].data[:,:2]
     freq = slices[0].data[:,2].reshape(-1, 1)  # 假设频率在第三列
     camp_with_freq = np.hstack((camp, freq))
     return camp_with_freq
 
 
-RevCampdata_v2 = groups.apply(
-    rev_camp,
-    select=("Zs'(ohm)", "Zs''(ohm)", "Frequency(Hz)")
-)
-print(RevCampdata_v2.units)
+def main(path=None, show=True):
+    """读取数据并绘制全部图表。*path* 为 None 时弹窗选文件；*show* 为 False 时不调用 ``plt.show()``。"""
+    # ============================================================
+    # 数据加载
+    # ============================================================
+    data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data(path)
+    groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图和计算都用它
 
-RevCampdata_v2_pltsubsyy = DataPlotter(
-    dataset=RevCampdata_v2,
-).plot(Layer(2, 1, neglog_y=True), by='sample', formatters=AxesFormatter(axes=NegLog_formatter))
+    # ============================================================
+    # 绘图部分
+    # ============================================================
+    # --- Nyquist 图（标准线图）---
+    Test_pltliner1 = DataPlotter(
+        dataset=data,
+        channel_x = dataRowNum_unit6,
+        channel_y = dataRowNum_unit7
+    ).plot(Layer(neglog_y=True), formatters=AxesFormatter(axes=Nyquist_formatter))
 
-plt.show()
+    # --- Nyquist 图（分组绘制）---
+    Test_pltGliner2 = DataPlotter(
+        dataset=data,
+        groups=groups,
+        channel_x = dataRowNum_unit6,
+        channel_y = dataRowNum_unit7
+    ).plot(
+        Layer(neglog_y=True),
+        by='group',
+        formatters=AxesFormatter(axes=Nyquist_formatter, lines=Group_lines_formatter),
+    )
+
+
+    # --- Y-Y 子图（Real Z vs -Imaginary Z）---
+    Test_pltsubsyy = DataPlotter(
+        dataset=data,
+    ).plot(
+        Layer(dataRowNum_unit6, dataRowNum_unit7, neglog_y=True),
+        by='sample',
+        formatters=AxesFormatter(axes=NegLog_formatter),
+    )
+    # 备用方案：使用自定义 eis_log_formatter
+    # ).plot(
+    #     Layer(dataRowNum_unit6, dataRowNum_unit7),
+    #     by='sample',
+    #     formatters=AxesFormatter(axes=eis_log_formatter),
+    # )
+
+    # --- X-YY 双轴子图（Frequency vs Z components）---
+    Test_pltsubsxyy = DataPlotter(
+        dataset=data,
+    ).plot(
+        [Layer(dataRowNum_unit1, dataRowNum_unit6),
+         Layer(dataRowNum_unit1, dataRowNum_unit7, side='right', neglog_y=True)],
+        by='sample',
+        formatters={'left': AxesFormatter(axes=NegLog_formatter), 'right': AxesFormatter(axes=NegLog_formatter)},
+        # 整图回调通过 axes['right'] 调整右侧 Y 轴和共用的 X 轴。
+        figure_formatter=lambda _fig, axes: (
+            axes['right'].spines['right'].set_visible(True),
+            axes['right'].spines['top'].set_visible(True),
+            axes['right'].set_xscale('log'),
+            axes['right'].yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.1e}"))
+        ),
+    )
+    # 备用方案：使用自定义 eis_dual_axis_formatter
+    # ).plot(
+    #     [Layer(dataRowNum_unit1, dataRowNum_unit6), Layer(dataRowNum_unit1, dataRowNum_unit7, side='right')],
+    #     by='sample',
+    #     figure_formatter=lambda fig, axes: eis_dual_axis_formatter(axes['left'], axes['right'], fig),
+    # )
+    Selected_data = DPL(dataset=data).select("Zs'(ohm)","Zs''(ohm)").Selected_data
+    Impendence = DataSet()
+    for dataslice in Selected_data:
+        impendence_slice = DT(dataslice).Norm(extended=False,norm_unit='|Z|(ohm)')
+        Impendence.expandata(impendence_slice)
+    data = data.expandata(Impendence).sort_columns()
+    Impendence_pltliner1 = DataPlotter(
+        dataset=data,
+        channel_x = 0,
+        channel_y = 7
+    ).plot(formatters=AxesFormatter(axes=Nyquist_formatter))
+
+
+
+
+
+    RevCampdata_v2 = groups.apply(
+        rev_camp,
+        select=("Zs'(ohm)", "Zs''(ohm)", "Frequency(Hz)")
+    )
+    print(RevCampdata_v2.units)
+
+    RevCampdata_v2_pltsubsyy = DataPlotter(
+        dataset=RevCampdata_v2,
+    ).plot(Layer(2, 1, neglog_y=True), by='sample', formatters=AxesFormatter(axes=NegLog_formatter))
+
+    if show:
+        plt.show()
+
+
+if __name__ == "__main__":
+    plt.close('all')        # 只在直接运行时清掉旧图窗；被其他代码调用时保留调用方的图窗
+    main()

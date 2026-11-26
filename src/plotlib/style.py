@@ -82,7 +82,7 @@ COLOR_SCALES = ('linear', 'log')
 _HEX_COLOR = re.compile(r'#[0-9a-fA-F]{6}')
 _SEQUENCES = (tuple, list)
 
-# Plotly 的默认线宽（像素）：自定义虚线换算成像素时，没给线宽就用它。
+# 将自定义虚线换算为像素时，未指定线宽则使用 Plotly 的默认线宽。
 PLOTLY_DEFAULT_LINEWIDTH = 2
 
 
@@ -301,7 +301,7 @@ def _check_positive(name: str, value, allow_zero: bool = False) -> None:
 
 
 def _check_switch(name: str, value) -> None:
-    """校验开关：只收 True / False；None 表示「不改」。"""
+    """校验布尔选项。True 和 False 分别启用和关闭，None 保留当前设置。"""
     if value is not None and not isinstance(value, bool):
         raise TypeError(f"{name} 是开关，要写 True / False，实际是 {value!r}")
 
@@ -316,7 +316,7 @@ def check_line_style(style: LineStyle) -> None:
     Raises
     ------
     TypeError, ValueError
-        某个字段写错，信息里带字段名和写错的值。
+        样式字段取值无效。异常消息包含字段名和原始值。
     """
     _check_positive('width', style.width)
     _check_positive('marker_size', style.marker_size)
@@ -355,7 +355,7 @@ def translate_line_style(style: LineStyle, backend: Backend, dpi: float | None =
     Raises
     ------
     ValueError
-        后端是 Plotly 却没给 *dpi*；或某个字段写错。
+        Plotly 后端缺少 *dpi*，或样式字段取值无效。
     """
     check_backend(backend)
     check_line_style(style)
@@ -392,7 +392,7 @@ def check_scatter_style(style: ScatterStyle) -> None:
     Raises
     ------
     TypeError, ValueError
-        某个字段写错，信息里带字段名和写错的值。
+        样式字段取值无效。异常消息包含字段名和原始值。
     """
     _check_positive('size', style.size)
     _check_positive('edge_width', style.edge_width, allow_zero=True)
@@ -416,7 +416,7 @@ def check_bar_style(style: BarStyle) -> None:
     Raises
     ------
     TypeError, ValueError
-        某个字段写错，信息里带字段名和写错的值。
+        样式字段取值无效。异常消息包含字段名和原始值。
     """
     _check_positive('edge_width', style.edge_width, allow_zero=True)
     _check_positive('error_width', style.error_width)
@@ -435,7 +435,7 @@ def check_colorbar_style(style: ColorbarStyle) -> None:
     Raises
     ------
     TypeError, ValueError
-        某个字段写错，信息里带字段名和写错的值。
+        样式字段取值无效。异常消息包含字段名和原始值。
     """
     if style.cmap is not None:
         check_colormap(style.cmap)
@@ -488,7 +488,7 @@ def translate_bar_style(style: BarStyle, backend: Backend, dpi: float | None = N
     Raises
     ------
     ValueError
-        后端是 Plotly 却没给 *dpi*；或某个字段写错。
+        Plotly 后端缺少 *dpi*，或样式字段取值无效。
     """
     check_backend(backend)
     check_bar_style(style)
@@ -548,7 +548,7 @@ def translate_scatter_style(style: ScatterStyle, backend: Backend, dpi: float | 
     Raises
     ------
     ValueError
-        后端是 Plotly 却没给 *dpi*；或某个字段写错。
+        Plotly 后端缺少 *dpi*，或样式字段取值无效。
 
     Notes
     -----
@@ -621,7 +621,7 @@ def translate_colorbar(style: ColorbarStyle, backend: Backend) -> dict:
     Raises
     ------
     ValueError
-        颜色条没算好（范围、色带、刻度类型、标题有一项是 None）或写错。
+        颜色条的范围、色带、刻度类型或标题尚未确定，或其取值无效。
     """
     check_backend(backend)
     check_colorbar_style(style)
@@ -808,7 +808,7 @@ def translate_tick_format(fmt: str, backend: Backend) -> Callable[[Any, Any], st
     if backend == 'matplotlib':
         key = match.group(1)
         try:
-            # 先试一次：格式写错（如 '{x:.2q}'）在这里报，不拖到渲染（canvas.draw / 保存图片）时才报
+            # 在创建格式器时试格式化，避免无效格式在绘制或保存时才报错。
             fmt.format(**{key: 1.0})
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
             raise ValueError(f"刻度格式 {fmt!r} 写错了：{exc}") from exc
@@ -940,7 +940,7 @@ def translate_frame(frame: FrameStyle, backend: Backend, dpi: float | None = Non
     Raises
     ------
     ValueError
-        后端是 Plotly、写了线宽却没给 *dpi*。
+        Plotly 后端换算线宽时缺少 *dpi*。
     """
     check_backend(backend)
     check_frame(frame)

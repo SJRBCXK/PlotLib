@@ -80,10 +80,7 @@ for sample in selected:
 
 ## 绘图
 
-曲线类的图都用 `plot()` 绘制，由两样东西组合：
-
-- `by`：哪些样品进哪张图；
-- `layers`：每个样品画哪几条。一个 `Layer(x, y, kind, side)` 写取哪两个通道、画成折线（`'line'`）还是散点（`'scatter'`）、挂左轴（`'left'`）还是右轴（`'right'`）。不写通道时用 `DataPlotter` 构造时的 `channel_x`、`channel_y`。
+`plot()` 用 `by` 指定样品的分图方式，用 `layers` 指定各样品绘制的图层。`Layer(x, y, kind, side)` 的前两个参数指定 X、Y 通道，`kind` 选择折线（`'line'`）或散点（`'scatter'`），`side` 选择左轴（`'left'`）或右轴（`'right'`）。省略通道时使用构造 `DataPlotter` 时指定的 `channel_x` 和 `channel_y`。
 
 | `by` | 用途 | 图的键 | 默认尺寸（英寸） |
 | --- | --- | --- | --- |
@@ -101,7 +98,7 @@ plotter.plot(Layer(1, 2), by="sample")              # 每个样品一张：通�
 plotter.plot([Layer(0, 1, kind="scatter"), Layer(0, 3)], by="sample")   # 每个样品：实测点 + 拟合线
 ```
 
-一个样品画多个图层时，每张图只能有一个样品（`by='sample'`），曲线标签是各层的单位，图例标题是样品名。
+绘制多个图层时须使用 `by='sample'`。每条曲线的图例条目采用对应 Y 通道的列标题，图例标题默认使用样品名。
 
 `DataPlotter(figsize=(宽, 高), dpi=100)` 可统一指定图尺寸和绘图分辨率。`plotrange` 可限制每条曲线使用的数据点数。`plot()` 返回绘图器自身，绘图结果通过 `plotter.figures` 获取，每项是一个 `DrawnFigure`。例如，`by='all'` 的结果可通过 `plotter.figures["main"].fig` 获取。
 
@@ -144,6 +141,38 @@ plotter.plot(
 
 如需自定义颜色条，可在整图回调中读取 `axes['colorbar']`。Matplotlib 返回 `Colorbar` 对象，Plotly 返回布局中的轴名 `'coloraxis'`。
 
+图例按样品列出，不说明点的大小对应的数值。需要大小图例时可在整图回调中自行添加。以下为 Matplotlib 示例，按面积线性的规则由数值算出直径：
+
+```python
+import numpy as np
+from matplotlib.lines import Line2D
+
+lo, hi = 4, 16                                           # 与 ScatterMap 的 size_range 相同
+values = data.data[:, np.array(data.channel_idx) == 3]   # 大小通道的全部数据
+values = values[~np.isnan(values)]
+
+def size_legend(fig, axes):
+    if values.size == 0:                                 # 没有有效值时不添加大小图例
+        return
+    vmin, vmax = values.min(), values.max()
+    if vmin == vmax:                                     # 数值全部相同时，点取面积区间的中点
+        levels, diameters = [vmin], [np.sqrt((lo**2 + hi**2) / 2)]
+    else:                                                # 直径的平方随数值线性变化
+        levels = np.linspace(vmin, vmax, 3)
+        diameters = np.sqrt(lo**2 + (levels - vmin) / (vmax - vmin) * (hi**2 - lo**2))
+    ax = axes["left"]
+    samples = ax.get_legend()                            # 先取出样品图例，添加大小图例后再放回
+    handles = [Line2D([], [], linestyle="none", marker="o", markersize=d, color="gray", label=f"{v:.3g}")
+               for v, d in zip(levels, diameters)]
+    ax.legend(handles=handles, title="S(%)", loc="lower right")
+    if samples is not None:
+        ax.add_artist(samples)
+
+plotter.plot(Layer(1, 2, kind="scatter", mapping=ScatterMap(size=3)), figure_formatter=size_legend)
+```
+
+大小范围按实际画出的点计算。数据含有 X、Y 非有限值，或设置了 `plotrange` 时，`vmin`、`vmax` 应从画出的点中取得。
+
 ### 双 Y 轴和图例
 
 ```python
@@ -161,6 +190,36 @@ DataPlotter(data).plot(
 
 `legend_title` 中的 `{name}` 在分组独立绘制时替换为组名，每个样品一张图时替换为样品名；多线图和合并分组图会原样显示传入的文本。默认 `'auto'`：一个样品画多个图层（如双 Y 轴图）时使用样品名，否则不加标题；传入 `None` 可隐藏标题。
 
+### 柱状图
+
+`plot_bars()` 将数据排成一张表：X 轴上的类别是一维，每个类别中并排或堆叠的系列是另一维，系列显示在图例中。两维中恰有一维是通道，另一维是样品或分组。
+
+| `x` | `series` | 用途 |
+| --- | --- | --- |
+| `'sample'`（默认） | `'channel'`（默认） | 每个样品一组柱，比较该样品的各项指标 |
+| `'channel'` | `'sample'` | 每个通道一组柱，比较各样品 |
+| `'channel'` | `'group'` | 每个通道一组柱，比较各分组 |
+| `'group'` | `'channel'` | 每个分组一组柱，比较该分组的各项指标 |
+
+```python
+from plotlib import BarStyle, DataPlotter
+
+plotter = DataPlotter(data, groups=groups)
+plotter.plot_bars([1, 2], reduce="mean", errors="std")           # 柱高取各列均值，误差棒为多行之间的标准差
+plotter.plot_bars([1, 2], x="channel", series="group", reduce="max", errors="sem")
+plotter.plot_bars([1, 2], reduce="mean", mode="stack", styles={   # 黑白堆叠图，用纹理区分通道
+    1: BarStyle(color="white", edge_color="black", hatch="slash"),
+    2: BarStyle(color="white", edge_color="black", hatch="dot"),
+})
+```
+
+- `reduce` 将每格的多行数据汇总为柱高，可选值见 `DataTransformer.Reduce`。省略时每格至多一个有效值。涉及分组时，先汇总每个样品，再对组内各样品取均值。
+- `errors` 绘制对称误差棒。`'std'` 和 `'sem'` 在分组时以组内各样品的汇总值计算，按样品绘制时以同一列的多行数据计算，并要求 `reduce='mean'`。按样品绘制还可以用 `{值通道: 误差通道}` 指定误差来源。
+- `mode='stack'` 时正负值分别累加。叠加的通道应单位相同。
+- `styles` 传入一个 `BarStyle` 时作用于全部系列，传入 `{系列键: BarStyle}` 时逐个指定。键为样品号、通道号或组名。误差棒端帽长度 `capsize` 只能在这里设置。
+
+柱状图使用单个 Y 轴，绘图结果保存在 `figures["main"]`。若要在绘制过程中调整系列样式，可向 `plot_bars()` 传入 `formatters=AxesFormatter(bars=make_bar_formatter(...))`。Y 轴标题使用共用的通道列标题，列标题不一致时留空。
+
 ## 样式与格式化
 
 通过 `DataPlotter` 设置全局样式，通过格式化器更新图中指定坐标轴、曲线和图例。每层只覆盖明确提供的字段。样式优先级由低到高依次为库默认值、版式预设、`DataPlotter` 全局设置、分组样式和格式化器。
@@ -168,6 +227,9 @@ DataPlotter(data).plot(
 | 样式对象 | 主要字段 | 使用位置 |
 | --- | --- | --- |
 | `LineStyle` | `width`、`color`、`linestyle`、`marker`、`marker_size` | `DataPlotter(lines=...)` 和 `make_lines_formatter()`。全局颜色由样品配色决定，单组或单轴曲线颜色可单独配置 |
+| `ScatterStyle` | `color`、`marker`、`size`、`filled`、`edge_color`、`edge_width`、`alpha` | `make_scatter_formatter()` |
+| `BarStyle` | `color`、`edge_color`、`edge_width`、`hatch`、`error_color`、`error_width`、`capsize` | `plot_bars(styles=...)` 和 `make_bar_formatter()` |
+| `ColorbarStyle` | `cmap`、`limits`、`scale`、`title` | `plot(colorbar=...)` |
 | `AxisStyle` | `scale`、`limits`、`format`、`scaler`、`color` | `make_axes_formatter(x=..., y=...)` |
 | `FrameStyle` | `width`、`top`、`right` | `DataPlotter(frame=...)` 和 `make_axes_formatter(frame=...)` |
 | `LegendStyle` | `position`、`font_size`、`frame`、`draggable` | `DataPlotter(legend=...)` 和 `make_legend_formatter()` |
@@ -223,9 +285,35 @@ DataPlotter(data, ticks=TickStyle(length=8)).plot(
 
 `AxisStyle.limits` 使用数据坐标，`None` 表示该侧边界自动计算。对数轴的显式边界必须为正值。`AxisStyle.scaler` 只缩放 Matplotlib 的刻度显示值。
 
-格式化器按轴打包成 `AxesFormatter(axes=..., lines=..., scatter=..., legend=...)`，交给 `plot(formatters=...)`：只给一个时作用于左轴，`{"left": ..., "right": ...}` 分别给两侧。坐标轴格式化器在 Matplotlib 中接收 `(ax, fig)`，在 Plotly 中接收 `(轴名, fig)`，例如 `('yaxis2', fig)`。曲线和图例格式化器分别接收对象序列。通过工厂的 `custom` 参数传入的曲线或图例回调，会在样式应用后逐个接收原生对象。同类回调可用 `combine_formatters()` 按顺序组合。
+格式化器按轴打包成 `AxesFormatter(axes=..., lines=..., scatter=..., legend=...)`，交给 `plot(formatters=...)`：只给一个时作用于左轴，`{"left": ..., "right": ...}` 分别给两侧。柱状图用 `plot_bars(formatters=AxesFormatter(axes=..., bars=..., legend=...))`，只有左轴。坐标轴格式化器在 Matplotlib 中接收 `(ax, fig)`，在 Plotly 中接收 `(轴名, fig)`，例如 `('yaxis2', fig)`。曲线和图例格式化器分别接收对象序列。通过工厂的 `custom` 参数传入的曲线或图例回调，会在样式应用后逐个接收原生对象。同类回调可用 `combine_formatters()` 按顺序组合。
 
 `figure_formatter(fig, axes)` 在各轴回调之后执行。`axes` 按 `'left'` 和 `'right'` 索引，值为 Matplotlib 的轴对象或 Plotly 的轴名。
+
+### 轴线过原点（蝴蝶图）
+
+蝴蝶曲线等数据跨越四个象限时，可在坐标轴回调中用原生代码移动轴线。
+
+```python
+from plotlib import AxesFormatter, DataPlotter, make_axes_formatter
+
+def origin_axes(ax, fig):            # Matplotlib：轴线移到原点，刻度随之移动
+    for side in ("left", "bottom"):
+        ax.spines[side].set_position("zero")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.xaxis.set_label_coords(0.5, -0.08)       # 坐标轴标题留在图框外侧，不随轴线移动
+    ax.yaxis.set_label_coords(-0.1, 0.5)
+
+def zero_lines(axis, fig):           # Plotly：零线划分四象限，刻度留在外框
+    fig.update_xaxes(zeroline=True, zerolinecolor="black", zerolinewidth=1.5)
+    fig.update_yaxes(zeroline=True, zerolinecolor="black", zerolinewidth=1.5)
+
+DataPlotter(data).plot(formatters=AxesFormatter(axes=make_axes_formatter(custom=[origin_axes])))
+DataPlotter(data, backend="plotly").plot(
+    formatters=AxesFormatter(axes=make_axes_formatter(custom=[zero_lines], backend="plotly")),
+)
+```
+
+Plotly 不能把轴线固定在某个数据值上，示例改用零线。零线在缩放和平移时跟随数据。
 
 ## Plotly 交互图与 HTML 导出
 
@@ -306,7 +394,7 @@ plotter.plot([Layer(0, 2), Layer(3, 4, side="right")], by="sample")
 plt.show()
 ```
 
-更多用法见 [实验脚本](scripts/)。
+更多用法见 [实验脚本](scripts/)。直接运行脚本（如 `python scripts/eis_bode.py`）时弹窗选择数据文件；在代码中可调用 `main(path, show=False)` 指定文件并且不显示图窗。
 
 ## 项目结构
 

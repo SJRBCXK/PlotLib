@@ -484,7 +484,10 @@ def test_one_side_limit_autoscales_other_side():
 
 
 def test_minor_ticks_keep_scale_locator():
-    """matplotlib：开次刻度时 logit、symlog 轴用各自的次刻度定位器，不换成线性细分。"""
+    """
+    matplotlib：开次刻度时 logit、symlog 轴保留 ``set_xscale`` 装好的原生次刻度定位器，不换成线性细分。
+    （库不改动这类轴的定位器，不借用 matplotlib 的私有接口取刻度类型的默认定位器。）
+    """
     from matplotlib.ticker import LogitLocator, SymmetricalLogLocator
 
     from plotlib.backends.matplotlib_styles import apply_minor

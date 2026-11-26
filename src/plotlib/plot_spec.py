@@ -14,8 +14,8 @@ import numpy as np
 
 type CurveKind = Literal['line', 'scatter']      # 一个图层的画法
 type Axis = Literal['left', 'right']
-type Members = Literal['all', 'group', 'sample']     # DataPlotter.plot 的 by：哪些样品进哪张图
-type BarDimension = Literal['sample', 'group', 'channel']  # 柱状图的类别（x）和系列各取哪一维
+type Members = Literal['all', 'group', 'sample']     # DataPlotter.plot 的分图方式
+type BarDimension = Literal['sample', 'group', 'channel']  # 柱状图的类别维度和系列维度
 type BarMode = Literal['group', 'stack']        # 并排、堆叠
 type Layout = Literal['multiline', 'xy', 'dual_y', 'bars']
 type ColorScale = Literal['linear', 'log']      # 颜色条的刻度类型
@@ -74,7 +74,7 @@ class LineStyle(StyleLayer):
         线宽（磅）。
     color : str or tuple of int, optional
         颜色：CSS 颜色名（如 ``'red'``）、``'#rrggbb'``，或三个 0~255 的整数 ``(r, g, b)``。
-        ``DataPlotter(lines=...)`` 不收颜色，颜色按样品配色。
+        ``DataPlotter(lines=...)`` 的颜色由样品配色确定。
     linestyle : str or tuple of float, optional
         ``'solid'``、``'dash'``、``'dot'``、``'dashdot'``，或自定义虚线
         ``(实线长, 空白长, ...)`` （正数、偶数个，单位是线宽的倍数）。
@@ -192,7 +192,7 @@ class BarStyle(StyleLayer):
     hatch: str | None = None                # 纹理词；'none' 清除
     error_color: str | tuple | None = None  # 误差棒颜色
     error_width: float | None = None        # 误差棒线宽（磅）
-    capsize: float | None = None            # 端帽长度（磅），可以为 0
+    capsize: float | None = None            # 端帽半长（磅），可以为 0
 
 
 @dataclass(frozen=True)
@@ -236,7 +236,7 @@ class ColorbarStyle(StyleLayer):
     cmap: str | None = None                                 # 色带词名
     limits: tuple[float | None, float | None] | None = None     # (下, 上)，None 端自动
     scale: ColorScale | None = None                         # 'linear' | 'log'
-    title: str | None = None                                # 不写用颜色通道的列标题；'' 不加
+    title: str | None = None                                # None 使用颜色通道的列标题，'' 隐藏标题
 
 
 type AxisScale = Literal['linear', 'log', 'symlog', 'logit']    # 'symlog'、'logit' 只有 matplotlib
@@ -355,7 +355,7 @@ class TickStyle(StyleLayer):
     length, width : float, optional
         主刻度的长度和宽度。
     minor : bool, optional
-        是否显示次刻度。
+        是否显示次刻度。Matplotlib 的 ``'symlog'`` 和 ``'logit'`` 轴在关闭次刻度后，可重新设置轴类型以恢复原生定位器。
     minor_length, minor_width : float, optional
         次刻度的长度和宽度。
     label_font : str, optional
@@ -395,9 +395,9 @@ class TickStyle(StyleLayer):
 
 # 库默认值（最底下一层）
 DEFAULT_LINES = LineStyle(width=3, linestyle='solid', marker_size=6)
-# 散点的库默认：大小、描边都明确写出，画的时候总是带上，所以不受全局折线样式（matplotlib 的 rc、Plotly 模板）影响
+# 显式设置散点的尺寸和描边，使其独立于后端的全局折线样式。
 DEFAULT_SCATTER = ScatterStyle(marker='circle', size=6, filled=True, edge_width=1)
-# 柱状图的库默认：没有描边（描边色仍写黑，纹理跟随它，两个后端一致）、没有纹理、黑色误差棒、不画端帽
+# 默认隐藏描边、纹理和端帽。描边颜色为黑色，供启用纹理时使用。误差棒为黑色。
 DEFAULT_BARS = BarStyle(edge_color='black', edge_width=0, hatch='none',
                         error_color='black', error_width=2, capsize=0)
 DEFAULT_COLORBAR = ColorbarStyle(cmap='viridis', scale='linear')
@@ -500,7 +500,7 @@ class BarSpec(CurveBase):
     categories : list of str
         各类别的刻度文字（样品名、组名或通道列标题），同一张图的各系列相同。
     heights : numpy.ndarray
-        每个类别的柱高（汇总后的显示值）；NaN 表示缺数据，保留位置不画。
+        每个类别的汇总柱高。NaN 表示缺失，保留位置并省略柱形。
     errors : numpy.ndarray or None, default: None
         每根柱的对称误差；NaN 表示这根柱没有误差棒。None 表示这个系列不画误差棒。
     caps : bool, default: True
@@ -510,7 +510,7 @@ class BarSpec(CurveBase):
     mode : {'group', 'stack'}
         并排或堆叠。
     width : float
-        一个类别里全部柱子占间距的比例。
+        单个类别的总柱宽占类别间距的比例。
     style : BarStyle, default: BarStyle()
         由分组配置和 ``styles`` 合并得到的系列样式。未指定的字段为 ``None``。
     """
@@ -526,7 +526,7 @@ class BarSpec(CurveBase):
     style: BarStyle = field(default_factory=BarStyle)
 
 
-# 计划里能出现的曲线（按画法列举；加新画法时在这里加上它的 spec 类型）
+# 绘图计划支持的绘图对象类型。
 type Curve = LineSpec | ScatterSpec | BarSpec
 
 
@@ -623,7 +623,7 @@ class FigureSpec:
         曲线列表（柱状图是各个系列），按绘制顺序排列（``DrawnFigure.artists`` 与它一一对应）。图例顺序：Plotly 与此相同；
         matplotlib 的图例先列左轴的曲线、再列右轴的，左右图层交错时与绘制顺序不同。
     x_unit, y_unit : str
-        X 轴、左 Y 轴的标题（通道单位）。同一通道的单位在各样品间一致，所以属于图而不属于线。
+        X 轴和左 Y 轴的标题，通常来自通道的列标题。
     y2_unit : str or None, default: None
         右 Y 轴的标题；只有双 Y 轴图有。
     neglog : frozenset of str, default: frozenset()
@@ -642,7 +642,7 @@ class FigureSpec:
     """
     key: str | int              # 分组名或 'main'；xy、双 Y 轴图是样品号
     curves: list[Curve]
-    x_unit: str                 # 轴标题：同一通道的单位在各样品间一致，所以属于图，不属于线
+    x_unit: str                 # X 轴标题
     y_unit: str
     y2_unit: str | None = None  # 右轴单位；只有双 Y 轴图有
     neglog: frozenset[str] = frozenset()    # 哪些轴的刻度补负号：'x'、'y'、'x2'（上轴，拼图时用）、'y2'

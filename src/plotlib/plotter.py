@@ -263,7 +263,7 @@ class DataPlotter:
             ``'single'``：每档只显示当前页；``'cumulative'``：每档显示第一页到当前页。
         slider_formatter : callable, optional
             ``slider_formatter(slider)``，接收安装好的滑块并原地修改，在默认外观之后执行。
-            当前值默认不加前缀，要加可以在这里设。
+            当前值默认无前缀。
 
         Returns
         -------
@@ -328,7 +328,7 @@ class DataPlotter:
             ``by='group'`` 时：False 每个分组一张图，True 所有分组合并到一张图（重复样品只画一次）。
         formatters : AxesFormatter or dict, optional
             按轴的回调。一个 `~plotlib.plot_spec.AxesFormatter` 作用于左轴；
-            ``{'left': AxesFormatter(...), 'right': AxesFormatter(...)}`` 分别给两侧。
+            可用 ``{'left': AxesFormatter(...), 'right': AxesFormatter(...)}`` 分别配置左右轴。
             回调签名见类说明。左右两侧共享 X 轴，任一侧的坐标轴回调都可调整该轴。
             画图前检查：轴名只能是 ``'left'``、``'right'``，没有右侧图层时不能给 ``'right'``，图例回调只能放在左侧。
         figure_formatter : callable, optional
@@ -357,7 +357,8 @@ class DataPlotter:
 
         Notes
         -----
-        默认尺寸按 *by*：``'all'`` (10, 8)，``'group'`` (16, 12)，``'sample'`` (12, 8)；构造时给了 *figsize* 就都用它。
+        ``'all'``、``'group'`` 和 ``'sample'`` 的默认尺寸分别为 (10, 8)、(16, 12) 和 (12, 8) 英寸。
+        构造时指定 *figsize* 可覆盖默认尺寸。
         版式按图层和 *by*：有右侧图层用双 Y 轴版式（左红右蓝），``'sample'`` 用单图版式，其余用多线版式。
 
         Examples
@@ -388,7 +389,7 @@ class DataPlotter:
             layers = [Layer()]
         elif isinstance(layers, Layer):
             layers = [layers]
-        # 没写通道的图层补成构造时的通道
+        # 图层未指定的通道沿用构造参数。
         layers = [replace(layer, x=self.channel_x if layer.x is None else layer.x,
                           y=self.channel_y if layer.y is None else layer.y) for layer in layers]
         specs = plan_figures(self.dataset, self.groups if by == 'group' else None, layers, by=by,
@@ -426,8 +427,8 @@ class DataPlotter:
         channels : int or list of int, optional
             按指定顺序绘制的通道号，须互不重复。省略时使用构造时的 *channel_y*。
         x, series : {'sample', 'group', 'channel'}, default: 'sample', 'channel'
-            类别（X 轴）和系列（图例）各取哪一维。``'sample'`` 画全部样品（按样品号排序），不看分组；
-            ``'group'`` 按 ``self.groups`` 的分组（没有分组时报错）。
+            类别（X 轴）和系列（图例）使用的维度。``'sample'`` 使用全部样品，按样品号排序。
+            ``'group'`` 使用 ``self.groups`` 中的分组，缺少分组时引发 ``ValueError``。
         reduce : str, callable or None, default: None
             每列跨行汇总为柱高的方法，取值见 `~plotlib.processor.DataTransformer.Reduce`。
             ``None`` 要求每格至多有一个有效值。分组时先汇总各样品，再对组内结果取均值。
@@ -446,8 +447,8 @@ class DataPlotter:
             一个 `~plotlib.plot_spec.BarStyle` 用于全部系列；``{系列键: BarStyle}`` 逐个系列指定，优先于分组配置的
             ``color``、``hatch``。请通过此参数配置误差棒端帽半长 ``capsize``，Matplotlib 在绘制时创建端帽。
         formatters : AxesFormatter or dict, optional
-            回调，只有左轴：``AxesFormatter(axes=..., bars=..., legend=...)``；``bars`` 收各个系列
-            （matplotlib 是 ``BarContainer``，Plotly 是 trace）。写了 ``lines``、``scatter`` 或 ``'right'`` 时报错。
+            仅支持左轴回调 ``AxesFormatter(axes=..., bars=..., legend=...)``。``bars`` 接收各系列对应的绘图对象，
+            即 Matplotlib 的 ``BarContainer`` 或 Plotly 的 trace。配置 ``lines``、``scatter`` 或 ``'right'`` 会引发 ``ValueError``。
         figure_formatter : callable, optional
             整图回调 ``figure_formatter(fig, axes)``，在各轴回调之后调用一次（如添加第二套图例）。
         legend_title : str or None, default: 'auto'
@@ -467,10 +468,10 @@ class DataPlotter:
 
         Notes
         -----
-        - **颜色**：系列是样品 → 样品色；是分组 → 分组写的颜色，没写用组首样品色；是通道 → 按在 *channels* 里的名次取色带。
-        - **Y 轴标题**：一个通道是它的列标题；多个通道只在列标题完全相同时沿用，否则留空，需要时用坐标轴回调写明。
-        - **缺数据**：某格全是 NaN 时保留位置、不画。
-        - 默认尺寸 (10, 8)；不支持滑块。
+        - 样品系列使用样品色。分组系列使用配置中的颜色，省略时采用组内首个样品的颜色。通道系列按 *channels* 的顺序从色带取色。
+        - Y 轴标题取自单个通道的列标题，或多个通道共用的列标题。标题不一致时留空，可通过轴回调另行设置。
+        - 数据全为 NaN 的位置保留柱位，并省略柱形。
+        - 默认图尺寸为 (10, 8) 英寸。柱状图不支持滑块。
 
         Examples
         --------

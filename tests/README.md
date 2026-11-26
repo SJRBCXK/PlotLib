@@ -3,7 +3,7 @@
 这份文档告诉你**测试保证了什么**，不用逐行读测试代码。
 想看某条行为具体怎么测的，再按测试名去对应文件里找。
 
-当前状态：**564 个全部通过**（2026-11-20，1.0.0，含 1.0 发布前复审的回归）。曾记录的 bug 已全部修复（见文末「已修复的 bug」）。
+当前状态：**621 个全部通过**（2026-11-26，含柱状图、散点映射和实验脚本的冒烟测试）。曾记录的 bug 已全部修复（见文末「已修复的 bug」）。
 
 > 覆盖率高 ≠ 测得好。一次外部审查发现：有测试只检查了对象类型、只检查了各样品都相同的单位，
 > 或者两侧用了同一列数据，这样即使代码选错了、画错了也照样通过。
@@ -28,7 +28,7 @@
 VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 🔄 刷新。
 
 配置在 `pyproject.toml` 的 `[tool.pytest.ini_options]`。
-依赖：`pip install -e ".[test]"`（pytest、pytest-cov、plotly、kaleido）。
+依赖：`pip install -e ".[test]"`（pytest、pytest-cov、plotly、scipy、kaleido）。
 渲染测试（标记 `render`）还需要本机装有 Chrome；Qt 工具的测试需要另装 `".[gui]"`（PySide6），没装时自动跳过。
 
 结果里如果出现 `x`，是标了 `xfail` 的「已知会失败」测试，不算失败（目前没有）。
@@ -55,6 +55,7 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 | `test_docs_sync.py` | `docs/api/sync_api.py` | API 文档同步：reference.rst 登记齐全；新名字放进同模块分节（导出的优先）或「其他」节；版本号来自 pyproject.toml |
 | `test_backend_parity.py` | `DataPlotter` 换 `backend` 对照 | 两个后端的分组参数约定相同；同一个 `Group` 画出的图和曲线一致（五种画法） |
 | `test_html_export.py` | `src/plotlib/html_export.py` | 导出页面的画框尺寸、侧边面板位置、占位符全部填写、不修改 Figure |
+| `test_scripts.py` | `scripts/` 下的 6 个实验脚本 | 每个脚本用列标题相符的小数据跑完 `main(path, show=False)`，图的数量对、不关调用方的图窗；导入不画图；Bode 全部无峰时跳过峰图并提示，多峰时柱状图与汇总图用同一个峰；交互图脚本把页面写到指定位置 |
 | `test_data_reorder_app.py` | `tools/data_reorder_app.py`（Tk 版） | 直接改序号插入并保留勾选、非法输入不移动、取消与失焦；没有显示环境时跳过 |
 | `test_data_reorder_qt.py` | `tools/data_reorder_qt.py`（Qt 版） | 插入与勾选保留、中点吸附、改序号、鼠标拖动；没装 PySide6 时跳过 |
 | `test_groups_code.py` | 两个重排工具生成的 groups 代码 | 生成的代码能执行且被 `Group` 接受；线型是标准写法（前 4 组 solid / dash / dashdot / dot，之后自定义虚线）；两个工具的序数词组名一致（1st、2nd、11th、21st…） |
@@ -267,7 +268,8 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 双 Y 轴图例（2026-11-20，参照 Origin 图，**渲染后**断言）：左右两条线都在（红、蓝），写各自的单位，标题是样品名；
   在绘图区上方、右边对齐、不超出画布；右轴 `lines_formatter` 改色后图例跟着变，左轴 `legend_formatter` 设的字号和标题不被重建冲掉
 - 刻度格式：多线图 y 两位小数（x 不写格式，常改成对数轴）；xy 的 y、双 Y 轴的右轴四位小数
-- 边距：多线图右 0.75、xy 左 0.15、双 Y 轴右 0.85、上 0.85（给图例让位）
+- 边距：多线图左 0.18、右 0.75，xy 左 0.18，双 Y 轴右 0.85、上 0.85（给图例让位）
+- 默认字号下 Y 刻度文字是 `8000.00`、`8000.0000`、`-800.00` 时，渲染后多线图和 xy 的 Y 轴标题不被左边裁掉
 - 双 Y 轴：左轴（标题、刻度文字、轴线）和左线红，右轴和右线蓝（计划里不写颜色，由预设给）
 - 边框（样式对象化，2026-11-20）：多线、xy 默认无框；双 Y 轴完整的框，右边是右轴自己的蓝色轴线，右轴的左边不画（不盖住左轴的红线）
 - 全局样式盖过预设：`DataPlotter(frame=FrameStyle(top=True), legend=LegendStyle(position='upper left'))` 照全局画，没写的（拖动）仍用预设
@@ -378,6 +380,17 @@ VS Code：侧边栏烧杯图标 → 顶部 ▶ 跑全部；列表不全时点 �
 - 有侧边面板：画框宽 = 图宽 + 间距 + 面板宽；面板位于图之后、画框之内；网页标题经过 HTML 转义
 - 模板占位符全部填写，不残留 `$...`；用户传入的 `config` 会合并进去，且保留 `responsive: false`
 - 写文件不修改传入的 Figure；与 Plotly 后端配合时（多线图默认 1000 × 800）画框为 1324 × 800
+
+### 实验脚本 — `test_scripts.py`
+- 脚本的入口是 `main(path=None, show=True)`：直接运行时弹窗选文件、最后 `plt.show()`；测试传文件路径和 `show=False`，不弹窗、不阻塞
+  （Agg 后端的 `plt.show()` 不阻塞，但会警告「不能显示」，所以不调用）
+- 一条测试循环 7 个场景：`rows()` 按列标题造数据（第 0 列各样品相同，其余列按样品号放大、都是正值），列标题与脚本里 `select(...)` 用到的一致；
+  样品数覆盖分组用到的最大样品号（EIS 18 个、压电 10 个）
+- 图的数量按样品数、分组数手算（压电 49、Nyquist 56、Bode 有峰 14 / 全部无峰 12 并打印提示、拉伸 3、`select_demo` 0）
+- 调用前先开一张名为 `'caller'` 的图，`main()` 之后它还在（按名字查：图号关掉后会被新图重用）
+- Bode 两个峰、第一个峰那一行缺频率：柱状图的 tan δ 是第一个峰的值，频率柱不画（不能拼上第二个峰的频率）
+- `piezo_interactive` 不开 matplotlib 图，页面写到 `main(path, output=...)` 指定的位置
+- 需要 scipy（`eis_bode` 寻峰，`test` 依赖已含 `plotlib[analysis]`）和 plotly；压电脚本一次开约 50 张图，测试里关掉 20 张的提醒
 
 ## 已修复的 bug
 

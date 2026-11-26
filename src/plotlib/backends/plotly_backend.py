@@ -197,7 +197,7 @@ class PlotlyBackend:
         return [DrawnFigure(spec=spec, fig=fig, axes=shown, artists=page_artists)
                 for spec, page_artists in zip(specs, pages)]
 
-    # 颜色条要让开的东西，Plotly 渲染前量不出文字宽度，只能按字号估算：
+    # 渲染前按字号估算右轴和图外图例所占的宽度。
     # 右轴 =「刻度文字 N 个字符 + 一行轴标题（1.5 倍字号）」+ 刻度线和间隙；图外图例 = 最长一行文字 + 图例符号和边距
     _COLORBAR_XPAD = 10             # Plotly 颜色条的默认 xpad（像素）
     _RIGHT_AXIS_CHARS = 6
@@ -254,7 +254,7 @@ class PlotlyBackend:
                 trace = go.Scatter(x=curve.x, y=curve.y, name=curve.label, mode=mode,
                                    line=dict(color=color), marker=dict(color=color), **placement, **native)
             case ScatterSpec():
-                # 先套库默认（大小、描边都写明），模板里的折线样式就漏不到散点上
+                # 显式应用散点默认样式，避免继承模板中的折线样式。
                 style = DEFAULT_SCATTER.updated(replace(curve.style, color=None))
                 mapped = curve.colors is not None and colorbar is not None
                 color = None if mapped else self._curve_color(curve, preset)
@@ -328,7 +328,7 @@ class PlotlyBackend:
                 x=list(range(len(bar.heights))), y=bottoms[id(bar)] + np.asarray(bar.heights, dtype=float),
                 mode='markers', marker=dict(opacity=0), name=bar.label, showlegend=False, hoverinfo='skip',
                 error_y=dict(type='data', array=bar.errors, visible=True, **error_y)))
-            trace._plotlib_errors = fig.data[-1]        # add_trace 会复制，记 Figure 里那一个
+            trace._plotlib_errors = fig.data[-1]        # add_trace 会复制对象，保留图中副本的引用。
 
     # ========================================================================
     # 曲线颜色和样式
@@ -405,7 +405,7 @@ class PlotlyBackend:
         """
         执行坐标轴、线条和散点回调，再执行整图图例回调。
 
-        线条回调只收这根轴上的折线 trace，散点回调只收散点 trace，两者互不干扰。
+        折线和散点回调分别接收当前轴上对应类型的 trace。
         Plotly 会随轨迹样式更新图例。图例回调通过左轴处理。
 
         Raises
@@ -571,7 +571,7 @@ class PlotlyBackend:
         Notes
         -----
         档位标签是每页的名字（``FigureSpec.name``，组名或样品名），没有名字时用 key。
-        翻页时标题和图例标题换成这一页的。组名、样品名都可能出现，所以当前值默认不加前缀。
+        翻页时使用当前页的图标题和图例标题。档位标签可为组名或样品名，默认无前缀。
         """
         fig = cast(go.Figure, pages[0].fig)
         steps = []

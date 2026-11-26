@@ -20,8 +20,6 @@ from plotlib.formatters import make_axes_formatter, make_legend_formatter, make_
 from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer, LegendStyle, ScatterStyle
 from plotlib.group import Group
 
-plt.close('all')
-
 # ============================================================
 # 数据配置常量
 # ============================================================
@@ -85,76 +83,19 @@ def Group_lines_formatter(lines):
 
 
 # ============================================================
-# 数据加载
-# ============================================================
-data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
-groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图和计算都用它
-
-# ============================================================
-# 数据处理
-# ============================================================
-
-
-
-
-
-# ============================================================
-# 绘图配置
-# ============================================================
-
-Bode_Plotter_TanDelta = DataPlotter(
-    dataset=data,
-    channel_x=dataRowNum_unit1,
-    channel_y=dataRowNum_unit8
-).plot(formatters=AxesFormatter(axes=Bode_Delta_formatter))
-
-Bode_Plotter_TanDelta_group = DataPlotter(
-    dataset=data,
-    channel_x=dataRowNum_unit1,
-    channel_y=dataRowNum_unit8,
-    groups=groups
-).plot(by='group', formatters=AxesFormatter(axes=Bode_Delta_formatter, lines=Group_lines_formatter))
-
-
-
-
-# ============================================================
 # 使用 Group.apply() 按组计算
 # ============================================================
 
 
 def rev_camp(*slices):
+    """
+    组内第二个样品除以第一个样品（电导率实部、虚部），频率取第一个样品的。
+    按行配对：要求组内各样品的频率点相同、按行对齐，否则相除的不是同一频率。
+    """
     camp = slices[1].data[:,:2] / slices[0].data[:,:2]
     freq = slices[0].data[:,2].reshape(-1, 1)  # 假设频率在第三列
     camp_with_freq = np.hstack((camp, freq))
     return camp_with_freq
-
-
-
-RevCampdata_v2 = groups.apply(
-    rev_camp,
-    select=("Conductivity'(S/cm)", "Conductivity''(S/cm)", "Frequency(Hz)"),
-)
-
-RevCampdata_v2_pltsubsyy = DataPlotter(
-    dataset=RevCampdata_v2,
-    channel_x=2,
-    channel_y=1,
-).plot(formatters=AxesFormatter(axes=NegLog_formatter))
-
-
-
-Selected_data = DPL(dataset=data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data
-Conductivity = DataSet()
-for dataslice in Selected_data:
-    conductivity_slice = DT(dataslice).Norm(extended=False,norm_unit='|C|(S/cm)')
-    Conductivity.expandata(conductivity_slice)
-data = data.expandata(Conductivity).sort_columns()
-Conductivity_pltliner1 = DataPlotter(
-    dataset=data,
-    channel_x = 0,
-    channel_y = 9
-).plot(formatters=AxesFormatter(axes=NegLog_formatter))
 
 
 
@@ -164,75 +105,151 @@ def f_peak(data):
     result_tan_values = data[result_data_indice,0].ravel()
     result_freq_values = data[result_data_indice,1].ravel()
     result_data = np.vstack((result_tan_values, result_freq_values)).T
-    
+
     return  result_data
 
 
-Selected_data = DPL(dataset=data).select("Tan(Delta)","Frequency(Hz)").Selected_data
-f_delta_peak = DataSet()
-for dataslice in Selected_data:
-    # 结果的名字用原样品名、单位写明两个计算结果（柱状图的图例就是这两个单位）；
-    # 不写时自动命名为 Results_0_of_样品名、unitless_0 / unitless_1
-    f_delta_peak_slice = DT(dataslice).apply(
-        func=f_peak,
-        extended=False,
-        naming_func=lambda: {'names': [dataslice.names[0]] * 2, 'units': ['Peak tan δ', 'Peak frequency (Hz)']},
+def main(path=None, show=True):
+    """读取数据并绘制全部图表。*path* 为 None 时弹窗选文件；*show* 为 False 时不调用 ``plt.show()``。"""
+    # ============================================================
+    # 数据加载
+    # ============================================================
+    data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data(path)
+    groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图和计算都用它
+
+    # ============================================================
+    # 数据处理
+    # ============================================================
+
+
+
+
+
+    # ============================================================
+    # 绘图配置
+    # ============================================================
+
+    Bode_Plotter_TanDelta = DataPlotter(
+        dataset=data,
+        channel_x=dataRowNum_unit1,
+        channel_y=dataRowNum_unit8
+    ).plot(formatters=AxesFormatter(axes=Bode_Delta_formatter))
+
+    Bode_Plotter_TanDelta_group = DataPlotter(
+        dataset=data,
+        channel_x=dataRowNum_unit1,
+        channel_y=dataRowNum_unit8,
+        groups=groups
+    ).plot(by='group', formatters=AxesFormatter(axes=Bode_Delta_formatter, lines=Group_lines_formatter))
+
+
+
+
+    RevCampdata_v2 = groups.apply(
+        rev_camp,
+        select=("Conductivity'(S/cm)", "Conductivity''(S/cm)", "Frequency(Hz)"),
     )
-    f_delta_peak.expandata(f_delta_peak_slice)
 
-# 汇总图每行对应一个原始样品，保留按输入行顺序检出的第一个峰。
-peak_sample_names = f_delta_peak.names[::2]
-peak_sample_positions = np.arange(len(peak_sample_names))
-first_peaks = f_delta_peak.data[0].reshape(-1, 2)
-peak_summary = DataSet().form_array(
-    data=np.column_stack((peak_sample_positions, first_peaks)),
-    name=['Loss peaks'] * 3,
-    unit=['', 'Peak tan δ', 'Peak frequency (Hz)'],
-    sample_idx=0,
-    repeat_times=3,
-)
+    RevCampdata_v2_pltsubsyy = DataPlotter(
+        dataset=RevCampdata_v2,
+        channel_x=2,
+        channel_y=1,
+    ).plot(formatters=AxesFormatter(axes=NegLog_formatter))
 
 
-def format_peak_summary(fig, axes):
-    """在共享 X 轴上显示样品标签。"""
-    axes['left'].set_xticks(peak_sample_positions, peak_sample_names, fontsize=11, rotation=45, ha='right')
-    fig.tight_layout()
+
+    Selected_data = DPL(dataset=data).select("Conductivity'(S/cm)", "Conductivity''(S/cm)").Selected_data
+    Conductivity = DataSet()
+    for dataslice in Selected_data:
+        conductivity_slice = DT(dataslice).Norm(extended=False,norm_unit='|C|(S/cm)')
+        Conductivity.expandata(conductivity_slice)
+    data = data.expandata(Conductivity).sort_columns()
+    Conductivity_pltliner1 = DataPlotter(
+        dataset=data,
+        channel_x = 0,
+        channel_y = 9
+    ).plot(formatters=AxesFormatter(axes=NegLog_formatter))
 
 
-peak_plotter = DataPlotter(peak_summary).plot(
-    [Layer(0, 1, kind='scatter'), Layer(0, 2, kind='scatter', side='right')],
-    by='sample',
-    formatters={
-        'left': AxesFormatter(scatter=make_scatter_formatter(ScatterStyle(marker='circle', size=10))),
-        'right': AxesFormatter(axes=make_axes_formatter(y=AxisStyle(scale='log')),
-                               scatter=make_scatter_formatter(ScatterStyle(marker='x', size=10))),
-    },
-    figure_formatter=format_peak_summary,
-    legend_title=None,
-)
 
 
-# 同一份损耗峰汇总的柱状图模式：每个样品一组柱，两个计算结果（峰值 tan δ、峰频率）各一根，图例是两者的单位。
-# 一个样品可能检出多个峰，reduce='first' 取按行顺序的第一个（与上面的汇总图一致）。
-# 两者量级相差很大（tan δ 约 0.1，频率 1e3～1e6），Y 轴用对数，矮的那组柱才看得见；单位不同，Y 轴标题自动留空。
-def rotate_sample_labels(fig, axes):
-    """样品名较长：X 轴刻度文字斜放，再收紧边距。"""
-    ax = axes['left']
-    ax.tick_params(axis='x', labelrotation=45, labelsize=11)
-    for label in ax.get_xticklabels():
-        label.set_horizontalalignment('right')
-    fig.tight_layout()
+    Selected_data = DPL(dataset=data).select("Tan(Delta)","Frequency(Hz)").Selected_data
+    f_delta_peak = DataSet()
+    for dataslice in Selected_data:
+        # 结果的名字用原样品名、单位写明两个计算结果（柱状图的图例就是这两个单位）；
+        # 不写时自动命名为 Results_0_of_样品名、unitless_0 / unitless_1
+        f_delta_peak_slice = DT(dataslice).apply(
+            func=f_peak,
+            extended=False,
+            naming_func=lambda: {'names': [dataslice.names[0]] * 2, 'units': ['Peak tan δ', 'Peak frequency (Hz)']},
+        )
+        f_delta_peak.expandata(f_delta_peak_slice)
+
+    # 全部样品都没有检出峰时，下面的汇总图和柱状图没有数据可画。
+    if not np.isfinite(f_delta_peak.data).any():
+        print("没有检出损耗峰：跳过损耗峰汇总图和柱状图")
+        if show:
+            plt.show()
+        return
+
+    # 汇总图每行对应一个原始样品，保留按输入行顺序检出的第一个峰。
+    peak_sample_names = f_delta_peak.names[::2]
+    peak_sample_positions = np.arange(len(peak_sample_names))
+    first_peaks = f_delta_peak.data[0].reshape(-1, 2)
+    peak_summary = DataSet().form_array(
+        data=np.column_stack((peak_sample_positions, first_peaks)),
+        name=['Loss peaks'] * 3,
+        unit=['', 'Peak tan δ', 'Peak frequency (Hz)'],
+        sample_idx=0,
+        repeat_times=3,
+    )
 
 
-peak_bars = DataPlotter(f_delta_peak).plot_bars(
-    [0, 1],
-    reduce='first',
-    formatters=AxesFormatter(
-        axes=make_axes_formatter(y=AxisStyle(scale='log')),
-        legend=make_legend_formatter(LegendStyle(position='best')),     # 默认右上角会压住最高的柱
-    ),
-    figure_formatter=rotate_sample_labels,
-)
+    def format_peak_summary(fig, axes):
+        """在共享 X 轴上显示样品标签。"""
+        axes['left'].set_xticks(peak_sample_positions, peak_sample_names, fontsize=11, rotation=45, ha='right')
+        fig.tight_layout()
 
 
-plt.show()
+    peak_plotter = DataPlotter(peak_summary).plot(
+        [Layer(0, 1, kind='scatter'), Layer(0, 2, kind='scatter', side='right')],
+        by='sample',
+        formatters={
+            'left': AxesFormatter(scatter=make_scatter_formatter(ScatterStyle(marker='circle', size=10))),
+            'right': AxesFormatter(axes=make_axes_formatter(y=AxisStyle(scale='log')),
+                                   scatter=make_scatter_formatter(ScatterStyle(marker='x', size=10))),
+        },
+        figure_formatter=format_peak_summary,
+        legend_title=None,
+    )
+
+
+    # 同一份损耗峰汇总的柱状图模式：每个样品一组柱，两个计算结果（峰值 tan δ、峰频率）各一根，图例是两者的单位。
+    # 一个样品可能检出多个峰：plotrange=1 只取第一行，即按行顺序的第一个峰，与上面的汇总图用同一行。
+    # 不用 reduce='first'：它逐列取第一个有效值，第一个峰缺频率时会拿第二个峰的频率，和第一个峰的 tan δ 拼在一起。
+    # 两者量级相差很大（tan δ 约 0.1，频率 1e3～1e6），Y 轴用对数，矮的那组柱才看得见；单位不同，Y 轴标题自动留空。
+    def rotate_sample_labels(fig, axes):
+        """样品名较长：X 轴刻度文字斜放，再收紧边距。"""
+        ax = axes['left']
+        ax.tick_params(axis='x', labelrotation=45, labelsize=11)
+        for label in ax.get_xticklabels():
+            label.set_horizontalalignment('right')
+        fig.tight_layout()
+
+
+    peak_bars = DataPlotter(f_delta_peak, plotrange=1).plot_bars(
+        [0, 1],
+        formatters=AxesFormatter(
+            axes=make_axes_formatter(y=AxisStyle(scale='log')),
+            legend=make_legend_formatter(LegendStyle(position='best')),     # 默认右上角会压住最高的柱
+        ),
+        figure_formatter=rotate_sample_labels,
+    )
+
+    if show:
+        plt.show()
+
+
+if __name__ == "__main__":
+    plt.close('all')        # 只在直接运行时清掉旧图窗；被其他代码调用时保留调用方的图窗
+    main()

@@ -262,7 +262,7 @@ class DataProcessLayer:
         Raises
         ------
         ValueError
-            按名字没找到任何列，或两种写法都没给；或没给 *father_dataset*。
+            未提供有效的选列条件、按名称选列时无匹配项，或未提供 *father_dataset*。
         IndexError
             *varlist_idx* 里有超出范围的位置（支持负数，-1 是最后一列）。
         """
@@ -487,7 +487,7 @@ def reduce_values(values, how: Reduction | None, where: str = ''):
     result = np.asarray(returned)
     if result.ndim != 0:
         raise TypeError(f"{where}的汇总函数应返回一个数，实际返回了形状为 {result.shape} 的数组")
-    # 只收实数（整数、浮点）；NaN 是浮点，可以用来表示缺失
+    # 汇总结果须为实数标量，NaN 可表示缺失值。
     if not (np.issubdtype(result.dtype, np.integer) or np.issubdtype(result.dtype, np.floating)):
         raise TypeError(f"{where}的汇总函数应返回一个实数，实际返回了 {returned!r}")
     return result.astype(np.promote_types(result.dtype, wide))[()]
@@ -544,7 +544,7 @@ def reduce_with_error(values, errors, how: Reduction | None, where: str = ''):
     if valid_rows.size == 0:
         return value, error_data.dtype.type(np.nan)
 
-    # 先分清名字和函数再按名字分派：可调用对象可能不可哈希（如普通 dataclass 实例），不能拿去查字典
+    # 仅对字符串查找汇总方法。可调用对象可能不可哈希。
     name = 'function' if callable(how) else how
     if name in ('max', 'min'):
         pick = np.argmax if name == 'max' else np.argmin
@@ -985,8 +985,8 @@ class DataTransformer:
         col_num: int = 1
           ):
         """
-        结果的名字：给了 *names_input* 用它（字符串按列数重复）；否则按类说明里的自动规则，
-        由输入各列的名字 *names_extracted* 推出。
+        使用 *names_input* 设置结果列名。单个字符串应用于全部结果列。
+        省略时按类说明中的命名规则从 *names_extracted* 推导。
         """
         
         if isinstance(names_input, str):
@@ -1010,7 +1010,8 @@ class DataTransformer:
         col_num: int = 1
           ):
         """
-        结果的单位：给了 *units_input* 每列都用它；输入各列单位相同时沿用；否则为 ``unitless_0``、``unitless_1`` ……
+        使用 *units_input* 设置所有结果列的单位。省略时沿用输入列的共同单位。
+        输入单位不一致时，依次使用 ``unitless_0``、``unitless_1`` 等标签。
         """
         
         if units_input is not None:

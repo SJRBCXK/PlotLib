@@ -550,7 +550,7 @@ class DataSet():
         Parameters
         ----------
         columns : list of Column
-            要用的列，可以来自别的数据集；数据会被复制。
+            要添加的列，可来自其他数据集。添加时复制列数据。
         extended : bool, default: True
             True：把这些列拼接到本数据集右边并返回 ``self``；False：返回只含这些列的新数据集，本数据集不变。
 

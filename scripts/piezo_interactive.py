@@ -35,27 +35,31 @@ axes_fmt = make_axes_formatter(
 )
 
 
+def main(path=None, output=OUTPUT_HTML):
+    """读取数据，生成带滑块的交互图并导出页面到 *output*。*path* 为 None 时弹窗选文件。"""
+    output = Path(output)
+
+    data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data(path)
 
 
 
 
-data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
+    interactive_plot = DataPlotter(dataset=data,
+                                   plotrange=300,
+                                   channel_x=dataRowNum_unit3,
+                                   channel_y=dataRowNum_unit5,
+                                   backend=backend,
+                                   )
+    fig = interactive_plot.plot(formatters=AxesFormatter(axes=axes_fmt)).add_slider(mode="cumulative")
+
+    # 导出可随窗口等比缩放的页面（PPT 中嵌入不会出现滚动条），右侧附压缩示意图
+    output.parent.mkdir(parents=True, exist_ok=True)
+    write_fit_html(
+        fig, output,
+        side_html=PANEL_HTML.read_text(encoding="utf-8"),
+        title="压电极化测试",
+    )
 
 
-
-
-interactive_plot = DataPlotter(dataset=data,
-                               plotrange=300,
-                               channel_x=dataRowNum_unit3,
-                               channel_y=dataRowNum_unit5,
-                               backend=backend,
-                               )
-fig = interactive_plot.plot(formatters=AxesFormatter(axes=axes_fmt)).add_slider(mode="cumulative")
-
-# 导出可随窗口等比缩放的页面（PPT 中嵌入不会出现滚动条），右侧附压缩示意图
-OUTPUT_HTML.parent.mkdir(parents=True, exist_ok=True)
-write_fit_html(
-    fig, OUTPUT_HTML,
-    side_html=PANEL_HTML.read_text(encoding="utf-8"),
-    title="压电极化测试",
-)
+if __name__ == "__main__":
+    main()

@@ -30,6 +30,7 @@ from matplotlib.lines import Line2D
 from numpy.typing import NDArray
 from conftest import xy_curves
 
+from plotlib.dataset import DataSet
 from plotlib.group import Group
 from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer, LegendStyle, LineStyle
 from plotlib.plotter import DataPlotter
@@ -530,15 +531,32 @@ def test_layout_tick_format(eis_dataset, layout, axis, value, text):
 
 
 @pytest.mark.parametrize("layout, side, value", [
+    ('multiline', 'left',  0.18),
     ('multiline', 'right', 0.75),
-    ('xy',        'left',  0.15),
+    ('xy',        'left',  0.18),
     ('dual_y',    'right', 0.85),
     ('dual_y',    'top',   0.85),     # 上边给图外上方的图例让位
 ])
 def test_layout_margins(eis_dataset, layout, side, value):
-    """边距：绘图区边界占画布的比例（多线图右边给图例让位）。"""
+    """边距：绘图区边界占画布的比例（多线图右边给图例让位，多线图和 xy 左边给 Y 轴刻度文字和标题留位）。"""
     drawn, _, _ = draw_layout(eis_dataset, layout)
     assert getattr(drawn.fig.subplotpars, side) == pytest.approx(value)
+
+
+def test_layout_y_title_inside_figure():
+    """
+    默认字号（22 磅）下，Y 刻度文字是预设格式的 4 位整数（多线图 ``8000.00``、xy ``8000.0000``）或负数（``-800.00``）时，
+    渲染后 Y 轴标题仍在图内，不被左边裁掉。
+    """
+    for ymax in (8000, -800):
+        data = DataSet().form_array(np.column_stack([np.arange(5.0), np.linspace(0, ymax, 5)]),
+                                    ['S0'] * 2, ['x', 'Y(unit)'], 0, repeat_times=2)
+        plotter = DataPlotter(data)
+        for layout, drawn in (('multiline', plotter.plot().figures['main']),
+                              ('xy', plotter.plot(Layer(0, 1), by='sample').figures[0])):
+            drawn.fig.canvas.draw()
+            title = drawn.axes['left'].yaxis.label.get_window_extent()
+            assert title.x0 >= 0, (layout, ymax, title.x0)
 
 
 def test_layout_dual_y_axis_colors(eis_dataset):

@@ -59,7 +59,7 @@ def apply_axis(fig, axis: str, style: AxisStyle, letter: Literal['x', 'y']) -> N
         native = {'range': None, 'autorange': True} | native
         native['autorangeoptions'] = {'minallowed': None, 'maxallowed': None} | native.get('autorangeoptions', {})
     elif is_log != was_log:
-        # 只改刻度类型：轴上已写的边界按新类型换算
+        # 仅更新刻度类型时，将现有边界转换为新轴类型的坐标。
         _convert_bounds(current, _to_log if is_log else _from_log)
     fig.update_layout({axis: native})
 

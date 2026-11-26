@@ -257,7 +257,7 @@ class Group():
         Raises
         ------
         ValueError
-            有分组名已存在（替换请用 `set`）；或配置写法不对。此时一个分组都不加。
+            分组名已存在或配置无效。校验失败时整批添加取消。替换已有分组使用 `set`。
         """
         validated = self._validated(group_config)
         existing = [name for name in validated if name in self._config]
@@ -415,7 +415,6 @@ class Group():
                     f"组 '{group_name}' 各切片列数不一致：{col_counts}"
                 )
 
-            # 调用用户回调
             result_data = np.asarray(callback(*slices))
             if result_data.ndim == 0:
                 result_data = result_data.reshape(1, 1)
@@ -538,14 +537,13 @@ class Group():
 
     def _auto_naming(self, slices, n_cols, group_name, callback):
         """
-        没给 ``naming`` 时生成结果的名字和单位：每列都叫 ``组名_函数名``，单位取第一个样品同位置列的单位
-        （数据集的约定保证同一位置的通道在各样品里单位相同）。
+        生成默认的结果列名和单位。各列均使用 ``组名_函数名``，单位取自第一个样品的对应通道。
         """
         cb_name = getattr(callback, '__name__', 'calc')
 
         names = [f"{group_name}_{cb_name}"] * n_cols
 
-        # units 取第一个 slice（_channel_units_unify_check 保证同位置 unit 一致）
+        # DataSet 保证各样品的同一通道使用相同单位。
         units = [slices[0].units[col_idx] for col_idx in range(n_cols)]
 
         return names, units

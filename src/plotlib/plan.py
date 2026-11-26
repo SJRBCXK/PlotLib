@@ -7,7 +7,7 @@
 （`~plotlib.plot_spec.LineSpec`、`~plotlib.plot_spec.ScatterSpec`）。
 Matplotlib 和 Plotly 共用取数、去重和配色规则，渲染时再应用版式预设和格式化回调。
 
-`plan_bars` 生成柱状图的计划：一张「类别 × 系列」的表，每格的值由数据处理层汇总，这里只负责排列和配色。
+`plan_bars` 将数据处理层的汇总结果组织成柱状图的类别、系列和样式。
 """
 import math
 from collections.abc import Callable, Mapping, Sequence
@@ -226,14 +226,14 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
     groups : Group or None
         分组，只在 ``by='group'`` 时使用（检查规则见 `resolve_groups`）。
     layers : sequence of Layer
-        图层，每个都要写明通道（``DataPlotter.plot`` 会把没写的补成构造时的通道）。
+        绘制的图层，X、Y 通道均须明确。``DataPlotter.plot`` 使用构造参数补齐省略的通道。
     by : {'all', 'group', 'sample'}, default: 'all'
         ``'all'``：全部样品一张 ``'main'`` 图，不看分组；``'group'``：按分组画；
         ``'sample'``：每个样品一张，key 是样品号，不看分组。
     merge_groups : bool, default: False
         ``by='group'`` 时把所有分组合并到一张 ``'main'`` 图。
     plotrange : int, optional
-        每条线只取前几行；None 取全部。
+        每条曲线使用的数据行数上限。None 表示使用全部行。
     legend_title : str or None, default: 'auto'
         图例标题，``'{name}'`` 换成每张图自己的名字：``'sample'`` 是样品名，分离模式是组名
         （只有一个样品或一个分组、只画出一张图时也替换）；``'all'`` 和合并模式的图没有自己的名字，原样保留。
@@ -251,10 +251,10 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
     Raises
     ------
     ValueError
-        *by*、画法、轴写错；图层没写通道；没有图层或没有左侧图层；``by`` 不是 ``'group'`` 却写了 *merge_groups*；
-        ``by='group'`` 但没有分组；``by='all'`` / ``'group'`` 画多个图层（暂不支持）；同一根轴上的负对数写法不一致；
-        映射写错（见 `~plotlib.plot_spec.ScatterMap`）、有两个颜色映射层、给了 *colorbar* 却没有颜色映射层、
-        颜色条写错或对数色标遇到不为正的值、映射值有无穷大。
+        分图方式、画法或轴名无效，或图层缺少通道。至少需要一个左侧图层，同轴图层的负对数设置须相容。
+        ``'all'`` 和 ``'group'`` 模式仅支持一个图层。``'group'`` 模式需要分组，且是 *merge_groups* 唯一适用的模式。
+        散点映射或颜色条取值无效，颜色映射层多于一个，或指定了颜色条但缺少颜色映射层。
+        无穷大映射值和非正的对数色标值也会引发此异常。
     RuntimeError
         数据集为空。
 
@@ -277,7 +277,7 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
     colorbar_style = _check_colorbar(layers, colorbar)
     column_index = dataset.column_positions
     _check_not_empty(dataset)
-    # 分组只在 by='group' 时使用，也只在那时检查（其他模式传进来的分组不看）
+    # 仅在分组模式下使用和校验分组。
     resolved = resolve_groups(groups, dataset) if by == 'group' else None
     if resolved is not None and not resolved.names:
         raise ValueError("by='group' 要有分组：请在 DataPlotter(groups=...) 里给出；画全部样品写 by='all'")
@@ -321,7 +321,7 @@ def plan_figures(dataset: DataSet, groups: Group | None, layers: Sequence[Layer]
         else:
             figures = _plan_separate(resolved, positions, make_curves, make_figure)
 
-    # 映射的范围要等全部曲线生成后才知道：大小按图层各自换算，颜色条各图共用
+    # 颜色范围跨图共享，大小范围按图层独立计算。
     for layer, curves in zip(layers, made):
         scatters = [curve for curve in curves if isinstance(curve, ScatterSpec)]
         if layer.mapping is not None and layer.mapping.size is not None:
@@ -401,9 +401,9 @@ def _check_mapping(mapping: ScatterMap) -> None:
 
 def _check_colorbar(layers: list[Layer], colorbar: ColorbarStyle | None) -> ColorbarStyle | None:
     """
-    叠上库默认并校验颜色条，返回这次绘图的颜色条外观；没有颜色映射层时返回 None。
+    合并并校验颜色条样式。有颜色映射图层时返回合并结果。
 
-    给了 *colorbar* 却没有颜色映射层时报错：否则这份设置会被悄悄忽略。
+    没有颜色映射图层时返回 None。此时显式指定 *colorbar* 会引发 ``ValueError``。
     """
     if not any(_maps_color(layer) for layer in layers):
         if colorbar is not None:
@@ -656,21 +656,21 @@ def plan_bars(dataset: DataSet, groups: Group | None, channels: int | Sequence[i
     groups : Group or None
         分组，只在 *x* 或 *series* 是 ``'group'`` 时使用（检查规则见 `resolve_groups`）。
     channels : int or sequence of int
-        画哪几个通道（原数据集里的通道号），按书写顺序排列，不能重复。
+        原数据集的通道号。按传入顺序排列，各通道号须唯一。
     x, series : {'sample', 'group', 'channel'}
-        类别（X 轴）和系列（图例）各取哪一维：恰好一个是 ``'channel'``，另一个是 ``'sample'`` 或 ``'group'``。
-        样品维画全部样品（按样品号排序），不看分组；``'group'`` 按分组的顺序。
+        类别（X 轴）和系列（图例）使用的维度。其中一维为 ``'channel'``，另一维为 ``'sample'`` 或 ``'group'``。
+        ``'sample'`` 使用全部样品，按样品号排序。``'group'`` 使用分组顺序。
     reduce : str, callable or None, default: None
-        每一格多行数据怎么汇总成柱高，写法见 `~plotlib.processor.DataTransformer.Reduce`。
-        None 表示每格至多一个有效值，多于一个时报错。用到分组时，先按 *reduce* 汇总每个样品，再组内取平均。
+        将每个类别与系列组合汇总为柱高的方法，见 `~plotlib.processor.DataTransformer.Reduce`。
+        None 要求每格至多有一个有效值。分组时先按 *reduce* 汇总每个样品，再对组内结果取均值。
     errors : {'std', 'sem'}, dict or None, default: None
         误差棒。``'std'`` / ``'sem'``：用到分组时是组内各样品汇总值之间的，否则是同一列多行之间的（要配
         ``reduce='mean'``）。``{值通道: 误差通道}``：误差来自另一个通道，按原行与柱高对齐
         （见 `~plotlib.processor.reduce_with_error`），用到分组时不能用。
     mode : {'group', 'stack'}, default: 'group'
-        并排或堆叠（正负值分开叠）。
+        并排或堆叠。堆叠时分别累加正值和负值。
     width : float, default: 0.8
-        一个类别里全部柱子占间距的比例，在 (0, 1] 之间。
+        单个类别的总柱宽占类别间距的比例，取值范围为 ``(0, 1]``。
     styles : BarStyle or dict, optional
         一个 `BarStyle` 用于全部系列；``{系列键: BarStyle}`` 逐个系列指定。优先于分组配置。
     plotrange : int, optional
@@ -686,10 +686,10 @@ def plan_bars(dataset: DataSet, groups: Group | None, channels: int | Sequence[i
     Raises
     ------
     ValueError
-        维度、模式、柱宽、汇总方式、误差写错或组合不支持；通道重复或不存在；用到 ``'group'`` 却没有分组；
-        *styles* 的键不是系列的键；写了 *errors* 却没有一根柱算得出误差；某一格有多个值却没写 *reduce*。
+        参数值或组合无效、通道重复或不存在、使用 ``'group'`` 时没有分组，或样式引用了未知系列。
+        需要汇总但省略 *reduce*，或指定 *errors* 后没有任何可绘制的误差棒，也会引发此异常。
     TypeError
-        通道号、柱宽、样式的类型不对。
+        通道号、柱宽或样式的类型无效。
     RuntimeError
         数据集为空。
 
@@ -718,7 +718,7 @@ def plan_bars(dataset: DataSet, groups: Group | None, channels: int | Sequence[i
     if error_map is not None and not set(error_map) <= set(channels):
         raise ValueError(f"误差字典的键 {sorted(set(error_map) - set(channels))} 不在 channels={channels} 里")
 
-    # 成员（样品或分组）和系列的键不用汇总就能定下，样式在汇总之前校验
+    # 在汇总前确定各系列的键并校验样式。
     samples = sorted(set(dataset.sample_idx))
     members: list[int] | list[str] = samples if resolved is None else resolved.names
     keys: list = list(channels) if series == 'channel' else list(members)
@@ -771,7 +771,7 @@ def plan_bars(dataset: DataSet, groups: Group | None, channels: int | Sequence[i
 
 
 def _bar_channels(channels) -> list[int]:
-    """规范 *channels*：单个通道号写成列表；不能为空、不能重复，只收整数。"""
+    """将 *channels* 规范为非空整数列表，并校验通道号的唯一性。"""
     written = [channels] if isinstance(channels, Integral) else list(channels)
     if not written:
         raise ValueError("channels 至少要一个通道")
@@ -878,7 +878,7 @@ def _group_table(groups: Group, plotrange: int | None, channels: list[int], redu
     shape = (len(groups.names), len(channels))      # Group.reduce 的结果按「分组 → 通道」排列
     if errors is None:
         return groups.reduce('mean', within=reduce, channels=channels, rows=plotrange).data[0].reshape(shape), None
-    # 一次算：柱高和误差用同一批样品汇总值（reduce 是函数时只对每个样品调用一次）
+    # 柱高和误差共用第一步汇总结果，自定义汇总函数无需重复调用。
     means, spreads = groups.reduce(['mean', errors], within=reduce, channels=channels, rows=plotrange)
     return means.data[0].reshape(shape), spreads.data[0].reshape(shape)
 

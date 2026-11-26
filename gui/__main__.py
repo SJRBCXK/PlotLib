@@ -34,14 +34,27 @@ class MainWindow(QMainWindow):
     def build_menu_bar(self):
         menu_bar = self.menuBar()
         menu_bar.setNativeMenuBar(False)
-        for title, items in (
-            ("abc001", ("abc011", "abc012")),
-            ("abc002", ("abc021", "abc022")),
-            ("abc003", ("abc031", "abc032")),
+        for title, sections in (
+            ("文件", (("打开数据文件…", "导出当前图…"), ("退出",))),
+            ("数据", (("数据集…",),)),
+            ("分组", (
+                ("新建分组…", "管理分组…"),
+                ("保存分组方案…", "载入分组方案…"),
+                ("分组汇总…", "运行组方法…"),
+            )),
+            ("绘图", (("折线图", "散点图", "柱状图"),)),
+            ("视图", (("上一张图", "下一张图"), ("显示设置栏",))),
         ):
             menu = menu_bar.addMenu(title)
-            for text in items:
-                menu.addAction(text).setEnabled(False)
+            for index, items in enumerate(sections):
+                if index:
+                    menu.addSeparator()
+                for text in items:
+                    action = menu.addAction(text)
+                    action.setEnabled(False)
+                    if text == "显示设置栏":
+                        action.setCheckable(True)
+                        action.setChecked(True)
 
     def build_workspace(self):
         workspace = QWidget()

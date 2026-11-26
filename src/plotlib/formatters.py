@@ -9,7 +9,7 @@
 - `combine_formatters`：按顺序组合相同类型的回调。
 
 生成的回调放进 `~plotlib.plot_spec.AxesFormatter` 的 ``axes``、``lines``、``scatter``、``bars``、``legend`` 字段，
-交给绘图方法的 *formatters*，由后端逐轴调用。线条回调只收折线，散点回调只收散点，柱状图回调只收柱状图的系列。
+通过绘图方法的 *formatters* 参数传入，由后端逐轴调用。折线、散点和柱状图回调分别接收对应的绘图对象。
 
 Notes
 -----

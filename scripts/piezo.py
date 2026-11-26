@@ -10,8 +10,6 @@ from plotlib.formatters import make_axes_formatter
 from plotlib.plot_spec import AxesFormatter, AxisStyle, Layer
 from plotlib.group import Group
 
-plt.close('all')
-
 # ============================================================
 # 数据配置常量
 # ============================================================
@@ -63,102 +61,111 @@ TV_axes_formatter_zoomed = make_axes_formatter(
     y=AxisStyle(format='{y:.1e}', scaler=10),
 )
 
-# ============================================================
-# 数据加载
-# ============================================================
-data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data()
-groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图都用它
 
-# ============================================================
-# 绘图部分
-# ============================================================
-# --- Displacement-Voltage (D-V) 关系图 ---
-DV_pltliner = DataPlotter(
-    dataset=data,
-    plotrange=299,
-    channel_x = dataRowNum_unit3,
-    channel_y = dataRowNum_unit5,
-).plot(formatters=AxesFormatter(axes=DV_axes_formatter))
+def main(path=None, show=True):
+    """读取数据并绘制全部图表。*path* 为 None 时弹窗选文件；*show* 为 False 时不调用 ``plt.show()``。"""
+    # ============================================================
+    # 数据加载
+    # ============================================================
+    data = Dataloader(columns_per_sample=COLUMNS_PER_SAMPLE).load_data(path)
+    groups = Group(data, data_groups)   # 分组只建一次：创建时校验，下面的绘图都用它
 
-DV_pltliner_log = DataPlotter(
-    dataset=data,
-    plotrange=299,
-    channel_x = dataRowNum_unit3,
-    channel_y = dataRowNum_unit5,
-).plot(formatters=AxesFormatter(axes=DV_axes_formatter_log))
+    # ============================================================
+    # 绘图部分
+    # ============================================================
+    # --- Displacement-Voltage (D-V) 关系图 ---
+    DV_pltliner = DataPlotter(
+        dataset=data,
+        plotrange=299,
+        channel_x = dataRowNum_unit3,
+        channel_y = dataRowNum_unit5,
+    ).plot(formatters=AxesFormatter(axes=DV_axes_formatter))
 
-# --- Time-Voltage (T-V) 关系图 ---
-TV_Zoomed_pltliner = DataPlotter(
-    dataset=data,
-    plotrange=299,
-    channel_x = dataRowNum_unit4,
-    channel_y = dataRowNum_unit5
-).plot(formatters=AxesFormatter(axes=TV_axes_formatter_zoomed))
+    DV_pltliner_log = DataPlotter(
+        dataset=data,
+        plotrange=299,
+        channel_x = dataRowNum_unit3,
+        channel_y = dataRowNum_unit5,
+    ).plot(formatters=AxesFormatter(axes=DV_axes_formatter_log))
 
-TV_pltliner = DataPlotter(
-    dataset=data,
-    channel_x = dataRowNum_unit4,
-    channel_y = dataRowNum_unit5
-).plot(formatters=AxesFormatter(axes=TV_axes_formatter))
+    # --- Time-Voltage (T-V) 关系图 ---
+    TV_Zoomed_pltliner = DataPlotter(
+        dataset=data,
+        plotrange=299,
+        channel_x = dataRowNum_unit4,
+        channel_y = dataRowNum_unit5
+    ).plot(formatters=AxesFormatter(axes=TV_axes_formatter_zoomed))
 
-# --- Force-Voltage (F-V) 关系图 ---
-FV_pltliner = DataPlotter(
-    dataset=data,
-    plotrange=299,
-    channel_x = dataRowNum_unit2,
-    channel_y = dataRowNum_unit5
-).plot(formatters=AxesFormatter(axes=FV_axes_formatter))
+    TV_pltliner = DataPlotter(
+        dataset=data,
+        channel_x = dataRowNum_unit4,
+        channel_y = dataRowNum_unit5
+    ).plot(formatters=AxesFormatter(axes=TV_axes_formatter))
 
-FV_pltliner_log = DataPlotter(
-    dataset=data,
-    plotrange=299,
-    channel_x = dataRowNum_unit2,
-    channel_y = dataRowNum_unit5
-).plot(formatters=AxesFormatter(axes=FV_axes_formatter_log))
+    # --- Force-Voltage (F-V) 关系图 ---
+    FV_pltliner = DataPlotter(
+        dataset=data,
+        plotrange=299,
+        channel_x = dataRowNum_unit2,
+        channel_y = dataRowNum_unit5
+    ).plot(formatters=AxesFormatter(axes=FV_axes_formatter))
 
-# --- 分组绘图 (Group Plots) ---
-DV_pltGliner2 = DataPlotter(
-    dataset=data,
-    groups=groups,
-    plotrange=299,
-    channel_x = dataRowNum_unit3,
-    channel_y = dataRowNum_unit5
-).plot(by='group', formatters=AxesFormatter(axes=DV_axes_formatter))
+    FV_pltliner_log = DataPlotter(
+        dataset=data,
+        plotrange=299,
+        channel_x = dataRowNum_unit2,
+        channel_y = dataRowNum_unit5
+    ).plot(formatters=AxesFormatter(axes=FV_axes_formatter_log))
 
-DV_pltGliner2_merged = DataPlotter(
-    dataset=data,
-    groups=groups,
-    plotrange=299,
-    channel_x = dataRowNum_unit2,
-    channel_y = dataRowNum_unit5
-).plot(by='group', merge_groups=True, formatters=AxesFormatter(axes=DV_axes_formatter))
+    # --- 分组绘图 (Group Plots) ---
+    DV_pltGliner2 = DataPlotter(
+        dataset=data,
+        groups=groups,
+        plotrange=299,
+        channel_x = dataRowNum_unit3,
+        channel_y = dataRowNum_unit5
+    ).plot(by='group', formatters=AxesFormatter(axes=DV_axes_formatter))
 
-# --- Y-Y 子图（一个Y对另一个Y）---
-DV_pltsubsyy = DataPlotter(
-    dataset=data,
-    plotrange=299
-).plot(Layer(dataRowNum_unit3, dataRowNum_unit5), by='sample', formatters=AxesFormatter(axes=DV_axes_formatter))
+    DV_pltGliner2_merged = DataPlotter(
+        dataset=data,
+        groups=groups,
+        plotrange=299,
+        channel_x = dataRowNum_unit2,
+        channel_y = dataRowNum_unit5
+    ).plot(by='group', merge_groups=True, formatters=AxesFormatter(axes=DV_axes_formatter))
 
-FV_pltsubsyy = DataPlotter(
-    dataset=data,
-    plotrange=299
-).plot(Layer(dataRowNum_unit2, dataRowNum_unit5), by='sample', formatters=AxesFormatter(axes=FV_axes_formatter))
+    # --- Y-Y 子图（一个Y对另一个Y）---
+    DV_pltsubsyy = DataPlotter(
+        dataset=data,
+        plotrange=299
+    ).plot(Layer(dataRowNum_unit3, dataRowNum_unit5), by='sample', formatters=AxesFormatter(axes=DV_axes_formatter))
 
-# --- X-YY 双轴子图（两个Y共享一个X）---
-DTV_pltsubsxyy = DataPlotter(
-    dataset=data,
-    plotrange=299,
-).plot(
-    [Layer(dataRowNum_unit1, dataRowNum_unit3), Layer(dataRowNum_unit4, dataRowNum_unit5, side='right')],
-    by='sample',
-)
+    FV_pltsubsyy = DataPlotter(
+        dataset=data,
+        plotrange=299
+    ).plot(Layer(dataRowNum_unit2, dataRowNum_unit5), by='sample', formatters=AxesFormatter(axes=FV_axes_formatter))
 
-FTV_pltsubsxyy = DataPlotter(
-    dataset=data,
-    plotrange=299
-).plot(
-    [Layer(dataRowNum_unit1, dataRowNum_unit2), Layer(dataRowNum_unit4, dataRowNum_unit5, side='right')],
-    by='sample',
-)
+    # --- X-YY 双轴子图（两个Y共享一个X）---
+    DTV_pltsubsxyy = DataPlotter(
+        dataset=data,
+        plotrange=299,
+    ).plot(
+        [Layer(dataRowNum_unit1, dataRowNum_unit3), Layer(dataRowNum_unit4, dataRowNum_unit5, side='right')],
+        by='sample',
+    )
 
-plt.show()
+    FTV_pltsubsxyy = DataPlotter(
+        dataset=data,
+        plotrange=299
+    ).plot(
+        [Layer(dataRowNum_unit1, dataRowNum_unit2), Layer(dataRowNum_unit4, dataRowNum_unit5, side='right')],
+        by='sample',
+    )
+
+    if show:
+        plt.show()
+
+
+if __name__ == "__main__":
+    plt.close('all')        # 只在直接运行时清掉旧图窗；被其他代码调用时保留调用方的图窗
+    main()

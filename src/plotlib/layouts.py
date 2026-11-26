@@ -38,17 +38,19 @@ NO_LEGEND_MESSAGE = ("这根轴没有单独的图例：一张图只有一个图�
                      "图例回调请放在左侧（AxesFormatter(legend=...) 给 'left'，不要给 'right'）")
 
 
+# Matplotlib 的 multiline 和 xy 版式按默认图尺寸、字号和 Y 轴标签格式预留固定左边距。
+# 自定义图尺寸或使用较长的刻度标签时，可缩短标签格式或扩大左边距。
 LAYOUTS: dict[Layout, LayoutPreset] = {
     # X 轴由后端自动选择标签格式，保留对数轴上较小的数值。
     'multiline': LayoutPreset(
         legend=LegendStyle(position='outside right', draggable=True),
         axes={'y': AxisStyle(format='{y:.2f}')},
-        margins={'right': 0.75},
+        margins={'left': 0.18, 'right': 0.75},
     ),
     'xy': LayoutPreset(
         legend=LegendStyle(position='lower right'),
         axes={'y': AxisStyle(format='{y:.4f}')},
-        margins={'left': 0.15},
+        margins={'left': 0.18},
     ),
     # 双 Y 轴的颜色区分对应曲线，顶部为图外图例预留空间。
     'dual_y': LayoutPreset(

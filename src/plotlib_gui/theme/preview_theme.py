@@ -1,4 +1,4 @@
-"""运行 python -m gui.preview_theme 预览 PlotLib Qt 模板。"""
+"""运行 python -m plotlib_gui.theme.preview_theme 预览 PlotLib Qt 模板。"""
 
 import sys
 from pathlib import Path
@@ -13,10 +13,7 @@ from matplotlib import font_manager
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-if __package__:
-    from .qt_theme import apply_theme, configure_fonts, make_label, make_panel, user_inter_fonts
-else:
-    from qt_theme import apply_theme, configure_fonts, make_label, make_panel, user_inter_fonts
+from plotlib_gui.theme.qt_theme import apply_theme, configure_fonts, make_label, make_panel, user_inter_fonts
 
 INK = "#0f172a"
 BLUE = "#1e40af"

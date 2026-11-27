@@ -88,14 +88,14 @@ QTabWidget#settingsTabs QTabBar::tab {
     background-color: #f1f5f9;
     border: 2px solid #0f172a;
     border-bottom: 0;
-    margin-right: -2px;
-    padding: 8px 12px;
+    width: 76px;
+    padding: 8px 0;
     font-size: 12px;
     font-weight: 700;
 }
 
-QTabWidget#settingsTabs QTabBar::tab:last {
-    margin-right: 0;
+QTabWidget#settingsTabs QTabBar::tab:!last {
+    border-right-color: transparent;
 }
 
 QTabWidget#settingsTabs QTabBar::tab:selected {

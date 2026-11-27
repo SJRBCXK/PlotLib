@@ -406,7 +406,9 @@ plt.show()
 | `tools/` | 使用 Tk 或 Qt 的数据预处理工具 |
 | `learning/` | GUI 和测试相关的学习示例 |
 | `docs/api/` | Sphinx API 文档源文件 |
-| `docs/WORK_PLAN.md` | 工作计划：协作方式、架构、下一阶段设计、进度和执行记录 |
+| `docs/KERNEL_WORK_PLAN.md` | 库的工作计划：协作方式、架构、下一阶段设计、进度和执行记录 |
+| `docs/GUI_WORK_PLAN.md` | 桌面程序的工作计划：架构、待定决定、进度和执行记录 |
+| `docs/GUI_COMPONENTS.md` | 桌面程序的前端组件清单（被动视图约定、选项标准写法、各组件的信号和方法） |
 | `tests/` | 自动化测试。 [测试说明](tests/README.md) |
 
 ## API 文档

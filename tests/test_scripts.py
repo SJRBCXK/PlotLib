@@ -45,7 +45,7 @@ TWO_PEAKS = {"Tan(Delta)": [0.1, 0.3, 0.2, 0.4, 0.1, 0.1], "Frequency(Hz)": [1, 
 BREAK = {"应力(MPa)": [1, 5, 10, 8, 3, 1]}                       # 应力过峰后陡降：断裂
 
 
-# 脚本名, 单位, 样品数, 列的形状, 期望图数（手算见 WORK_PLAN 第 5 节步骤 8）
+# 脚本名, 单位, 样品数, 列的形状, 期望图数（手算见 KERNEL_WORK_PLAN 第 5 节步骤 8）
 CASES = [
     ('piezo', PIEZO_UNITS, 10, None, 6 + 2 + 1 + 4 * 10),
     ('eis_nyquist', EIS_UNITS, 18, None, 1 + 9 + 18 + 18 + 1 + 9),

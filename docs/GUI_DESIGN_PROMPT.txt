@@ -4,7 +4,7 @@
 
 - 以 Minimalist Flat 为主体。先读 StyleKit MCP 的 brief、tokens 和 button / card / input 组件配方，再核对展示页。沿用这套风格的布局、几何、字号、留白、交互和信息层级。
 - 用两档浅蓝灰作为界面底色。#F1F5F9 用于窗体底色，#F8FAFC 用于菜单栏、卡片、预览画布和状态栏，#0F172A 用于主文字、区域轮廓和主分隔线。细分隔线和图表网格用 #E5E7EB。#1E40AF 用于主要操作、菜单选中态和当前曲线，#3B82F6 用于按下和焦点，#64748B 用于辅助文字、控件底线、线条图标和比较曲线。#10B981 与 #C559F0 分别留给明确的成功状态和实验性标记。
-- 中文用思源黑体简体。英文和全部数字用 San Francisco（SF Pro），包括中英文混排里的数字、样品序号、坐标刻度和图例。系统缺少 SF Pro 时，Qt 和 Matplotlib 优先回退 Inter。本机可用的 Adobe 思源黑体文件可放在 gui/fonts/SourceHanSansCN-VF.otf，由主窗口和预览脚本直接加载。也支持系统安装的思源黑体。
+- 中文用思源黑体简体。英文和全部数字用 San Francisco（SF Pro），包括中英文混排里的数字、样品序号、坐标刻度和图例。系统缺少 SF Pro 时，Qt 和 Matplotlib 优先回退 Inter。本机可用的 Adobe 思源黑体文件可放在 src/plotlib_gui/theme/fonts/SourceHanSansCN-VF.otf，由主窗口和预览脚本直接加载。也支持系统安装的思源黑体。
 
 布局与几何
 

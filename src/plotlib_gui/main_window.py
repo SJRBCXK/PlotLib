@@ -1,10 +1,7 @@
-"""PlotLib 桌面窗口骨架。支持 python -m gui 和直接运行本文件。"""
-
-import sys
+"""PlotLib 桌面程序的主窗口（骨架）。启动入口见 ``plotlib_gui.__main__``。"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QApplication,
     QHBoxLayout,
     QMainWindow,
     QScrollArea,
@@ -13,10 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-if __package__:
-    from .qt_theme import apply_theme, configure_fonts, make_label, make_panel
-else:
-    from qt_theme import apply_theme, configure_fonts, make_label, make_panel
+from plotlib_gui.theme.qt_theme import apply_theme, make_label, make_panel
 
 
 class MainWindow(QMainWindow):
@@ -43,7 +37,7 @@ class MainWindow(QMainWindow):
                 ("分组汇总…", "运行组方法…"),
             )),
             ("绘图", (("折线图", "散点图", "柱状图"),)),
-            ("视图", (("上一张图", "下一张图"), ("显示设置栏",))),
+            ("视图", (("上一张图", "下一张图"), ("显示目录",))),
         ):
             menu = menu_bar.addMenu(title)
             for index, items in enumerate(sections):
@@ -52,7 +46,7 @@ class MainWindow(QMainWindow):
                 for text in items:
                     action = menu.addAction(text)
                     action.setEnabled(False)
-                    if text == "显示设置栏":
+                    if text == "显示目录":
                         action.setCheckable(True)
                         action.setChecked(True)
 
@@ -93,20 +87,20 @@ class MainWindow(QMainWindow):
         settings_layout = QVBoxLayout(settings)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(0)
-        heading = make_label("abc456", "heading")
+        heading = make_label("目录", "heading")
         heading.setContentsMargins(16, 16, 16, 16)
         settings_layout.addWidget(heading)
 
         tabs = QTabWidget()
         tabs.setObjectName("settingsTabs")
         for tab, sections in (
-            ("abc101", (
+            ("数据集", (
                 ("sourceSection", "abc111"),
                 ("sampleSection", "abc112"),
                 ("groupSection", "abc113"),
             )),
-            ("abc102", (("plotModeSection", "abc121"), ("layerSection", "abc122"))),
-            ("abc103", (("styleScopeSection", "abc131"), ("stylePropertiesSection", "abc132"))),
+            ("组", (("plotModeSection", "abc121"), ("layerSection", "abc122"))),
+            ("图形", (("styleScopeSection", "abc131"), ("stylePropertiesSection", "abc132"))),
         ):
             scroll = QScrollArea()
             scroll.setObjectName("settingsScroll")
@@ -160,16 +154,3 @@ class MainWindow(QMainWindow):
         status.setContentsMargins(24, 0, 24, 0)
         status.addWidget(make_label("abc901", "status"))
         status.addPermanentWidget(make_label("abc902", "status"))
-
-
-def main():
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    configure_fonts(app)
-    window = MainWindow()
-    window.show()
-    return app.exec()
-
-
-if __name__ == "__main__":
-    sys.exit(main())

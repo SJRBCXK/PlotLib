@@ -21,7 +21,7 @@ dependencies = [
 # 下限：autorangeoptions 需要 5.17+；与 kaleido 1.x 配合需要 6.1+；
 # 模板里的 minorloglabels（对数轴不显示小号次刻度标签）从 6.3 起才有（第三方审查 F）。
 interactive = ["plotly>=6.3"]
-# Qt 界面：tools/ 下的 *_qt.py 工具和 PySide6 学习示例。
+# Qt 界面：桌面程序 plotlib_gui、tools/ 下的 *_qt.py 工具和 PySide6 学习示例。
 gui = ["PySide6"]
 # API 文档：sphinx-build -b html docs/api docs/api/_build/html（从源码的 numpydoc 文档字符串生成）
 docs = ["sphinx", "pydata-sphinx-theme"]
@@ -37,13 +37,19 @@ test = [
     "kaleido>=1.0",
 ]
 
-# 包放在 src/plotlib/ 下（src 布局）：只有 src/ 里的内容会被安装，import 名是 plotlib。
+# 桌面程序的启动命令：plotlib-gui（需要 ".[gui]"）。gui-scripts 在 Windows 上启动时不弹控制台窗口。
+[project.gui-scripts]
+plotlib-gui = "plotlib_gui.__main__:main"
+
+# 包放在 src/ 下（src 布局）：只有 src/ 里的内容会被安装，import 名是 plotlib 和 plotlib_gui（桌面程序）。
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# 随包安装的非 .py 文件：html_export 的页面外壳模板。
+# 随包安装的非 .py 文件：html_export 的页面外壳模板；桌面程序的样式表和图标。
+# 字体（theme/fonts/）是本机自备的，不随包安装。
 [tool.setuptools.package-data]
 plotlib = ["templates/*.html"]
+plotlib_gui = ["theme/*.qss", "theme/*.xpm"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]   # pytest 只在 tests/ 目录里找测试
